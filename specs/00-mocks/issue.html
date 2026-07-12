@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>INIT-48 · Issue — KPI Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="measurement-detail.html">KPI</a>
+    <a href="issue.html" class="active">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">POS</a><span class="sep">/</span>
+      <span class="itype initiative">I</span>
+      <a href="#">INIT-48</a>
+    </div>
+
+    <!-- On wide screens the right column becomes the sidebar; it stacks below on narrow -->
+    <div class="issue-layout">
+      <!-- Main issue content -->
+      <div>
+        <div class="jira-issue" style="margin-top:0">
+          <p class="jira-title"><span class="itype initiative">I</span> Launch multi-store support</p>
+          <div class="jira-description">
+            <p><strong>Problem</strong></p>
+            <p>Merchants running more than one storefront can't manage them from a single POS account, capping revenue per customer.</p>
+            <p><strong>Impact</strong></p>
+            <p>Enable multi-store accounts so larger merchants adopt the POS, contributing to the Outcome's revenue target.</p>
+            <ul>
+              <li>Contributes to <strong>Revenue</strong> and <strong>Number of Stores</strong></li>
+              <li>Target date aligned to Q3</li>
+            </ul>
+            <form class="jira-details">
+              <div class="jira-label">Issue type</div><div class="jira-value">Initiative</div>
+              <div class="jira-label">Parent</div><div class="jira-value">OUT-12 · Grow POS revenue</div>
+              <div class="jira-label">Assignee</div><div class="jira-value">Justin Meyer</div>
+              <div class="jira-label">Status</div><div class="jira-value"><span class="lozenge inprogress">In progress</span></div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- KPIs area (the app's issue context panel) -->
+      <aside>
+        <details class="accordion" open>
+          <summary>
+            <span class="chevron">▶</span>
+            <span>KPIs</span>
+            <span class="lozenge default" style="margin-left:auto">2</span>
+          </summary>
+
+          <div class="accordion-body">
+
+            <!-- Group 1: Shared with parent (both this issue and OUT-12 track it) -->
+            <div class="kpi-group-head">Shared with parent</div>
+
+            <div class="kpi-row" style="margin:0 0 8px">
+              <div class="kpi-row-head">
+                <span class="kpi-name">Revenue</span>
+                <span class="kpi-unit">USD</span>
+              </div>
+              <div class="kpi-fields">
+                <div class="kpi-field">
+                  <span class="flabel">Target value</span>
+                  <span class="fvalue">100,000</span>
+                </div>
+                <div class="kpi-field">
+                  <span class="flabel">Target date</span>
+                  <span class="fvalue">2026-11-30</span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="btn link sm">Edit</button>
+                <button class="btn link sm">Remove</button>
+              </div>
+            </div>
+
+            <!-- Group 2: Self only (this issue tracks it, parent does not) -->
+            <div class="kpi-group-head">Only on this issue</div>
+
+            <div class="kpi-row" style="margin:0 0 8px">
+              <div class="kpi-row-head">
+                <span class="kpi-name">Number of Stores</span>
+                <span class="kpi-unit">count</span>
+              </div>
+              <div class="kpi-fields">
+                <div class="kpi-field">
+                  <span class="flabel">Target value</span>
+                  <span class="fvalue">250</span>
+                </div>
+                <div class="kpi-field">
+                  <span class="flabel">Target date</span>
+                  <span class="fvalue">2026-09-30</span>
+                </div>
+              </div>
+              <div class="row-actions">
+                <button class="btn link sm">Edit</button>
+                <button class="btn link sm">Remove</button>
+              </div>
+            </div>
+
+            <!-- Group 3: Parent only (OUT-12 tracks it, this issue does not — opt-in) -->
+            <div class="kpi-group-head">On parent, not tracked here</div>
+
+            <div class="kpi-row" style="margin:0 0 8px;border-style:dashed">
+              <div class="kpi-row-head">
+                <span class="kpi-name muted">Costs</span>
+                <button class="btn link sm" style="margin-left:auto">+ Track this</button>
+              </div>
+            </div>
+
+            <!-- Associate a new KPI -->
+            <div class="kpi-row" style="border-style:dashed;margin:0">
+              <div class="kpi-row-head">
+                <span class="kpi-name muted">Associate a KPI</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div class="kpi-field">
+                  <span class="flabel">KPI</span>
+                  <select class="select">
+                    <option>Choose KPI…</option>
+                    <option>Revenue</option>
+                    <option>&nbsp;&nbsp;# of Orders</option>
+                    <option>&nbsp;&nbsp;&nbsp;&nbsp;Number of Stores</option>
+                    <option>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Feature Parity</option>
+                    <option>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Time To Install</option>
+                    <option>&nbsp;&nbsp;&nbsp;&nbsp;Order Throughput</option>
+                    <option>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Time To Checkout</option>
+                    <option>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Error Rate</option>
+                    <option>Costs</option>
+                    <option>Opportunity Enablement</option>
+                    <option>— Define new… —</option>
+                  </select>
+                </div>
+                <div class="value-entry" style="grid-template-columns:1fr 1fr">
+                  <div class="kpi-field">
+                    <span class="flabel">Target value</span>
+                    <input class="input" placeholder="e.g. 250" />
+                  </div>
+                  <div class="kpi-field">
+                    <span class="flabel">Target date</span>
+                    <input class="input" value="2026-09-30" />
+                  </div>
+                </div>
+                <button class="btn primary">Associate KPI</button>
+              </div>
+            </div>
+
+            <div class="hint" style="margin-top:12px">
+              <span class="i">i</span>
+              <span>KPIs are grouped by their relationship to the parent issue. Each issue sets its own targets; sharing a KPI with the parent links this issue's contribution into the parent's rollup.</span>
+            </div>
+          </div>
+        </details>
+
+        <p class="muted" style="font-size:12px;margin-top:12px">
+          Resize the window: this panel sits in the right sidebar on wide screens
+          and stacks under the description when narrow.
+        </p>
+      </aside>
+    </div>
+  </div>
+
+  <p class="mock-note">Mock · KPI Tracker for Jira · issue entity property stored on INIT-48</p>
+</body>
+</html>

@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Coverage (design exploration) — KPI Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* ---- Coverage bar (segmented / stacked) ---------------------------- */
+    .cov {
+      margin: 4px 0 2px;
+    }
+    .cov-track {
+      position: relative;
+      display: flex;
+      height: 30px;
+      border-radius: 6px;
+      background: var(--ads-neutral-100);
+      overflow: hidden;
+    }
+    /* the over-committed bar lets its excess zone paint on top */
+    .cov-track.over {
+      overflow: visible;
+    }
+    .cov-seg {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      border-right: 1px solid #fff;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .cov-seg:last-of-type { border-right: 0; }
+    .cov-seg.s48 { background: var(--ads-blue-500); }
+    .cov-seg.s49 { background: var(--ads-blue-400); }
+    .cov-seg.s50 { background: var(--ads-purple-500); }
+    .cov-gap {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--ads-text-subtlest);
+      background: repeating-linear-gradient(
+        135deg,
+        var(--ads-neutral-100) 0,
+        var(--ads-neutral-100) 6px,
+        var(--ads-neutral-050) 6px,
+        var(--ads-neutral-050) 12px
+      );
+    }
+    /* the parent-target reference line */
+    .cov-target {
+      position: absolute;
+      top: -4px;
+      bottom: -4px;
+      width: 0;
+      border-left: 2px solid var(--ads-text);
+      transform: translateX(-1px);
+      z-index: 3;
+    }
+    .cov-target::after {
+      content: 'target';
+      position: absolute;
+      top: -15px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--ads-text-subtle);
+      white-space: nowrap;
+    }
+    /* the excess region beyond target on an over-committed bar */
+    .cov-overzone {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      background: repeating-linear-gradient(
+        135deg,
+        rgba(227, 73, 53, 0.30) 0,
+        rgba(227, 73, 53, 0.30) 6px,
+        rgba(227, 73, 53, 0.16) 6px,
+        rgba(227, 73, 53, 0.16) 12px
+      );
+      border-right: 2px solid var(--ads-red-500);
+      z-index: 2;
+      pointer-events: none;
+    }
+    .cov-scale {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 20px;
+      font-size: 11px;
+      color: var(--ads-text-subtlest);
+      font-variant-numeric: tabular-nums;
+    }
+    .cov-readout {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin: 0 0 12px;
+      flex-wrap: wrap;
+    }
+    .cov-readout .pct {
+      font-size: 28px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      color: var(--ads-text);
+    }
+    .cov-readout .pct.over { color: var(--ads-red-700); }
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      font-size: 12px;
+      color: var(--ads-text-subtle);
+    }
+    .legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+    .legend .sw {
+      width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto;
+    }
+    .legend .sw.s48 { background: var(--ads-blue-500); }
+    .legend .sw.s49 { background: var(--ads-blue-400); }
+    .legend .sw.s50 { background: var(--ads-purple-500); }
+    .legend .sw.gap {
+      background: repeating-linear-gradient(135deg,
+        var(--ads-neutral-100) 0, var(--ads-neutral-100) 4px,
+        var(--ads-neutral-050) 4px, var(--ads-neutral-050) 8px);
+      border: 1px solid var(--ads-border);
+    }
+
+    /* ---- Independent (non-additive) side-by-side gauges ---------------- */
+    .indep {
+      display: flex;
+      align-items: stretch;
+      gap: 0;
+      flex-wrap: wrap;
+    }
+    .indep .gauge {
+      flex: 1 1 160px;
+      border: 1px solid var(--ads-border);
+      border-radius: var(--ads-radius-lg);
+      padding: 14px 16px;
+      background: var(--ads-surface-sunken);
+    }
+    .indep .gauge .g-key {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: var(--ads-text-subtle); font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .indep .gauge .g-val {
+      font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums;
+      line-height: 1;
+    }
+    .indep .gauge .g-sub { font-size: 12px; color: var(--ads-text-subtlest); margin-top: 4px; }
+    .indep .noteq {
+      align-self: center;
+      display: grid; place-items: center;
+      width: 40px; flex: 0 0 40px;
+      font-size: 22px; font-weight: 700; color: var(--ads-red-500);
+    }
+
+    /* ---- Aggregation control (define-new-KPI snippet) ------------------ */
+    .agg-options { display: flex; gap: 10px; flex-wrap: wrap; }
+    .agg-opt {
+      flex: 1 1 200px;
+      border: 2px solid var(--ads-border);
+      border-radius: var(--ads-radius-lg);
+      padding: 12px 14px;
+      cursor: pointer;
+      background: var(--ads-surface);
+      display: block;
+    }
+    .agg-opt input { margin-right: 8px; }
+    .agg-opt.sel {
+      border-color: var(--ads-blue-500);
+      background: var(--ads-blue-050);
+    }
+    .agg-opt .ao-title { font-weight: 600; font-size: 14px; }
+    .agg-opt .ao-desc { font-size: 12px; color: var(--ads-text-subtlest); margin-top: 4px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+    @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="kpi-timeline-v2.html">Timeline v2</a>
+    <a href="kpi-timeline-v3.html">Timeline v3</a>
+    <a href="coverage.html" class="active">Coverage</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">KPI Tracker</a><span class="sep">/</span>
+      <span>Coverage</span>
+    </div>
+    <h1 class="page-title">Coverage <span class="lozenge new" style="vertical-align:6px">design exploration</span></h1>
+    <p class="page-subtitle">
+      How a parent's KPI target is <em>covered</em> by the targets its children
+      commit to. The same catalog KPI (say <strong>Revenue</strong>) can sit on
+      many issues — each issue's target is that issue's <strong>slice</strong>,
+      distinguished by its host issue (<span class="mono">Revenue · INIT‑48</span>),
+      not by a separate catalog entry.
+    </p>
+
+    <div class="hint" style="margin-bottom:20px">
+      <span class="i">i</span>
+      <span>
+        <strong>Additive vs. independent.</strong> A field on the KPI
+        <em>definition</em> decides how slices combine.
+        <strong>Sum</strong> KPIs (Revenue, # of Stores, Orders) add their
+        children's slices toward the parent's target — coverage = Σ(children) vs.
+        parent. <strong>Independent</strong> KPIs (NPS, Error Rate, Cycle Time)
+        are <em>never</em> summed; each issue's target stands on its own and is
+        compared, not added.
+      </span>
+    </div>
+
+    <!-- =============================================================== -->
+    <!-- 1. ADDITIVE — under-covered                                     -->
+    <!-- =============================================================== -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <span class="itype outcome">O</span>
+        <h2>OUT‑12 · Grow POS revenue</h2>
+        <span class="lozenge teal" style="margin-left:8px">Revenue · USD</span>
+        <span class="lozenge success" style="margin-left:auto">Sum</span>
+      </div>
+      <div class="card-body">
+        <div class="cov-readout">
+          <span class="pct">80%</span>
+          <span class="muted">covered</span>
+          <span class="lozenge moved">300,000 gap · under‑covered</span>
+        </div>
+
+        <p class="muted" style="margin:0 0 14px;font-size:13px">
+          Parent target <strong>1,500,000</strong> · committed by children
+          <strong>1,200,000</strong>
+        </p>
+
+        <div class="cov">
+          <div class="cov-track">
+            <div class="cov-seg s48" style="width:20%">300k</div>
+            <div class="cov-seg s49" style="width:33.33%">500k</div>
+            <div class="cov-seg s50" style="width:26.67%">400k</div>
+            <div class="cov-gap" style="width:20%">gap 300k</div>
+            <div class="cov-target" style="left:100%"></div>
+          </div>
+          <div class="cov-scale">
+            <span>0</span>
+            <span>target 1,500,000</span>
+          </div>
+        </div>
+
+        <div class="legend">
+          <span class="lg"><span class="sw s48"></span> INIT‑48</span>
+          <span class="lg"><span class="sw s49"></span> INIT‑49</span>
+          <span class="lg"><span class="sw s50"></span> INIT‑50</span>
+          <span class="lg"><span class="sw gap"></span> uncovered gap</span>
+        </div>
+
+        <div class="divider"></div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Child issue</th>
+              <th>Name</th>
+              <th class="num">Slice</th>
+              <th class="num">% of parent</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="itype initiative">I</span> <a href="issue.html">INIT‑48</a></td>
+              <td>Multi‑store support</td>
+              <td class="num">300,000</td>
+              <td class="num">20.0%</td>
+            </tr>
+            <tr>
+              <td><span class="itype initiative">I</span> <a href="#">INIT‑49</a></td>
+              <td>Payments</td>
+              <td class="num">500,000</td>
+              <td class="num">33.3%</td>
+            </tr>
+            <tr>
+              <td><span class="itype initiative">I</span> <a href="#">INIT‑50</a></td>
+              <td>Onboarding</td>
+              <td class="num">400,000</td>
+              <td class="num">26.7%</td>
+            </tr>
+            <tr>
+              <td class="muted" colspan="2">Committed (Σ children)</td>
+              <td class="num"><strong>1,200,000</strong></td>
+              <td class="num"><strong>80.0%</strong></td>
+            </tr>
+            <tr>
+              <td class="muted" colspan="2">Uncovered gap</td>
+              <td class="num" style="color:var(--ads-yellow-700)"><strong>300,000</strong></td>
+              <td class="num" style="color:var(--ads-yellow-700)"><strong>20.0%</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- =============================================================== -->
+    <!-- 2. ADDITIVE — over-committed                                    -->
+    <!-- =============================================================== -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <span class="itype outcome">O</span>
+        <h2>OUT‑12 · Grow POS revenue</h2>
+        <span class="lozenge teal" style="margin-left:8px"># of Stores · count</span>
+        <span class="lozenge success" style="margin-left:auto">Sum</span>
+      </div>
+      <div class="card-body">
+        <div class="cov-readout">
+          <span class="pct over">113%</span>
+          <span class="muted">committed</span>
+          <span class="lozenge removed">over‑committed by 130 (13%)</span>
+        </div>
+
+        <p class="muted" style="margin:0 0 14px;font-size:13px">
+          Parent target <strong>1,000</strong> · committed by children
+          <strong>1,130</strong> — children have promised more than the parent asked for.
+        </p>
+
+        <div class="cov" style="padding-right:8px">
+          <div class="cov-track over">
+            <div class="cov-seg s48" style="width:35.40%">400</div>
+            <div class="cov-seg s49" style="width:30.97%">350</div>
+            <div class="cov-seg s50" style="width:33.63%">380</div>
+            <div class="cov-target" style="left:88.5%"></div>
+            <div class="cov-overzone" style="left:88.5%;width:11.5%"></div>
+          </div>
+          <div class="cov-scale">
+            <span>0</span>
+            <span style="margin-left:auto">target 1,000</span>
+            <span style="margin-left:auto;color:var(--ads-red-700)">1,130 committed</span>
+          </div>
+        </div>
+
+        <div class="legend">
+          <span class="lg"><span class="sw s48"></span> INIT‑48 · 400</span>
+          <span class="lg"><span class="sw s49"></span> INIT‑49 · 350</span>
+          <span class="lg"><span class="sw s50"></span> INIT‑50 · 380</span>
+          <span class="lg">
+            <span class="sw" style="background:repeating-linear-gradient(135deg,rgba(227,73,53,.3) 0,rgba(227,73,53,.3) 4px,rgba(227,73,53,.16) 4px,rgba(227,73,53,.16) 8px);border:1px solid var(--ads-red-500)"></span>
+            excess beyond target
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- =============================================================== -->
+    <!-- 3. INDEPENDENT — not summed                                     -->
+    <!-- =============================================================== -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <span class="itype outcome">O</span>
+        <h2>OUT‑12 · Grow POS revenue</h2>
+        <span class="lozenge teal" style="margin-left:8px">NPS · score</span>
+        <span class="lozenge new" style="margin-left:auto">Independent</span>
+      </div>
+      <div class="card-body">
+        <div class="hint" style="margin-bottom:14px">
+          <span class="i">≠</span>
+          <span>
+            <strong>Not summed — independent metric.</strong> An NPS of 45 and an
+            NPS of 50 do not add up to 95. Each issue tracks its own value; the
+            parent has no "coverage" to fill, so we show the slices side by side
+            and compare them.
+          </span>
+        </div>
+
+        <div class="indep">
+          <div class="gauge">
+            <div class="g-key"><span class="itype initiative">I</span> NPS&nbsp;·&nbsp;<a href="issue.html">INIT‑48</a></div>
+            <div class="g-val">45</div>
+            <div class="g-sub">NPS target · Multi‑store support</div>
+          </div>
+          <div class="noteq" title="not summed">≠</div>
+          <div class="gauge">
+            <div class="g-key"><span class="itype initiative">I</span> NPS&nbsp;·&nbsp;<a href="#">INIT‑49</a></div>
+            <div class="g-val">50</div>
+            <div class="g-sub">NPS target · Payments</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- =============================================================== -->
+    <!-- 4. DEFINE-NEW-KPI — where aggregation is chosen                 -->
+    <!-- =============================================================== -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <h2>Define new KPI</h2>
+        <span class="lozenge default" style="margin-left:auto">catalog definition</span>
+      </div>
+      <div class="card-body">
+        <div class="form-grid">
+          <div class="kpi-field">
+            <span class="flabel">Name</span>
+            <input class="input" value="Revenue" />
+          </div>
+          <div class="kpi-field">
+            <span class="flabel">Unit</span>
+            <input class="input" value="USD" />
+          </div>
+        </div>
+
+        <span class="flabel" style="display:block;margin-bottom:8px">Aggregation</span>
+        <div class="agg-options">
+          <label class="agg-opt">
+            <span class="ao-title"><input type="radio" name="agg" />Independent</span>
+            <span class="lozenge default" style="margin-left:6px">default</span>
+            <div class="ao-desc">Each issue tracks its own value; never summed.</div>
+          </label>
+          <label class="agg-opt sel">
+            <span class="ao-title"><input type="radio" name="agg" checked />Sum</span>
+            <div class="ao-desc">Children's targets add up toward a parent.</div>
+          </label>
+        </div>
+        <p class="muted" style="font-size:12px;margin:10px 0 0">
+          <strong>Sum:</strong> children's targets add up toward a parent.
+          <strong>Independent:</strong> each issue tracks its own value; never summed.
+        </p>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="mock-note">
+    Mock · design exploration · pressure‑tests a future
+    <span class="mono">aggregation</span> field on the KPI <em>definition</em>
+    (<span class="mono">"sum"</span> vs. <span class="mono">"independent"</span>).
+    Slice identity comes from the host issue (Revenue · INIT‑48), not from separate
+    catalog entries. Not production behavior.
+  </p>
+</body>
+</html>

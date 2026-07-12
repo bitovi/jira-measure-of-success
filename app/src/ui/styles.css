@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Atlaskit design-token fallbacks (light). Real tokens come from
+     @atlaskit/tokens once surfaces adopt Atlaskit components. */
+  --ds-surface: #ffffff;
+  --ds-surface-sunken: #f7f8f9;
+  --ds-border: #091e4224;
+  --ds-text: #172b4d;
+  --ds-text-subtle: #626f86;
+  --ds-background-brand-bold: #1868db;
+  --ds-text-success: #216e4e;
+  --ds-text-danger: #ae2e24;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--ds-surface);
+}

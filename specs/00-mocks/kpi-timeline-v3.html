@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI Timeline v3 — per-issue contributions (design exploration)</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* ---- Simplified static timeline (based on v2) ---------------------- */
+    .plan {
+      border: 1px solid var(--ads-border);
+      border-radius: var(--ads-radius-lg);
+      background: var(--ads-surface);
+      overflow: hidden;
+    }
+    .plan-row {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      border-bottom: 1px solid var(--ads-border);
+    }
+    .plan-row:last-child { border-bottom: 0; }
+
+    /* header row: quarter columns */
+    .plan-head {
+      background: var(--ads-surface-sunken);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--ads-text-subtlest);
+    }
+    .plan-head .plan-track {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      height: auto;
+      cursor: default;
+    }
+    .q-col {
+      padding: 8px 10px;
+      border-left: 1px solid var(--ads-border);
+    }
+    .q-col:first-child { border-left: 0; }
+
+    /* left label cell */
+    .plan-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-right: 1px solid var(--ads-border);
+      min-width: 0;
+    }
+    .plan-name {
+      font-weight: 600;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .plan-meta {
+      font-size: 12px;
+      color: var(--ads-text-subtlest);
+      white-space: nowrap;
+      flex: 0 0 auto;
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+    }
+    /* indented per-issue slice rows */
+    .plan-row.slice .plan-label { padding-left: 28px; }
+    .plan-row.slice { background: var(--ads-surface-sunken); }
+    .plan-row.slice .plan-name { font-weight: 500; }
+    .elbow { color: var(--ads-border-bold); font-family: monospace; }
+
+    /* aggregate row visual weight */
+    .plan-row.agg .plan-label { background: var(--ads-blue-050); }
+
+    /* right timeline cell */
+    .plan-track {
+      position: relative;
+      height: 46px;
+    }
+
+    /* quarter gridlines + today */
+    .q-grid {
+      position: absolute; top: 0; bottom: 0; width: 1px;
+      background: var(--ads-border); pointer-events: none;
+    }
+    .today-line {
+      position: absolute; top: 0; bottom: 0; width: 0;
+      border-left: 1px dashed var(--ads-red-500); opacity: 0.8; pointer-events: none;
+    }
+
+    /* target diamonds */
+    .diamond {
+      position: absolute; top: 50%;
+      width: 12px; height: 12px;
+      transform: translate(-50%, -50%) rotate(45deg);
+    }
+    /* per-issue slice target: hollow purple (aspirational / future) */
+    .diamond.slice {
+      background: var(--ads-surface);
+      border: 1.5px solid var(--ads-purple-500);
+    }
+    /* aggregate combined target: filled blue, larger */
+    .diamond.agg {
+      width: 16px; height: 16px;
+      background: var(--ads-blue-500);
+      border: 2px solid var(--ads-surface);
+      box-shadow: 0 0 0 1px var(--ads-blue-500);
+    }
+    /* independent target: hollow teal to signal "compared, not summed" */
+    .diamond.indep {
+      background: var(--ads-surface);
+      border: 1.5px solid var(--ads-teal-700);
+    }
+    .val-flag {
+      position: absolute; top: 50%;
+      transform: translate(10px, -50%);
+      font-size: 11px; font-weight: 600;
+      color: var(--ads-text-subtle);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    /* inline coverage chip in the aggregate label */
+    .cov-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; font-weight: 600; color: var(--ads-text-subtle);
+    }
+    .cov-mini {
+      width: 54px; height: 7px; border-radius: 4px;
+      background: var(--ads-neutral-100); overflow: hidden; flex: 0 0 auto;
+    }
+    .cov-mini > span { display: block; height: 100%; background: var(--ads-blue-500); }
+  </style>
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="kpi-timeline-v2.html">Timeline v2</a>
+    <a href="kpi-timeline-v3.html" class="active">Timeline v3</a>
+    <a href="coverage.html">Coverage</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">KPI Tracker</a><span class="sep">/</span>
+      <span>Timeline v3</span>
+    </div>
+    <h1 class="page-title">
+      KPI Timeline v3 — per‑issue contributions
+      <span class="lozenge new" style="vertical-align:6px">design exploration</span>
+    </h1>
+    <p class="page-subtitle">
+      Adds a second nesting level under each KPI: the individual
+      <strong>issue slices</strong> that roll into it. An aggregate row shows the
+      combined/covered target; the indented sub‑rows show each host issue's own
+      target on the same date axis (<span class="mono">Revenue · INIT‑48</span>).
+    </p>
+
+    <div class="plan">
+      <!-- Header: quarters -->
+      <div class="plan-row plan-head">
+        <div class="plan-label">2026</div>
+        <div class="plan-track">
+          <div class="q-col">Q1</div>
+          <div class="q-col">Q2</div>
+          <div class="q-col">Q3</div>
+          <div class="q-col">Q4</div>
+        </div>
+      </div>
+
+      <!-- ===== Revenue (aggregate, SUM) ===== -->
+      <div class="plan-row agg">
+        <div class="plan-label">
+          <span class="itype outcome">O</span>
+          <span class="plan-name">Revenue</span>
+          <span class="cov-chip" style="margin-left:auto">
+            <span class="cov-mini"><span style="width:80%"></span></span> 80%
+          </span>
+        </div>
+        <div class="plan-track">
+          <div class="q-grid" style="left:25%"></div>
+          <div class="q-grid" style="left:50%"></div>
+          <div class="q-grid" style="left:75%"></div>
+          <div class="today-line" style="left:52%"></div>
+          <!-- combined/covered target on the axis (latest child date, Nov 30) -->
+          <div class="diamond agg" style="left:91.5%" title="Aggregate target 1,500,000 · 80% covered"></div>
+          <div class="val-flag" style="left:91.5%;transform:translate(calc(-100% - 14px), -50%)">1.5M target · 1.2M committed</div>
+        </div>
+      </div>
+
+      <!-- slices -->
+      <div class="plan-row slice">
+        <div class="plan-label">
+          <span class="elbow">└</span>
+          <span class="itype initiative">I</span>
+          <span class="plan-name">Revenue · INIT‑48</span>
+          <span class="plan-meta">300k</span>
+        </div>
+        <div class="plan-track">
+          <div class="q-grid" style="left:25%"></div>
+          <div class="q-grid" style="left:50%"></div>
+          <div class="q-grid" style="left:75%"></div>
+          <div class="today-line" style="left:52%"></div>
+          <div class="diamond slice" style="left:75%" title="INIT‑48 target 300,000 · 2026‑09‑30"></div>
+          <div class="val-flag" style="left:75%">300k</div>
+        </div>
+      </div>
+
+      <div class="plan-row slice">
+        <div class="plan-label">
+          <span class="elbow">└</span>
+          <span class="itype initiative">I</span>
+          <span class="plan-name">Revenue · INIT‑49</span>
+          <span class="plan-meta">500k</span>
+        </div>
+        <div class="plan-track">
+          <div class="q-grid" style="left:25%"></div>
+          <div class="q-grid" style="left:50%"></div>
+          <div class="q-grid" style="left:75%"></div>
+          <div class="today-line" style="left:52%"></div>
+          <div class="diamond slice" style="left:91.5%" title="INIT‑49 target 500,000 · 2026‑11‑30"></div>
+          <div class="val-flag" style="left:91.5%">500k</div>
+        </div>
+      </div>
+
+      <div class="plan-row slice">
+        <div class="plan-label">
+          <span class="elbow">└</span>
+          <span class="itype initiative">I</span>
+          <span class="plan-name">Revenue · INIT‑50</span>
+          <span class="plan-meta">400k</span>
+        </div>
+        <div class="plan-track">
+          <div class="q-grid" style="left:25%"></div>
+          <div class="q-grid" style="left:50%"></div>
+          <div class="q-grid" style="left:75%"></div>
+          <div class="today-line" style="left:52%"></div>
+          <div class="diamond slice" style="left:50%" title="INIT‑50 target 400,000 · 2026‑06‑30"></div>
+          <div class="val-flag" style="left:50%">400k</div>
+        </div>
+      </div>
+
+      <!-- ===== NPS (aggregate, INDEPENDENT) ===== -->
+      <div class="plan-row agg">
+        <div class="plan-label">
+          <span class="itype outcome">O</span>
+          <span class="plan-name">NPS</span>
+          <span class="lozenge new" style="margin-left:auto">independent · not summed</span>
+        </div>
+        <div class="plan-track">
+          <div class="q-grid" style="left:25%"></div>
+          <div class="q-grid" style="left:50%"></div>
+          <div class="q-grid" style="left:75%"></div>
+          <div class="today-line" style="left:52%"></div>
+          <!-- no combined marker: independent metrics are never summed -->
+          <div class="val-flag" style="left:0;transform:translateY(-50%);color:var(--ads-text-subtlest);font-style:italic">
+            no aggregate marker — slices are compared, not added
+          </div>
+        </div>
+      </div>
+
+      <div class="plan-row slice">
+        <div class="plan-label">
+          <span class="elbow">└</span>
+          <span class="itype initiative">I</span>
+          <span class="plan-name">NPS · INIT‑48</span>
+          <span class="plan-meta">45</span>
+        </div>
+        <div class="plan-track">
+          <div class="q-grid" style="left:25%"></div>
+          <div class="q-grid" style="left:50%"></div>
+          <div class="q-grid" style="left:75%"></div>
+          <div class="today-line" style="left:52%"></div>
+          <div class="diamond indep" style="left:75%" title="INIT‑48 NPS target 45 · not summed"></div>
+          <div class="val-flag" style="left:75%">45</div>
+        </div>
+      </div>
+
+      <div class="plan-row slice">
+        <div class="plan-label">
+          <span class="elbow">└</span>
+          <span class="itype initiative">I</span>
+          <span class="plan-name">NPS · INIT‑49</span>
+          <span class="plan-meta">50</span>
+        </div>
+        <div class="plan-track">
+          <div class="q-grid" style="left:25%"></div>
+          <div class="q-grid" style="left:50%"></div>
+          <div class="q-grid" style="left:75%"></div>
+          <div class="today-line" style="left:52%"></div>
+          <div class="diamond indep" style="left:91.5%" title="INIT‑49 NPS target 50 · not summed"></div>
+          <div class="val-flag" style="left:91.5%">50</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- legend -->
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--ads-text-subtle)">
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <span style="width:14px;height:14px;background:var(--ads-blue-500);border:2px solid #fff;box-shadow:0 0 0 1px var(--ads-blue-500);transform:rotate(45deg);display:inline-block"></span>
+        aggregate target (Sum)
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <span style="width:12px;height:12px;background:#fff;border:1.5px solid var(--ads-purple-500);transform:rotate(45deg);display:inline-block"></span>
+        per‑issue slice
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <span style="width:12px;height:12px;background:#fff;border:1.5px solid var(--ads-teal-700);transform:rotate(45deg);display:inline-block"></span>
+        independent target
+      </span>
+      <span style="display:inline-flex;align-items:center;gap:6px">
+        <span style="width:0;height:14px;border-left:1px dashed var(--ads-red-500);display:inline-block"></span>
+        today
+      </span>
+    </div>
+  </div>
+
+  <p class="mock-note">
+    Mock · design exploration · a simplified static sketch (not a port of the v2
+    interactive timeline). Shows the new nesting level: each KPI's per‑issue
+    <em>slices</em> (Revenue · INIT‑48/49/50) rolling into an aggregate row.
+    <strong>Sum</strong> KPIs get a combined/covered marker; <strong>independent</strong>
+    KPIs (NPS) show slices side by side with no aggregate. Positions along the axis
+    are approximate.
+  </p>
+</body>
+</html>

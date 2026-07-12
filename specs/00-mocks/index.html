@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI Tracker — Mocks</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html" class="active">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="measurement-detail.html">KPI</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">Playground</a><span class="sep">/</span>
+      <a href="#">Apps</a><span class="sep">/</span>
+      <span>KPI Tracker</span>
+    </div>
+    <h1 class="page-title">Hierarchy-Native KPI Tracker</h1>
+    <p class="page-subtitle">
+      Static UI mocks for the Jira Forge app. Build a KPI tree,
+      record values over time, associate KPIs with work items, and inherit
+      targets down the native issue hierarchy.
+    </p>
+
+    <div class="hint" style="margin-bottom:24px">
+      <span class="i">i</span>
+      <span>
+        Non-functional mocks styled to look like Jira Cloud. Two hierarchies are in
+        play: the <strong>KPI Tree</strong> (default top-level KPIs — Revenue, Costs,
+        Opportunity Enablement — broken into their driving levers) and the
+        <strong>Jira issue hierarchy</strong>
+        (Outcome → Initiative → Increment → Epic → Story).
+      </span>
+    </div>
+
+    <div class="grid cols-2">
+      <a class="card" href="kpi-tree.html" style="text-decoration:none;color:inherit">
+        <div class="card-head"><h2>KPI Tree Builder</h2><span class="lozenge new">Define</span></div>
+        <div class="card-body">
+          <p class="muted" style="margin-top:0">
+            Starts with default top-level KPIs — Revenue, Costs, Opportunity
+            Enablement — then break each into the levers that drive it.
+          </p>
+          <div class="tree" style="margin-top:8px">
+            <ul>
+              <li>
+                <span class="node level-driver"><span class="swatch" style="background:#22a06b"></span><span class="node-name">Revenue</span></span>
+                <ul>
+                  <li><span class="node level-driver"><span class="node-name"># of Orders</span></span></li>
+                </ul>
+              </li>
+              <li><span class="node level-driver"><span class="swatch" style="background:#e34935"></span><span class="node-name">Costs</span></span></li>
+              <li><span class="node level-driver"><span class="swatch" style="background:#8270db"></span><span class="node-name">Opportunity Enablement</span></span></li>
+            </ul>
+          </div>
+        </div>
+      </a>
+
+      <a class="card" href="measurement-detail.html" style="text-decoration:none;color:inherit">
+        <div class="card-head"><h2>KPI Detail</h2><span class="lozenge inprogress">History</span></div>
+        <div class="card-body">
+          <p class="muted" style="margin-top:0">
+            A plot of how a KPI changed over time, its target trajectory,
+            and the delivery timeline of associated work items.
+          </p>
+          <svg viewBox="0 0 320 90" style="width:100%;height:auto">
+            <polyline points="0,70 80,58 160,46 320,20" fill="none" stroke="#22a06b" stroke-width="2.5"/>
+            <line x1="0" y1="70" x2="320" y2="20" stroke="#8270db" stroke-width="2" stroke-dasharray="6 4"/>
+          </svg>
+        </div>
+      </a>
+
+      <a class="card" href="issue.html" style="text-decoration:none;color:inherit">
+        <div class="card-head"><span class="itype initiative">I</span><h2>Issue · KPIs</h2></div>
+        <div class="card-body">
+          <p class="muted" style="margin-top:0">
+            A responsive Jira issue layout with an expandable KPIs area to
+            associate a KPI and set its target value and date.
+          </p>
+          <span class="source-tag inherited">Inherited from OUT-12</span>
+        </div>
+      </a>
+
+      <a class="card" href="reporting.html" style="text-decoration:none;color:inherit">
+        <div class="card-head"><h2>Reporting</h2><span class="lozenge teal">Coverage</span></div>
+        <div class="card-body">
+          <p class="muted" style="margin-top:0">
+            Group by KPI; show each parent's target and a coverage figure
+            (children's targets vs. the parent target) without double-counting.
+          </p>
+          <div class="stat" style="margin-top:12px">
+            <span class="stat-label">Revenue coverage · OUT-12</span>
+            <span class="stat-value">86%</span>
+          </div>
+          <div class="progress warn" style="margin-top:8px"><span style="width:86%"></span></div>
+        </div>
+      </a>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="card">
+      <div class="card-head"><h2>Jira issue hierarchy used in these mocks</h2></div>
+      <div class="card-body" style="padding:0">
+        <table class="table">
+          <thead>
+            <tr><th>Issue</th><th>Level</th><th>Parent</th><th>KPIs</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="itype outcome">O</span> OUT-12 · Grow POS revenue</td>
+              <td><span class="lozenge default">Outcome</span></td>
+              <td class="muted">—</td>
+              <td>Revenue, # of Orders</td>
+            </tr>
+            <tr>
+              <td class="indent-1"><span class="itype initiative">I</span> INIT-48 · Launch multi-store support</td>
+              <td><span class="lozenge default">Initiative</span></td>
+              <td>OUT-12</td>
+              <td>Revenue <span class="source-tag inherited">inherited</span>, Number of Stores</td>
+            </tr>
+            <tr>
+              <td class="indent-2"><span class="itype increment">N</span> INC-90 · Q1 rollout</td>
+              <td><span class="lozenge default">Increment</span></td>
+              <td>INIT-48</td>
+              <td>Number of Stores <span class="source-tag inherited">inherited</span></td>
+            </tr>
+            <tr>
+              <td class="indent-3"><span class="itype epic">E</span> POS-201 · Store onboarding flow</td>
+              <td><span class="lozenge default">Epic</span></td>
+              <td>INC-90</td>
+              <td>Time To Install</td>
+            </tr>
+            <tr>
+              <td class="indent-4"><span class="itype story">S</span> POS-337 · Guided setup wizard</td>
+              <td><span class="lozenge default">Story</span></td>
+              <td>POS-201</td>
+              <td class="muted">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <p class="mock-note">Mock · KPI Tracker for Jira · specs/00-mocks</p>
+</body>
+</html>

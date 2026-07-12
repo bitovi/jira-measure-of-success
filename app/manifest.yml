@@ -1,0 +1,51 @@
+modules:
+  jira:issuePanel:
+    - key: kpi-issue-panel
+      resource: issue-panel
+      resolver:
+        function: resolver
+      title: KPIs
+  jira:projectPage:
+    - key: kpi-timeline-page
+      resource: timeline
+      resolver:
+        function: resolver
+      title: KPI Timeline
+    - key: kpi-settings-page
+      resource: settings
+      resolver:
+        function: resolver
+      title: KPI Settings
+  jira:entityProperty:
+    - key: kpi-index
+      entityType: issue
+      values:
+        - path: kpiIds
+          type: text
+      keyConfigurations:
+        - key: kpi-assignments
+          extractions:
+            - objectName: kpiIds
+              type: text
+  function:
+    - key: resolver
+      handler: index.handler
+
+resources:
+  - key: issue-panel
+    path: static/issue-panel/build
+  - key: timeline
+    path: static/timeline/build
+  - key: settings
+    path: static/settings/build
+
+permissions:
+  scopes:
+    - read:jira-work
+    - write:jira-work
+    - storage:app
+
+app:
+  runtime:
+    name: nodejs22.x
+# id assigned by `forge register` (deferred until a dev site is provisioned).

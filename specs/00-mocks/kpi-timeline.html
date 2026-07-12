@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI Timeline — KPI Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+  <style>
+    /* ---- KPI timeline (Jira Plans–style nested table + tracks) ---------- */
+    .plan {
+      position: relative;
+      border: 1px solid var(--ads-border);
+      border-radius: var(--ads-radius-lg);
+      background: var(--ads-surface);
+      overflow: hidden;
+    }
+    /* Every row shares the same two-column grid: label | timeline */
+    .plan-row {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      border-bottom: 1px solid var(--ads-border);
+    }
+    .plan-row:last-child {
+      border-bottom: 0;
+    }
+    .plan-head {
+      background: var(--ads-surface-sunken);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--ads-text-subtlest);
+    }
+
+    /* Left label cell */
+    .plan-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-right: 1px solid var(--ads-border);
+      min-width: 0;
+    }
+    .plan-toggle {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      color: var(--ads-text-subtlest);
+      font-size: 10px;
+      border-radius: 3px;
+      transition: transform 0.12s ease;
+    }
+    .plan-toggle:hover {
+      background: var(--ads-neutral-100);
+    }
+    .plan-toggle.collapsed {
+      transform: rotate(-90deg);
+    }
+    .plan-toggle.leaf {
+      visibility: hidden;
+    }
+    .plan-name {
+      font-weight: 600;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .plan-meta {
+      font-size: 12px;
+      color: var(--ads-text-subtlest);
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+    .dir {
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .dir.up { color: var(--ads-green-700); }
+    .dir.down { color: var(--ads-red-700); }
+
+    /* Right timeline cell. Plotted content is inset by --pad on each side so
+       markers at the extreme dates (Jan 1 / Dec 31) are never clipped. */
+    .plan-track {
+      --pad: 12px;
+      position: relative;
+      height: 44px;
+      cursor: crosshair;
+    }
+    .plan-head .plan-track {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      height: auto;
+      cursor: default;
+      padding: 0 var(--pad);
+    }
+    .q-col {
+      padding: 8px 10px;
+      border-left: 1px solid var(--ads-border);
+    }
+    .q-col:first-child { border-left: 0; }
+    .q-col .yr { color: var(--ads-text); }
+
+    /* quarter gridlines, inset to match the plotted area */
+    .q-grid {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      background: var(--ads-border);
+      pointer-events: none;
+    }
+
+    /* today marker */
+    .today-line {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 0;
+      border-left: 1px dashed var(--ads-red-500);
+      opacity: 0.8;
+      pointer-events: none;
+    }
+
+    /* sparkline pieces */
+    .tl-line {
+      position: absolute;
+      left: var(--pad);
+      top: 0;
+      width: calc(100% - 2 * var(--pad));
+      height: 100%;
+      pointer-events: none;
+    }
+    .tl-dot {
+      position: absolute;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--ads-green-500);
+      border: 2px solid var(--ads-surface);
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    .tl-target {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      transform: translate(-50%, -50%) rotate(45deg);
+      pointer-events: auto;
+      cursor: help;
+    }
+    /* future target: aspirational, not yet judged — hollow purple */
+    .tl-target.future {
+      background: var(--ads-surface);
+      border: 1.5px solid var(--ads-purple-500);
+    }
+    /* past target that was met / exceeded */
+    .tl-target.hit {
+      background: var(--ads-green-500);
+    }
+    /* past target that was missed */
+    .tl-target.missed {
+      background: var(--ads-red-500);
+    }
+    .tl-empty {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 11px;
+      color: var(--ads-text-disabled);
+      pointer-events: none;
+    }
+
+    /* ---- Hover crosshair, date flag & tooltip -------------------------- */
+    /* vertical line that follows the cursor across every row */
+    .tl-crosshair {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 0;
+      border-left: 1px solid var(--ads-blue-500);
+      opacity: 0.55;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .tl-dateflag {
+      position: absolute;
+      top: 4px;
+      transform: translateX(-50%);
+      background: var(--ads-text);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: 3px;
+      white-space: nowrap;
+      pointer-events: none;
+      z-index: 6;
+    }
+    /* floating tooltip that follows the cursor */
+    .tl-tip {
+      position: fixed;
+      display: none;
+      z-index: 200;
+      max-width: 240px;
+      background: var(--ads-text);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1.45;
+      padding: 6px 9px;
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(9, 30, 66, 0.32);
+      pointer-events: none;
+    }
+    .tl-tip b { font-weight: 600; }
+    .tl-tip .muted { color: rgba(255, 255, 255, 0.72); }
+    .tl-tip .src {
+      margin-top: 3px;
+      padding-top: 3px;
+      border-top: 1px solid rgba(255, 255, 255, 0.18);
+      color: rgba(255, 255, 255, 0.92);
+    }
+    .tl-tip .kind {
+      display: inline-block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+      padding: 0 4px;
+      border-radius: 2px;
+      margin-left: 6px;
+      vertical-align: 1px;
+    }
+    .tl-tip .kind.actual,
+    .tl-tip .kind.hit { background: var(--ads-green-500); color: #fff; }
+    .tl-tip .kind.missed { background: var(--ads-red-500); color: #fff; }
+    .tl-tip .kind.future { background: var(--ads-purple-500); color: #fff; }
+    .tl-tip .kind.interp { background: rgba(255, 255, 255, 0.22); color: #fff; }
+
+    /* ---- Modal --------------------------------------------------------- */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(9, 30, 66, 0.54);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--ads-surface);
+      border-radius: var(--ads-radius-lg);
+      box-shadow: 0 8px 24px rgba(9, 30, 66, 0.28);
+      width: 380px;
+      max-width: calc(100vw - 32px);
+      overflow: hidden;
+    }
+    .modal-head {
+      padding: 16px 20px 4px;
+    }
+    .modal-head h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+    }
+    .modal-head p {
+      margin: 4px 0 0;
+      font-size: 12px;
+      color: var(--ads-text-subtlest);
+    }
+    .modal-body {
+      padding: 12px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .modal-foot {
+      padding: 12px 20px 16px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="kpi-timeline.html" class="active">Timeline</a>
+    <a href="measurement-detail.html">KPI</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">KPI Tracker</a><span class="sep">/</span>
+      <span>Timeline</span>
+    </div>
+    <h1 class="page-title">KPI Timeline</h1>
+    <p class="page-subtitle">
+      The KPI tree as a nested plan. Each KPI shows its recorded values
+      as a sparkline across the year. Click anywhere on a row's track to record a
+      new value at that date.
+    </p>
+
+    <div class="plan" id="plan"></div>
+
+    <p class="muted" style="font-size:12px;margin-top:12px">
+      Diamonds mark target values · the red line is today · click a track to add a value.
+    </p>
+  </div>
+
+  <!-- Record-value modal -->
+  <div class="modal-overlay" id="modal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <h2 id="modal-title">Record a value</h2>
+        <p id="modal-sub">KPI</p>
+      </div>
+      <div class="modal-body">
+        <div class="kpi-field">
+          <span class="flabel">Date</span>
+          <input class="input" id="modal-date" />
+        </div>
+        <div class="kpi-field">
+          <span class="flabel">Value</span>
+          <input class="input" id="modal-value" placeholder="e.g. 1,300,000" />
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn subtle" id="modal-cancel">Cancel</button>
+        <button class="btn primary" id="modal-save">Record</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="mock-note">Mock · KPI Tracker for Jira · specs/00-mocks</p>
+
+  <script>
+    // ---- Timeline domain (the visible year) ------------------------------
+    const DOMAIN_START = new Date("2026-01-01").getTime();
+    const DOMAIN_END = new Date("2026-12-31").getTime();
+    const TODAY = new Date("2026-07-10").getTime();
+
+    const fmtDate = (t) =>
+      new Date(t).toISOString().slice(0, 10);
+    const dateFrac = (iso) => {
+      const t = typeof iso === "number" ? iso : new Date(iso).getTime();
+      return (t - DOMAIN_START) / (DOMAIN_END - DOMAIN_START);
+    };
+    // horizontal position within the padded plot area (--pad = 12px each side)
+    const xPos = (iso) => `calc(12px + ${dateFrac(iso)} * (100% - 24px))`;
+
+    // ---- KPI tree model --------------------------------------------------
+    // node: {
+    //   id, name, unit, direction,
+    //   points:  [{date, value}]                 // recorded values — always in the past
+    //   targets: [{date, value, source:{issue,type,title}}]  // goals set on an issue
+    //   children?
+    // }
+    let nextId = 1;
+    const kpiTree = [
+      {
+        name: "Revenue", unit: "USD", direction: "increase",
+        targets: [
+          { date: "2026-02-15", value: 990000,   // past — hit
+            source: { issue: "INIT-48", type: "Initiative", title: "Enter New Markets" } },
+          { date: "2026-06-30", value: 1300000,  // past — missed
+            source: { issue: "OUT-12", type: "Outcome", title: "Grow Revenue" } },
+          { date: "2026-09-30", value: 1400000,  // future
+            source: { issue: "OUT-12", type: "Outcome", title: "Grow Revenue" } },
+          { date: "2026-12-20", value: 1500000,  // future
+            source: { issue: "OUT-12", type: "Outcome", title: "Grow Revenue" } },
+        ],
+        points: [
+          { date: "2026-01-12", value: 1000000 },
+          { date: "2026-03-03", value: 1075000 },
+          { date: "2026-05-19", value: 1180000 },
+          { date: "2026-06-27", value: 1240000 },
+        ],
+        children: [
+          {
+            name: "# of Orders", unit: "count", direction: "increase",
+            targets: [
+              { date: "2026-03-31", value: 7800,   // past — hit
+                source: { issue: "INIT-48", type: "Initiative", title: "Expand Order Volume" } },
+              { date: "2026-08-15", value: 11500,  // future
+                source: { issue: "INIT-48", type: "Initiative", title: "Expand Order Volume" } },
+              { date: "2026-12-15", value: 13000,  // future
+                source: { issue: "INIT-48", type: "Initiative", title: "Expand Order Volume" } },
+            ],
+            points: [
+              { date: "2026-01-20", value: 8000 },
+              { date: "2026-04-08", value: 9300 },
+              { date: "2026-06-15", value: 10400 },
+            ],
+            children: [
+              {
+                name: "Number of Stores", unit: "count", direction: "increase",
+                targets: [
+                  { date: "2026-05-01", value: 145,  // past — hit
+                    source: { issue: "EPIC-231", type: "Epic", title: "Launch Retail Stores" } },
+                  { date: "2026-09-30", value: 250,  // future
+                    source: { issue: "EPIC-231", type: "Epic", title: "Launch Retail Stores" } },
+                ],
+                points: [
+                  { date: "2026-02-02", value: 120 },
+                  { date: "2026-04-27", value: 150 },
+                  { date: "2026-07-05", value: 168 },
+                ],
+                children: [
+                  {
+                    name: "Feature Parity", unit: "score", direction: "increase",
+                    targets: [
+                      { date: "2026-04-15", value: 50,  // past — hit
+                        source: { issue: "STORY-882", type: "Story", title: "Store App Parity" } },
+                      { date: "2026-11-30", value: 90,  // future
+                        source: { issue: "STORY-882", type: "Story", title: "Store App Parity" } },
+                    ],
+                    points: [
+                      { date: "2026-01-31", value: 40 },
+                      { date: "2026-03-22", value: 52 },
+                      { date: "2026-06-10", value: 68 },
+                    ],
+                  },
+                  {
+                    name: "Time To Install", unit: "hours", direction: "decrease",
+                    targets: [
+                      { date: "2026-06-01", value: 8,  // past — hit
+                        source: { issue: "STORY-905", type: "Story", title: "Faster Install" } },
+                      { date: "2026-10-31", value: 4,  // future
+                        source: { issue: "STORY-905", type: "Story", title: "Faster Install" } },
+                    ],
+                    points: [
+                      { date: "2026-02-14", value: 12 },
+                      { date: "2026-05-06", value: 9 },
+                      { date: "2026-07-01", value: 7 },
+                    ],
+                  },
+                ],
+              },
+              {
+                name: "Order Throughput", unit: "orders/hr", direction: "increase",
+                targets: [
+                  { date: "2026-05-15", value: 360,  // past — missed
+                    source: { issue: "EPIC-244", type: "Epic", title: "Scale Checkout" } },
+                  { date: "2026-12-31", value: 450,  // future
+                    source: { issue: "EPIC-244", type: "Epic", title: "Scale Checkout" } },
+                ],
+                points: [
+                  { date: "2026-01-09", value: 300 },
+                  { date: "2026-03-28", value: 335 },
+                  { date: "2026-06-20", value: 380 },
+                ],
+                children: [
+                  {
+                    name: "Time To Checkout", unit: "seconds", direction: "decrease",
+                    targets: [
+                      { date: "2026-03-15", value: 190,  // past — hit
+                        source: { issue: "STORY-921", type: "Story", title: "Checkout Speed" } },
+                      { date: "2026-08-31", value: 120,  // future
+                        source: { issue: "STORY-921", type: "Story", title: "Checkout Speed" } },
+                    ],
+                    points: [
+                      { date: "2026-02-08", value: 210 },
+                      { date: "2026-04-19", value: 178 },
+                      { date: "2026-06-30", value: 150 },
+                    ],
+                  },
+                  {
+                    name: "Error Rate", unit: "%", direction: "decrease",
+                    targets: [
+                      { date: "2026-04-30", value: 3.0,  // past — missed
+                        source: { issue: "STORY-934", type: "Story", title: "Reduce Errors" } },
+                      { date: "2026-11-15", value: 1.5,  // future
+                        source: { issue: "STORY-934", type: "Story", title: "Reduce Errors" } },
+                    ],
+                    points: [
+                      { date: "2026-01-25", value: 4.2 },
+                      { date: "2026-05-12", value: 3.1 },
+                      { date: "2026-07-02", value: 2.4 },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        name: "Costs", unit: "USD", direction: "decrease",
+        targets: [
+          { date: "2026-03-20", value: 885000,  // past — hit
+            source: { issue: "OUT-15", type: "Outcome", title: "Control Costs" } },
+          { date: "2026-10-15", value: 800000,  // future
+            source: { issue: "OUT-15", type: "Outcome", title: "Control Costs" } },
+        ],
+        points: [
+          { date: "2026-01-15", value: 900000 },
+          { date: "2026-04-10", value: 872000 },
+          { date: "2026-06-22", value: 850000 },
+        ],
+      },
+      {
+        name: "Opportunity Enablement", unit: "future value", direction: null,
+        targets: [
+          { date: "2026-09-01", value: 100,  // future — no values recorded yet
+            source: { issue: "INIT-53", type: "Initiative", title: "Sales Enablement" } },
+        ],
+        points: [],
+      },
+    ];
+
+    // assign ids
+    (function assignIds(nodes) {
+      for (const n of nodes) {
+        n.id = "n" + nextId++;
+        if (!n.points) n.points = [];
+        if (!n.targets) n.targets = [];
+        if (n.children) assignIds(n.children);
+      }
+    })(kpiTree);
+
+    // ---- Render ----------------------------------------------------------
+    const collapsed = new Set();
+    const plan = document.getElementById("plan");
+
+    // Shared hover UI: a vertical crosshair + date flag that span every row,
+    // and a floating tooltip that follows the cursor.
+    const crosshair = document.createElement("div");
+    crosshair.className = "tl-crosshair";
+    const dateFlag = document.createElement("div");
+    dateFlag.className = "tl-dateflag";
+    const tip = document.createElement("div");
+    tip.className = "tl-tip";
+    document.body.appendChild(tip);
+
+    const fmtVal = (v) =>
+      v.toLocaleString(undefined, { maximumFractionDigits: Math.abs(v) >= 100 ? 0 : 1 });
+
+    function showTip(e) {
+      tip.style.display = "block";
+      const gap = 14;
+      let x = e.clientX + gap;
+      let y = e.clientY + gap;
+      if (x + tip.offsetWidth > window.innerWidth - 8) x = e.clientX - gap - tip.offsetWidth;
+      if (y + tip.offsetHeight > window.innerHeight - 8) y = e.clientY - gap - tip.offsetHeight;
+      tip.style.left = x + "px";
+      tip.style.top = y + "px";
+    }
+    function hideHover() {
+      tip.style.display = "none";
+      crosshair.style.display = "none";
+      dateFlag.style.display = "none";
+    }
+
+    // Value in effect at time t (ms): exact between two readings via linear
+    // interpolation; flat before the first / after the last reading.
+    function valueDetailAt(node, t) {
+      const pts = [...node.points].sort((a, b) => new Date(a.date) - new Date(b.date));
+      if (!pts.length) return null;
+      const times = pts.map((p) => new Date(p.date).getTime());
+      if (t <= times[0]) return { value: pts[0].value, kind: "before" };
+      if (t >= times[times.length - 1]) return { value: pts[pts.length - 1].value, kind: "after" };
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (t >= times[i] && t <= times[i + 1]) {
+          const f = (t - times[i]) / (times[i + 1] - times[i]);
+          return { value: pts[i].value + f * (pts[i + 1].value - pts[i].value), kind: "interp" };
+        }
+      }
+      return null;
+    }
+
+    function directionLabel(dir) {
+      if (dir === "increase") return '<span class="dir up">▲ increase</span>';
+      if (dir === "decrease") return '<span class="dir down">▼ decrease</span>';
+      return "";
+    }
+
+    // per-row vertical scale, padded, including all targets so diamonds fit
+    function scaleFor(node) {
+      const vals = node.points.map((p) => p.value)
+        .concat(node.targets.map((t) => t.value));
+      if (!vals.length) return null;
+      let min = Math.min(...vals);
+      let max = Math.max(...vals);
+      if (min === max) { min -= 1; max += 1; }
+      // map value -> y% in [20, 80] (inverted: high value = top)
+      return (v) => 20 + (1 - (v - min) / (max - min)) * 60;
+    }
+
+    // recorded value in effect at a given date = last point on or before it
+    function valueAt(node, iso) {
+      const t = new Date(iso).getTime();
+      let latest = null;
+      for (const p of node.points) {
+        if (new Date(p.date).getTime() <= t) latest = p.value;
+      }
+      return latest;
+    }
+
+    // classify a target: future (not yet due) | hit | missed
+    function targetStatus(node, target) {
+      if (new Date(target.date).getTime() > TODAY) return "future";
+      const actual = valueAt(node, target.date);
+      if (actual == null) return "future"; // nothing recorded to judge against
+      const met = node.direction === "decrease"
+        ? actual <= target.value
+        : actual >= target.value;
+      return met ? "hit" : "missed";
+    }
+
+    function renderTrack(node) {
+      const track = document.createElement("div");
+      track.className = "plan-track";
+      track.dataset.id = node.id;
+
+      // quarter gridlines (inset to the plotted area)
+      [0.25, 0.5, 0.75].forEach((f) => {
+        const g = document.createElement("div");
+        g.className = "q-grid";
+        g.style.left = `calc(12px + ${f} * (100% - 24px))`;
+        track.appendChild(g);
+      });
+
+      // today line
+      const today = document.createElement("div");
+      today.className = "today-line";
+      today.style.left = xPos(TODAY);
+      track.appendChild(today);
+
+      const yFor = scaleFor(node);
+
+      if (!node.points.length) {
+        const empty = document.createElement("span");
+        empty.className = "tl-empty";
+        empty.textContent = "No values yet — click to add";
+        track.appendChild(empty);
+      } else {
+        // connecting line (distorted-x SVG in 0..100 space)
+        const pts = node.points
+          .map((p) => `${dateFrac(p.date) * 100},${yFor(p.value)}`)
+          .join(" ");
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.setAttribute("class", "tl-line");
+        svg.setAttribute("viewBox", "0 0 100 100");
+        svg.setAttribute("preserveAspectRatio", "none");
+        const poly = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        poly.setAttribute("points", pts);
+        poly.setAttribute("fill", "none");
+        poly.setAttribute("stroke", "#22a06b");
+        poly.setAttribute("stroke-width", "1.5");
+        poly.setAttribute("vector-effect", "non-scaling-stroke");
+        svg.appendChild(poly);
+        track.appendChild(svg);
+
+        // dots
+        for (const p of node.points) {
+          const dot = document.createElement("div");
+          dot.className = "tl-dot";
+          dot.style.left = xPos(p.date);
+          dot.style.top = yFor(p.value) + "%";
+          track.appendChild(dot);
+        }
+      }
+
+      // target diamonds (may be past → hit/missed, or future)
+      if (yFor) {
+        for (const target of node.targets) {
+          const status = targetStatus(node, target);
+          const dia = document.createElement("div");
+          dia.className = "tl-target " + status;
+          dia.style.left = xPos(target.date);
+          dia.style.top = yFor(target.value) + "%";
+          const src = target.source;
+          const statusLabel = status === "future" ? "Upcoming"
+            : status === "hit" ? "Target hit" : "Target missed";
+          dia.dataset.tip =
+            `<b>Target: ${fmtVal(target.value)} ${node.unit}</b>` +
+            `<span class="kind ${status}">${status}</span>` +
+            `<div class="muted">${statusLabel} · due ${target.date}</div>` +
+            (src ? `<div class="src">Set on ${src.type} ${src.issue} — ${src.title}</div>` : "");
+          // don't let a click on a target open the add-value modal
+          dia.addEventListener("click", (e) => e.stopPropagation());
+          track.appendChild(dia);
+        }
+      }
+
+      // hover: crosshair + date flag follow the cursor across all rows, and a
+      // tooltip reports the value (measured / interpolated) or target details.
+      track.addEventListener("mousemove", (e) => {
+        const rect = track.getBoundingClientRect();
+        const pad = 12;
+        const plotW = rect.width - 2 * pad;
+        const rawX = e.clientX - rect.left;
+        const frac = Math.min(1, Math.max(0, (rawX - pad) / plotW));
+        const t = DOMAIN_START + frac * (DOMAIN_END - DOMAIN_START);
+
+        const planRect = plan.getBoundingClientRect();
+        const px = e.clientX - planRect.left;
+        crosshair.style.display = "block";
+        crosshair.style.left = px + "px";
+        dateFlag.style.display = "block";
+        dateFlag.style.left = px + "px";
+        dateFlag.textContent = fmtDate(t);
+
+        // hovering a target diamond?
+        const tgt = e.target.closest ? e.target.closest(".tl-target") : null;
+        if (tgt && tgt.dataset.tip) {
+          tip.innerHTML = tgt.dataset.tip;
+          showTip(e);
+          return;
+        }
+
+        // rows with no readings
+        if (!node.points.length) {
+          tip.innerHTML =
+            `<b>${node.name}</b><div class="muted">No values recorded yet</div>`;
+          showTip(e);
+          return;
+        }
+
+        // snap to an actual measured reading when close to its dot
+        let actual = null, best = 8;
+        for (const p of node.points) {
+          const ppx = pad + dateFrac(p.date) * plotW;
+          const d = Math.abs(ppx - rawX);
+          if (d < best) { best = d; actual = p; }
+        }
+        if (actual) {
+          tip.innerHTML =
+            `<b>${fmtVal(actual.value)} ${node.unit}</b>` +
+            `<span class="kind actual">measured</span>` +
+            `<div class="muted">${actual.date}</div>`;
+        } else {
+          const det = valueDetailAt(node, t);
+          if (det.kind === "before") {
+            tip.innerHTML =
+              `<b>—</b><span class="kind interp">no reading yet</span>` +
+              `<div class="muted">${fmtDate(t)}</div>`;
+          } else {
+            const lbl = det.kind === "after" ? "latest" : "interpolated";
+            tip.innerHTML =
+              `<b>~ ${fmtVal(det.value)} ${node.unit}</b>` +
+              `<span class="kind interp">${lbl}</span>` +
+              `<div class="muted">${fmtDate(t)}</div>`;
+          }
+        }
+        showTip(e);
+      });
+      track.addEventListener("mouseleave", hideHover);
+
+      // click to add a value at the clicked date
+      track.addEventListener("click", (e) => {
+        const rect = track.getBoundingClientRect();
+        const pad = 12;
+        const frac = Math.min(1, Math.max(0,
+          (e.clientX - rect.left - pad) / (rect.width - 2 * pad)));
+        const t = DOMAIN_START + frac * (DOMAIN_END - DOMAIN_START);
+        openModal(node, fmtDate(t));
+      });
+
+      return track;
+    }
+
+    function renderRows(nodes, depth) {
+      for (const node of nodes) {
+        const row = document.createElement("div");
+        row.className = "plan-row";
+
+        const label = document.createElement("div");
+        label.className = "plan-label";
+        label.style.paddingLeft = 12 + depth * 16 + "px";
+
+        const toggle = document.createElement("button");
+        toggle.className = "plan-toggle";
+        const hasKids = node.children && node.children.length;
+        if (hasKids) {
+          toggle.textContent = "▼";
+          if (collapsed.has(node.id)) toggle.classList.add("collapsed");
+          toggle.addEventListener("click", () => {
+            if (collapsed.has(node.id)) collapsed.delete(node.id);
+            else collapsed.add(node.id);
+            draw();
+          });
+        } else {
+          toggle.classList.add("leaf");
+        }
+        label.appendChild(toggle);
+
+        const name = document.createElement("span");
+        name.className = "plan-name";
+        name.textContent = node.name;
+        label.appendChild(name);
+
+        const meta = document.createElement("span");
+        meta.className = "plan-meta";
+        meta.innerHTML =
+          node.unit + (node.direction ? " · " + directionLabel(node.direction) : "");
+        label.appendChild(meta);
+
+        row.appendChild(label);
+        row.appendChild(renderTrack(node));
+        plan.appendChild(row);
+
+        if (hasKids && !collapsed.has(node.id)) {
+          renderRows(node.children, depth + 1);
+        }
+      }
+    }
+
+    function draw() {
+      plan.innerHTML = "";
+
+      // header row with quarter axis
+      const head = document.createElement("div");
+      head.className = "plan-row plan-head";
+      const hl = document.createElement("div");
+      hl.className = "plan-label";
+      hl.textContent = "KPI";
+      const ht = document.createElement("div");
+      ht.className = "plan-track";
+      ["Q1", "Q2", "Q3", "Q4"].forEach((q, i) => {
+        const col = document.createElement("div");
+        col.className = "q-col";
+        col.innerHTML = (i === 0 ? '<span class="yr">2026</span> · ' : "") + q;
+        ht.appendChild(col);
+      });
+      head.appendChild(hl);
+      head.appendChild(ht);
+      plan.appendChild(head);
+
+      renderRows(kpiTree, 0);
+
+      // hover crosshair + date flag live above the rows
+      plan.appendChild(crosshair);
+      plan.appendChild(dateFlag);
+    }
+
+    // ---- Modal -----------------------------------------------------------
+    const modal = document.getElementById("modal");
+    const mDate = document.getElementById("modal-date");
+    const mValue = document.getElementById("modal-value");
+    const mSub = document.getElementById("modal-sub");
+    let activeNode = null;
+
+    function openModal(node, isoDate) {
+      activeNode = node;
+      mSub.textContent = node.name + " · " + node.unit;
+      mDate.value = isoDate;
+      mValue.value = "";
+      modal.classList.add("open");
+      mValue.focus();
+    }
+    function closeModal() {
+      modal.classList.remove("open");
+      activeNode = null;
+    }
+    document.getElementById("modal-cancel").addEventListener("click", closeModal);
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeModal();
+    });
+    document.getElementById("modal-save").addEventListener("click", () => {
+      if (!activeNode) return;
+      const raw = mValue.value.replace(/[, ]/g, "");
+      const value = Number(raw);
+      if (mDate.value && !Number.isNaN(value) && raw !== "") {
+        activeNode.points.push({ date: mDate.value, value });
+        activeNode.points.sort((a, b) => new Date(a.date) - new Date(b.date));
+      }
+      closeModal();
+      draw();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeModal();
+    });
+
+    draw();
+  </script>
+</body>
+</html>

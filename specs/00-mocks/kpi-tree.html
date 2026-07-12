@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI Tree Builder — KPI Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html" class="active">KPI Tree</a>
+    <a href="measurement-detail.html">KPI</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">KPI Tracker</a><span class="sep">/</span>
+      <span>KPI Tree</span>
+    </div>
+    <h1 class="page-title">KPI Tree Builder</h1>
+    <p class="page-subtitle">
+      Trees start with three default top-level KPIs — Revenue, Costs, and
+      Opportunity Enablement. Break each down into the <strong>levers</strong> that
+      drive it. Click a KPI to see its history and associated delivery
+      timeline. Record a value at a point in time from the panel on the right.
+    </p>
+
+    <div class="grid" style="grid-template-columns:1fr 360px">
+      <!-- Tree -->
+      <div class="card">
+        <div class="card-head">
+          <h2>KPI tree</h2>
+          <div class="spacer" style="flex:1"></div>
+          <button class="btn primary sm">+ Add KPI</button>
+        </div>
+        <div class="card-body">
+          <div class="tree" id="kpi-tree"></div>
+        </div>
+      </div>
+
+      <!-- Right column: define + record value -->
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="card">
+          <div class="card-head"><h2>Define KPI</h2></div>
+          <div class="card-body">
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div class="kpi-field">
+                <span class="flabel">Name</span>
+                <input class="input" value="Time To Checkout" />
+              </div>
+              <div class="kpi-field">
+                <span class="flabel">Parent KPI</span>
+                <select class="select">
+                  <option>Order Throughput</option>
+                  <option># of Orders</option>
+                  <option>Revenue</option>
+                  <option>— none (top level) —</option>
+                </select>
+              </div>
+              <div class="value-entry" style="grid-template-columns:1fr 1fr">
+                <div class="kpi-field">
+                  <span class="flabel">Unit</span>
+                  <input class="input" value="seconds" />
+                </div>
+                <div class="kpi-field">
+                  <span class="flabel">Direction</span>
+                  <select class="select">
+                    <option>decrease</option>
+                    <option>increase</option>
+                  </select>
+                </div>
+              </div>
+              <button class="btn primary">Add to tree</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>Record a value</h2>
+            <span class="lozenge inprogress">Revenue</span>
+          </div>
+          <div class="card-body">
+            <p class="muted" style="margin-top:0;font-size:13px">
+              Capture a KPI's value at a point in time. These points build
+              the history plot on the KPI detail page.
+            </p>
+            <div class="value-entry">
+              <div class="kpi-field">
+                <span class="flabel">Date</span>
+                <input class="input" value="2026-07-01" />
+              </div>
+              <div class="kpi-field">
+                <span class="flabel">Value (USD)</span>
+                <input class="input" value="1,240,000" />
+              </div>
+              <button class="btn primary">Record</button>
+            </div>
+            <div class="divider"></div>
+            <table class="table">
+              <thead><tr><th>Date</th><th class="num">Value</th></tr></thead>
+              <tbody>
+                <tr><td>2026-01-01</td><td class="num mono">1,000,000</td></tr>
+                <tr><td>2026-04-01</td><td class="num mono">1,120,000</td></tr>
+                <tr><td>2026-07-01</td><td class="num mono">1,240,000</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="mock-note">Mock · KPI Tracker for Jira · specs/00-mocks</p>
+
+  <script>
+    // KPI tree model — each node: { name, unit, direction, children? }
+    const kpiTree = [
+      {
+        name: "Revenue", unit: "USD", direction: "increase",
+        children: [
+          {
+            name: "# of Orders", unit: "count", direction: "increase",
+            children: [
+              {
+                name: "Number of Stores", unit: "count", direction: "increase",
+                children: [
+                  { name: "Feature Parity", unit: "score", direction: "increase" },
+                  { name: "Time To Install", unit: "hours", direction: "decrease" },
+                ],
+              },
+              {
+                name: "Order Throughput", unit: "orders/hr", direction: "increase",
+                children: [
+                  { name: "Time To Checkout", unit: "seconds", direction: "decrease" },
+                  { name: "Error Rate", unit: "%", direction: "decrease" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { name: "Costs", unit: "USD", direction: "decrease" },
+      { name: "Opportunity Enablement", unit: "future value" },
+    ];
+
+    function renderNodes(nodes) {
+      const ul = document.createElement("ul");
+      for (const node of nodes) {
+        const li = document.createElement("li");
+
+        const a = document.createElement("a");
+        a.className = "node";
+        a.href = "measurement-detail.html";
+
+        const name = document.createElement("span");
+        name.className = "node-name";
+        name.textContent = node.name;
+        a.appendChild(name);
+
+        const meta = document.createElement("span");
+        meta.className = "node-meta";
+        meta.textContent = node.direction
+          ? `${node.unit} · ${node.direction}`
+          : node.unit;
+        a.appendChild(meta);
+
+        li.appendChild(a);
+
+        if (node.children && node.children.length) {
+          li.appendChild(renderNodes(node.children));
+        }
+        ul.appendChild(li);
+      }
+      return ul;
+    }
+
+    document.getElementById("kpi-tree").appendChild(renderNodes(kpiTree));
+  </script>
+</body>
+</html>
+

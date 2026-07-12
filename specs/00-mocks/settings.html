@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Settings — KPI Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="measurement-detail.html">KPI</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html" class="active">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">KPI Tracker</a><span class="sep">/</span>
+      <span>Settings</span>
+    </div>
+    <h1 class="page-title">Settings</h1>
+    <p class="page-subtitle">
+      App-level configuration. These choices decide how an issue's
+      <strong>effective due date</strong> is computed, which in turn anchors any
+      KPI target date that is set <em>relative</em> to the due date
+      (e.g. "reached 3 months after the issue is due").
+    </p>
+
+    <!-- ============================================================= -->
+    <!-- Due Date Rollup -->
+    <!-- ============================================================= -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <h2>Due Date Rollup</h2>
+        <span class="lozenge default" style="margin-left:8px">per hierarchy level</span>
+      </div>
+      <div class="card-body">
+        <p class="muted" style="margin-top:0;margin-bottom:16px">
+          Which dates are prioritized between a parent and its children when
+          resolving an issue's due date? Set a rule for each level of your
+          discovered hierarchy. Levels are read at runtime from the site's
+          issue-type configuration — nothing is hard-coded.
+        </p>
+
+        <!-- Outcome -->
+        <div class="rollup-row">
+          <div class="rollup-label">
+            <span class="itype outcome">O</span> Outcome
+          </div>
+          <div class="rollup-control">
+            <select class="select">
+              <option>From Initiatives, then Outcome</option>
+              <option>From Initiatives</option>
+              <option>From Outcome, then Initiatives</option>
+              <option>From Outcome only</option>
+              <option>From Outcome or Initiatives (earliest → latest) (default)</option>
+            </select>
+            <span class="rollup-child muted">rolls up from Initiatives</span>
+          </div>
+        </div>
+
+        <!-- Initiative -->
+        <div class="rollup-row" style="padding-left:24px">
+          <div class="rollup-connector">&nbsp;</div>
+          <div class="rollup-label">
+            <span class="itype initiative">I</span> Initiative
+          </div>
+          <div class="rollup-control">
+            <select class="select">
+              <option>From Increments, then Initiative</option>
+              <option>From Increments</option>
+              <option>From Initiative, then Increments</option>
+              <option>From Initiative only</option>
+              <option>From Initiative or Increments (earliest → latest) (default)</option>
+            </select>
+            <span class="rollup-child muted">rolls up from Increments</span>
+          </div>
+        </div>
+
+        <!-- Increment -->
+        <div class="rollup-row" style="padding-left:48px">
+          <div class="rollup-connector">&nbsp;</div>
+          <div class="rollup-label">
+            <span class="itype increment">N</span> Increment
+          </div>
+          <div class="rollup-control">
+            <select class="select">
+              <option>From Epics</option>
+              <option>From Epics, then Increment</option>
+              <option>From Increment, then Epics</option>
+              <option>From Increment only</option>
+              <option>From Increment or Epics (earliest → latest) (default)</option>
+            </select>
+            <span class="rollup-child muted">rolls up from Epics</span>
+          </div>
+        </div>
+
+        <!-- Epic -->
+        <div class="rollup-row" style="padding-left:72px">
+          <div class="rollup-connector">&nbsp;</div>
+          <div class="rollup-label">
+            <span class="itype epic">E</span> Epic
+          </div>
+          <div class="rollup-control">
+            <select class="select">
+              <option>From Stories, then Epic</option>
+              <option>From Stories</option>
+              <option>From Epic, then Stories</option>
+              <option>From Epic only</option>
+              <option>From Epic or Stories (earliest → latest) (default)</option>
+            </select>
+            <span class="rollup-child muted">rolls up from Stories</span>
+          </div>
+        </div>
+
+        <!-- Story (leaf) -->
+        <div class="rollup-row" style="padding-left:96px">
+          <div class="rollup-connector">&nbsp;</div>
+          <div class="rollup-label">
+            <span class="itype story">S</span> Story
+          </div>
+          <div class="rollup-control">
+            <select class="select" disabled>
+              <option>From Story only (leaf level)</option>
+            </select>
+            <span class="rollup-child muted">no children to roll up</span>
+          </div>
+        </div>
+
+        <div class="hint" style="margin-top:16px">
+          <span class="i">i</span>
+          <span>
+            <strong>How each rule resolves a due date</strong> (bottom-up, memoized per render):
+            <br />• <strong>From children</strong> — always use the merged dates of the
+            children (a parent finishes when its last child finishes); ignore the
+            parent's own date.
+            <br />• <strong>From children, then parent</strong> — use children if any exist,
+            otherwise fall back to the issue's own date.
+            <br />• <strong>From parent, then children</strong> — the issue's own date wins
+            per-field; children fill only the gaps.
+            <br />• <strong>From parent only</strong> — never roll up; use the issue's own date.
+            <br />• <strong>Earliest → latest</strong> — the widest range across the parent and
+            all children.
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- Relative KPI timing preview -->
+    <!-- ============================================================= -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <h2>Relative KPI target dates</h2>
+        <span class="lozenge default" style="margin-left:8px">preview</span>
+      </div>
+      <div class="card-body">
+        <p class="muted" style="margin-top:0;margin-bottom:16px">
+          When a KPI target date on an issue is set as an <strong>offset</strong>
+          instead of a fixed calendar date, the offset is applied to the issue's
+          effective due date computed with the rules above. Changing a child's
+          date can move a parent's rolled-up due date — and therefore the KPI
+          target date — automatically.
+        </p>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Issue</th>
+              <th>Effective due date</th>
+              <th>KPI target timing</th>
+              <th>Resolved target date</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="itype outcome">O</span> OUT-12 · Grow POS revenue</td>
+              <td>2026-12-31 <span class="source-tag inherited">from Initiatives</span></td>
+              <td class="mono">+3 months after due</td>
+              <td class="mono">2027-03-31</td>
+            </tr>
+            <tr>
+              <td class="indent-1"><span class="itype initiative">I</span> INIT-48 · Multi-store support</td>
+              <td>2026-09-30 <span class="source-tag local">own date</span></td>
+              <td class="mono">+1 month after due</td>
+              <td class="mono">2026-10-31</td>
+            </tr>
+            <tr>
+              <td class="indent-2"><span class="itype increment">N</span> INC-90 · Q1 rollout</td>
+              <td>2026-03-31 <span class="source-tag inherited">from Epics</span></td>
+              <td class="mono">on due date</td>
+              <td class="mono">2026-03-31</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="hint" style="margin-top:16px">
+          <span class="i">i</span>
+          <span>
+            If an anchor can't be resolved yet (no own date and no dated
+            descendants), the resolved target date shows as
+            <strong>pending</strong> rather than computing a wrong date.
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn subtle">Reset to defaults</button>
+      <button class="btn primary">Save settings</button>
+    </div>
+  </div>
+
+  <p class="mock-note">Mock · KPI Tracker for Jira · app-level config stored in Forge KVS (key: kpi:config:rollup)</p>
+</body>
+</html>

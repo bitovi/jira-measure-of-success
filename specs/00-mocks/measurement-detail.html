@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Revenue · KPI — KPI Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="measurement-detail.html" class="active">KPI</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html">Reporting</a>
+    <a href="settings.html">Settings</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="kpi-tree.html">KPI Tree</a><span class="sep">/</span>
+      <span>Revenue</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <h1 class="page-title" style="margin-bottom:0">Revenue</h1>
+      <span class="muted">USD · increase</span>
+    </div>
+    <p class="page-subtitle" style="margin-top:8px">
+      Recorded values over time, with the targets and delivery timeline of the
+      work items associated with this KPI.
+    </p>
+
+    <div class="grid cols-2" style="margin-bottom:16px">
+      <div class="card"><div class="card-body"><div class="stat"><span class="stat-label">Latest value</span><span class="stat-value">1.24M</span></div><span class="muted" style="font-size:12px">recorded 2026-07-01</span></div></div>
+      <div class="card"><div class="card-body"><div class="stat"><span class="stat-label">Target · OUT-12</span><span class="stat-value">1.50M</span></div><span class="muted" style="font-size:12px">due 2026-12-31</span></div></div>
+    </div>
+
+    <!-- Chart -->
+    <div class="card" style="margin-bottom:24px">
+      <div class="card-head"><h2>Value over time</h2><span class="muted" style="font-size:12px;margin-left:auto">2026</span></div>
+      <div class="card-body">
+        <svg class="chart" viewBox="0 0 720 300" role="img" aria-label="Revenue over time">
+          <!-- horizontal gridlines + y labels -->
+          <g font-size="11" fill="#626f86" font-family="sans-serif">
+            <line x1="60" y1="20"  x2="700" y2="20"  stroke="#ebecf0"/>
+            <line x1="60" y1="82.5" x2="700" y2="82.5" stroke="#ebecf0"/>
+            <line x1="60" y1="145" x2="700" y2="145" stroke="#ebecf0"/>
+            <line x1="60" y1="207.5" x2="700" y2="207.5" stroke="#ebecf0"/>
+            <line x1="60" y1="270" x2="700" y2="270" stroke="#c1c7d0"/>
+            <text x="52" y="24"  text-anchor="end">1.6M</text>
+            <text x="52" y="86"  text-anchor="end">1.2M</text>
+            <text x="52" y="149" text-anchor="end">0.8M</text>
+            <text x="52" y="211" text-anchor="end">0.4M</text>
+            <text x="52" y="274" text-anchor="end">0</text>
+          </g>
+          <!-- x labels -->
+          <g font-size="11" fill="#626f86" font-family="sans-serif" text-anchor="middle">
+            <text x="60"  y="288">Jan</text>
+            <text x="234" y="288">Apr</text>
+            <text x="409" y="288">Jul</text>
+            <text x="583" y="288">Oct</text>
+            <text x="700" y="288">Dec</text>
+          </g>
+          <!-- today line -->
+          <line x1="409" y1="20" x2="409" y2="270" stroke="#e34935" stroke-opacity="0.4" stroke-dasharray="4 3"/>
+          <text x="413" y="32" font-size="10" fill="#e34935" font-family="sans-serif">today</text>
+          <!-- target trajectory (baseline -> target) -->
+          <line x1="60" y1="113.75" x2="700" y2="35.6" stroke="#8270db" stroke-width="2" stroke-dasharray="6 4"/>
+          <!-- target diamond markers from associated issues -->
+          <g>
+            <rect x="694" y="29.6" width="12" height="12" fill="#8270db" transform="rotate(45 700 35.6)"/>
+            <rect x="694" y="29.6" width="12" height="12" fill="#5243aa" transform="rotate(45 700 35.6)" opacity="0"/>
+          </g>
+          <!-- actual line -->
+          <polyline points="60,113.75 234.5,95 409.1,76.25" fill="none" stroke="#22a06b" stroke-width="2.5"/>
+          <!-- actual points -->
+          <g fill="#22a06b">
+            <circle cx="60" cy="113.75" r="4"/>
+            <circle cx="234.5" cy="95" r="4"/>
+            <circle cx="409.1" cy="76.25" r="4"/>
+          </g>
+        </svg>
+        <div class="chart-legend">
+          <span class="lg"><span class="dot" style="background:#22a06b"></span> Recorded value</span>
+          <span class="lg" style="color:#8270db"><span class="line"></span> Target trajectory</span>
+          <span class="lg"><span class="dot" style="background:#8270db;border-radius:2px"></span> Issue target (OUT-12 · due Dec 31)</span>
+          <span class="lg" style="color:#e34935"><span class="line" style="border-top-style:dashed"></span> Today</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delivery timeline (rollup) -->
+    <div class="card" style="margin-bottom:24px">
+      <div class="card-head">
+        <h2>Delivery timeline</h2>
+        <span class="lozenge default" style="margin-left:8px">rolled-up due dates</span>
+      </div>
+      <div class="card-body">
+        <div class="hint" style="margin-bottom:16px">
+          <span class="i">i</span>
+          <span>
+            Work items that contribute to <strong>Revenue</strong>. A parent's bar is
+            <strong>rolled up</strong> from its children's due dates (like the Bitovi
+            Timeline Report). Diamonds mark each issue's KPI target date.
+          </span>
+        </div>
+        <div class="gantt">
+          <div class="g-head">
+            <span>Work item</span>
+            <div class="g-months">
+              <span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span>
+              <span>May</span><span>Jun</span><span>Jul</span><span>Aug</span>
+              <span>Sep</span><span>Oct</span><span>Nov</span><span>Dec</span>
+            </div>
+          </div>
+
+          <div class="g-row">
+            <div class="g-label"><span class="itype outcome">O</span> OUT-12 · Grow POS revenue</div>
+            <div class="g-track">
+              <div class="today" style="left:52.5%"></div>
+              <div class="bar rollup" style="left:0%;width:100%"></div>
+              <div class="milestone" style="left:99%" title="Target due 2026-12-31"></div>
+            </div>
+          </div>
+
+          <div class="g-row">
+            <div class="g-label"><span class="itype initiative">I</span> INIT-48 · Multi-store support</div>
+            <div class="g-track">
+              <div class="today" style="left:52.5%"></div>
+              <div class="bar initiative" style="left:0%;width:75%"></div>
+              <div class="milestone" style="left:75%" title="Target due 2026-09-30"></div>
+            </div>
+          </div>
+
+          <div class="g-row">
+            <div class="g-label" style="padding-left:16px"><span class="itype increment">N</span> INC-90 · Q1 rollout</div>
+            <div class="g-track">
+              <div class="today" style="left:52.5%"></div>
+              <div class="bar increment" style="left:0%;width:25%"></div>
+            </div>
+          </div>
+
+          <div class="g-row">
+            <div class="g-label" style="padding-left:32px"><span class="itype epic">E</span> POS-201 · Store onboarding</div>
+            <div class="g-track">
+              <div class="today" style="left:52.5%"></div>
+              <div class="bar epic" style="left:8.33%;width:33.3%"></div>
+            </div>
+          </div>
+
+          <div class="g-row">
+            <div class="g-label" style="padding-left:48px"><span class="itype story">S</span> POS-337 · Setup wizard</div>
+            <div class="g-track">
+              <div class="today" style="left:52.5%"></div>
+              <div class="bar story" style="left:16.7%;width:16.7%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Associated issues table -->
+    <div class="card">
+      <div class="card-head"><h2>Associated issues &amp; targets</h2></div>
+      <div class="card-body" style="padding:0">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Issue</th><th>Level</th><th class="num">Target</th>
+              <th>Target date</th><th>Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="itype outcome">O</span> OUT-12 · Grow POS revenue</td>
+              <td><span class="lozenge default">Outcome</span></td>
+              <td class="num mono">1,500,000</td>
+              <td>2026-12-31</td>
+              <td><span class="source-tag local">Local</span></td>
+            </tr>
+            <tr>
+              <td class="indent-1"><span class="itype initiative">I</span> INIT-48 · Multi-store support</td>
+              <td><span class="lozenge default">Initiative</span></td>
+              <td class="num mono">1,500,000</td>
+              <td>2026-09-30</td>
+              <td><span class="source-tag inherited">Inherited from OUT-12</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <p class="mock-note">Mock · KPI Tracker for Jira · specs/00-mocks</p>
+</body>
+</html>

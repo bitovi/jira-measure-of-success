@@ -1,0 +1,172 @@
+import api, { route } from '@forge/api';
+import {
+  AssignmentProperty,
+  KpiReadingsProperty,
+  readingsPropertyKey,
+  type Assignment,
+  type KpiReading,
+  type TimingNode,
+} from '@domain/index.js';
+
+/**
+ * Jira access helpers for the resolver. These are the ONLY place that talks to
+ * Jira's REST API; everything else operates on plain domain objects, so the
+ * logic stays testable without a live site.
+ */
+const ASSIGNMENT_PROPERTY_KEY = 'kpi-assignments';
+const MAX_DEPTH = 10;
+
+interface IssueParentInfo {
+  parentId: string | null;
+  issueKey: string;
+  issueTypeName: string;
+  ownStart: string | null;
+  ownDueDate: string | null;
+}
+
+export async function fetchIssueMeta(issueId: string): Promise<IssueParentInfo> {
+  const res = await api
+    .asUser()
+    .requestJira(route`/rest/api/3/issue/${issueId}?fields=parent,issuetype,duedate,customfield_10015`);
+  const data = (await res.json()) as {
+    key: string;
+    fields: {
+      parent?: { id: string };
+      issuetype?: { name: string };
+      duedate?: string | null;
+      /** Jira Cloud's default "Start date" field */
+      customfield_10015?: string | null;
+    };
+  };
+  return {
+    parentId: data.fields.parent?.id ?? null,
+    issueKey: data.key,
+    issueTypeName: data.fields.issuetype?.name ?? 'Unknown',
+    ownStart: data.fields.customfield_10015 ?? null,
+    ownDueDate: data.fields.duedate ?? null,
+  };
+}
+
+export async function fetchAssignments(issueId: string): Promise<Assignment[]> {
+  const res = await api
+    .asUser()
+    .requestJira(
+      route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`,
+    );
+  if (res.status === 404) return [];
+  const body = (await res.json()) as { value?: unknown };
+  const parsed = AssignmentProperty.safeParse(body.value);
+  return parsed.success ? parsed.data.assignments : [];
+}
+
+/** Persist the full assignment list for an issue (batched single write). */
+export async function writeAssignments(issueId: string, assignments: Assignment[]): Promise<void> {
+  const value: unknown = AssignmentProperty.parse({ assignments });
+  await api
+    .asUser()
+    .requestJira(route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value),
+    });
+}
+
+/** Recorded readings for one (issue, KPI) — entity property `kpi-readings-{kpiId}`. */
+export async function fetchReadings(issueId: string, kpiId: string): Promise<KpiReading[]> {
+  const key = readingsPropertyKey(kpiId);
+  const res = await api
+    .asUser()
+    .requestJira(route`/rest/api/3/issue/${issueId}/properties/${key}`);
+  if (res.status === 404) return [];
+  const body = (await res.json()) as { value?: unknown };
+  const parsed = KpiReadingsProperty.safeParse(body.value);
+  return parsed.success ? parsed.data.readings : [];
+}
+
+export async function appendReading(issueId: string, kpiId: string, reading: KpiReading): Promise<void> {
+  const existing = await fetchReadings(issueId, kpiId);
+  const value: unknown = KpiReadingsProperty.parse({
+    readings: [...existing, reading].sort((a, b) => a.date.localeCompare(b.date)),
+  });
+  const key = readingsPropertyKey(kpiId);
+  await api
+    .asUser()
+    .requestJira(route`/rest/api/3/issue/${issueId}/properties/${key}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value),
+    });
+}
+
+/** Direct children of an issue via JQL `parent = X`. */
+export async function fetchChildren(issueId: string): Promise<string[]> {
+  const res = await api
+    .asUser()
+    .requestJira(route`/rest/api/3/search?jql=parent=${issueId}&fields=id&maxResults=100`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as { issues?: Array<{ id: string }> };
+  return (data.issues ?? []).map((i) => i.id);
+}
+
+/**
+ * Build the timing-node map for the subtree rooted at `issueId` (its own dates
+ * plus all descendants), so `effectiveTiming` can roll up its due date.
+ * Bounded by MAX_DEPTH; visited-guarded against cycles.
+ */
+export async function fetchSubtreeTimingNodes(issueId: string): Promise<Map<string, TimingNode>> {
+  const nodes = new Map<string, TimingNode>();
+  const queue: Array<{ id: string; depth: number }> = [{ id: issueId, depth: 0 }];
+  while (queue.length) {
+    const { id, depth } = queue.shift()!;
+    if (nodes.has(id) || depth > MAX_DEPTH) continue;
+    const [meta, childIds] = await Promise.all([fetchIssueMeta(id), fetchChildren(id)]);
+    nodes.set(id, {
+      id,
+      issueKey: meta.issueKey,
+      issueTypeName: meta.issueTypeName,
+      ownStart: meta.ownStart,
+      ownDue: meta.ownDueDate,
+      childIds,
+    });
+    for (const childId of childIds) queue.push({ id: childId, depth: depth + 1 });
+  }
+  return nodes;
+}
+
+/**
+ * Discover hierarchy level names ordered deepest-parent → leaf, from the site's
+ * issue-type hierarchy configuration (never hardcoded — Constitution §6).
+ */
+export async function fetchHierarchyLevels(): Promise<string[]> {
+  const res = await api.asApp().requestJira(route`/rest/api/3/issuetype`);
+  if (!res.ok) return [];
+  const types = (await res.json()) as Array<{ name: string; hierarchyLevel?: number }>;
+  const seen = new Map<number, string>();
+  for (const t of types) {
+    const level = t.hierarchyLevel ?? 0;
+    if (!seen.has(level)) seen.set(level, t.name);
+  }
+  // higher hierarchyLevel = closer to the top (deepest parent) → leaf last
+  return [...seen.entries()].sort((a, b) => b[0] - a[0]).map(([, name]) => name);
+}
+
+/** Walk up the parent chain, collecting (issueKey, assignments) nearest first. */
+export async function fetchAncestorChain(
+  issueId: string,
+): Promise<Array<{ issueKey: string; assignments: Assignment[] }>> {
+  const chain: Array<{ issueKey: string; assignments: Assignment[] }> = [];
+  const seen = new Set<string>([issueId]);
+  let current = await fetchIssueMeta(issueId);
+  let depth = 0;
+  while (current.parentId && !seen.has(current.parentId) && depth < MAX_DEPTH) {
+    seen.add(current.parentId);
+    const [meta, assignments] = await Promise.all([
+      fetchIssueMeta(current.parentId),
+      fetchAssignments(current.parentId),
+    ]);
+    chain.push({ issueKey: meta.issueKey, assignments });
+    current = meta;
+    depth += 1;
+  }
+  return chain;
+}

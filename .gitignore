@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+app/static/*/build/
+dist/
+build/
+
+# Test / coverage / visual baselines diff output
+coverage/
+app/test-harness/__screenshots__/diff/
+*.log
+
+# Forge
+.forge/
+manifest-*.local.yml
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json

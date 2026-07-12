@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reporting — KPI Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="jira-topnav">
+    <div class="logo"><span class="mark">KT</span> KPI Tracker</div>
+    <div class="search">Search</div>
+    <div class="spacer"></div>
+    <div class="avatar">JM</div>
+  </div>
+
+  <nav class="mock-nav">
+    <a href="index.html">Overview</a>
+    <a href="kpi-tree.html">KPI Tree</a>
+    <a href="measurement-detail.html">KPI</a>
+    <a href="issue.html">Issue</a>
+    <a href="reporting.html" class="active">Reporting</a>
+  </nav>
+
+  <div class="page">
+    <div class="breadcrumbs">
+      <a href="#">KPI Tracker</a><span class="sep">/</span>
+      <span>Reporting</span>
+    </div>
+    <h1 class="page-title">KPI Reporting</h1>
+    <p class="page-subtitle">
+      Grouped by KPI. Each parent's target is authored independently;
+      children are shown as contributors with a coverage figure — not summed into
+      the parent — so gaps and over-commitments are visible without double-counting.
+    </p>
+
+    <div class="filter-bar">
+      <span class="chip">KPI: All</span>
+      <span class="chip">Top ancestor: OUT-12</span>
+      <span class="chip">Level: All</span>
+      <div class="spacer" style="flex:1"></div>
+      <button class="btn subtle sm">Export</button>
+    </div>
+
+    <!-- Revenue group -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <span class="swatch" style="width:12px;height:12px;border-radius:3px;background:#22a06b;display:inline-block"></span>
+        <h2>Revenue</h2>
+        <span class="muted" style="font-size:12px">USD · increase</span>
+        <div class="spacer" style="flex:1"></div>
+        <a class="btn link sm" href="measurement-detail.html">Open detail →</a>
+      </div>
+      <div class="card-body">
+        <div class="grid cols-3" style="margin-bottom:16px">
+          <div class="stat"><span class="stat-label">Parent target · OUT-12</span><span class="stat-value">1.50M</span></div>
+          <div class="stat"><span class="stat-label">Σ children targets</span><span class="stat-value">1.30M</span></div>
+          <div class="stat"><span class="stat-label">Coverage</span><span class="stat-value">86%</span></div>
+        </div>
+        <div class="progress warn"><span style="width:86%"></span></div>
+        <div class="muted" style="font-size:12px;margin-top:6px">
+          Children cover 86% of the Outcome target — a 0.20M gap remains uncommitted.
+        </div>
+
+        <div class="divider"></div>
+
+        <table class="table">
+          <thead>
+            <tr><th>Contributing issue</th><th>Level</th><th class="num">Target</th><th class="num">Current</th><th>Timing</th><th>Source</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="itype outcome">O</span> OUT-12 · Grow POS revenue</td>
+              <td><span class="lozenge default">Outcome</span></td>
+              <td class="num mono">1,500,000</td>
+              <td class="num mono">1,240,000</td>
+              <td>Jan–Dec 2026</td>
+              <td><span class="source-tag local">Local</span></td>
+            </tr>
+            <tr>
+              <td class="indent-1"><span class="itype initiative">I</span> INIT-48 · Multi-store support</td>
+              <td><span class="lozenge default">Initiative</span></td>
+              <td class="num mono">1,300,000</td>
+              <td class="num mono">1,180,000</td>
+              <td>Jan–Sep 2026</td>
+              <td><span class="source-tag local">Local override</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Number of Stores group -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-head">
+        <span class="swatch" style="width:12px;height:12px;border-radius:3px;background:#0c66e4;display:inline-block"></span>
+        <h2>Number of Stores</h2>
+        <span class="muted" style="font-size:12px">count · increase</span>
+        <div class="spacer" style="flex:1"></div>
+        <a class="btn link sm" href="measurement-detail.html">Open detail →</a>
+      </div>
+      <div class="card-body">
+        <div class="grid cols-3" style="margin-bottom:16px">
+          <div class="stat"><span class="stat-label">Parent target · INIT-48</span><span class="stat-value">250</span></div>
+          <div class="stat"><span class="stat-label">Σ children targets</span><span class="stat-value">280</span></div>
+          <div class="stat"><span class="stat-label">Coverage</span><span class="stat-value">112%</span></div>
+        </div>
+        <div class="progress over"><span style="width:100%"></span></div>
+        <div class="muted" style="font-size:12px;margin-top:6px">
+          Children over-commit by 12% — the Increment target exceeds the Initiative's.
+        </div>
+
+        <div class="divider"></div>
+
+        <table class="table">
+          <thead>
+            <tr><th>Contributing issue</th><th>Level</th><th class="num">Target</th><th class="num">Current</th><th>Timing</th><th>Source</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="itype initiative">I</span> INIT-48 · Multi-store support</td>
+              <td><span class="lozenge default">Initiative</span></td>
+              <td class="num mono">250</td>
+              <td class="num mono">160</td>
+              <td>Jan–Sep 2026</td>
+              <td><span class="source-tag local">Local</span></td>
+            </tr>
+            <tr>
+              <td class="indent-1"><span class="itype increment">N</span> INC-90 · Q1 rollout</td>
+              <td><span class="lozenge default">Increment</span></td>
+              <td class="num mono">280</td>
+              <td class="num mono">150</td>
+              <td>Jan–Mar 2026</td>
+              <td><span class="source-tag inherited">Inherited from INIT-48</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Time To Install group -->
+    <div class="card">
+      <div class="card-head">
+        <span class="swatch" style="width:12px;height:12px;border-radius:3px;background:#e34935;display:inline-block"></span>
+        <h2>Time To Install</h2>
+        <span class="muted" style="font-size:12px">hours · decrease</span>
+        <div class="spacer" style="flex:1"></div>
+        <a class="btn link sm" href="measurement-detail.html">Open detail →</a>
+      </div>
+      <div class="card-body">
+        <div class="grid cols-3" style="margin-bottom:16px">
+          <div class="stat"><span class="stat-label">Parent target · POS-201</span><span class="stat-value">2.0h</span></div>
+          <div class="stat"><span class="stat-label">Σ children targets</span><span class="stat-value">—</span></div>
+          <div class="stat"><span class="stat-label">Coverage</span><span class="stat-value">0%</span></div>
+        </div>
+        <div class="progress"><span style="width:0%"></span></div>
+        <div class="muted" style="font-size:12px;margin-top:6px">
+          No child contributions yet — the Epic target is uncovered.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="mock-note">Mock · KPI Tracker for Jira · specs/00-mocks</p>
+</body>
+</html>
