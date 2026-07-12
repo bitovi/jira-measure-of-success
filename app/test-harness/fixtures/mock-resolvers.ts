@@ -6,14 +6,12 @@ import {
   type CatalogEntryDto,
   type PanelData,
   type PanelRowDto,
-  type PreviewRowDto,
   type RelativeTargetContext,
   type ResolvedEndpoint,
   type TimelineData,
   type TimelineNodeDto,
   type TimingNode,
   type Assignment,
-  type DueTiming,
   type RollupConfig,
 } from '@domain/index.js';
 import {
@@ -154,37 +152,6 @@ export function getRollupConfig(): RollupConfig {
 export function saveRollupConfig(next: RollupConfig): { ok: true; saved: RollupConfig } {
   config = next;
   return { ok: true, saved: config };
-}
-
-function timingLabel(due: DueTiming): string {
-  if (due.mode === 'absolute') return 'fixed date';
-  const noun =
-    due.anchor === 'kpiStart' ? 'KPI start' : due.anchor === 'parentDueDate' ? 'parent due' : 'due';
-  if (due.offsetMonths === 0) return `on ${noun} date`;
-  const mag = Math.abs(due.offsetMonths);
-  const unit = mag === 1 ? 'month' : 'months';
-  return `${due.offsetMonths > 0 ? '+' : ''}${due.offsetMonths} ${unit} after ${noun}`;
-}
-
-export function getSettingsPreview(): PreviewRowDto[] {
-  const nodes = timingNodes();
-  const memo = new Map<string, ResolvedEndpoint>();
-  const rows: PreviewRowDto[] = [];
-  for (const issue of issues) {
-    const rel = issue.assignments.find((a) => a.timing.due.mode === 'relative');
-    if (!rel) continue;
-    const ctx = targetContext(issue, nodes, memo);
-    rows.push({
-      issueKey: issue.key,
-      summary: issue.summary,
-      issueTypeName: issue.issueTypeName,
-      indent: 4 - issue.hierarchyLevel,
-      effectiveDue: dueOf(issue.id, nodes, memo),
-      timingLabel: timingLabel(rel.timing.due),
-      resolved: resolveDate(rel, ctx),
-    });
-  }
-  return rows;
 }
 
 // ── Timeline ────────────────────────────────────────────────────────────────

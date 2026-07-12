@@ -122,9 +122,8 @@ resolver.define('saveRollupConfig', async ({ payload }) => {
   return { ok: true, saved };
 });
 
-// Settings preview + timeline aggregate across many issues; both require a
-// project-scoped enumeration wired during the Forge integration pass (Phase 5).
-resolver.define('getSettingsPreview', async () => []);
+// The timeline aggregates across many issues, which requires a project-scoped
+// enumeration wired during the Forge integration pass (Phase 5).
 resolver.define('getTimelineData', async () => ({ today: new Date().toISOString().slice(0, 10), roots: [] }) satisfies TimelineData);
 
 resolver.define('recordValue', async ({ payload }) => {

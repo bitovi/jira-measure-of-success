@@ -283,7 +283,9 @@ As an app administrator, I want to save my choices or reset to defaults, so that
 
 ---
 
-**Story ST-4 — Read-only relative target-date preview**
+**Story ST-4 — Read-only relative target-date preview — DROPPED (2026-07-12)**
+> **Removed from scope.** The Settings page has exactly one setting — **Due Date Rollup**. This preview was a read-only, derived verification table (not a setting); it sat awkwardly next to the real control and added no configuration value, so it was cut. Relative target dates are authored per-assignment on the **Issue panel** (IP-7) and their resolution is already exercised by the panel + the domain test matrix (REL-1…7). The story below is retained for history only; it is **not built**.
+
 As an app administrator, I want a read-only preview of how relative KPI target dates resolve under the current rollup settings, so that I can verify the configuration before relying on it.
 
 1. Given the preview table, When it renders, Then it is clearly marked **preview / read-only / derived** and is **not editable** (mock "preview" lozenge; this surface is a verification view only).

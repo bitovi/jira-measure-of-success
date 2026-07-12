@@ -1,5 +1,4 @@
 import type { KpiDirection, TargetType } from './models/index.js';
-import type { ResolvedEndpoint } from './resolve/effectiveTiming.js';
 import type { TargetStatus } from './resolve/targetStatus.js';
 
 /**
@@ -44,17 +43,8 @@ export interface PanelData {
 }
 
 // ── Settings preview ────────────────────────────────────────────────────────
-export interface PreviewRowDto {
-  issueKey: string;
-  summary: string;
-  issueTypeName: string;
-  /** indentation depth for the hierarchy (0 = top) */
-  indent: number;
-  effectiveDue: ResolvedEndpoint;
-  /** human timing label, e.g. "+3 months after due" / "on due date" */
-  timingLabel: string;
-  resolved: ResolvedTargetDateDto;
-}
+// (removed — the Settings page has no preview; the only setting is Due Date
+// Rollup. Relative target dates are authored per-assignment on the Issue panel.)
 
 // ── Timeline ────────────────────────────────────────────────────────────────
 export interface TimelineTargetDto {

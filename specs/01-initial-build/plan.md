@@ -86,9 +86,9 @@ Smallest surface; visually proves `effectiveDueDate` + `resolveRelativeTargetDat
 | Hierarchy discovery (issue-type metadata → ordered levels, runtime, never hardcoded) | `backend/jira.ts` | Unit test with mocked REST |
 | Resolver: `getRollupConfig` / `saveRollupConfig` (done) + `getHierarchyLevels` | `backend/resolver.ts` | mock-bridge parity |
 | Settings UI — one dropdown per discovered level, 5 methods w/ interpolated labels, save/reset, leaf disabled | `ui/surfaces/Settings.tsx` | Screenshot vs mock |
-| Read-only relative-date **preview** table (effectiveTiming + relative resolution over fixtures, incl. **pending**) | `ui/surfaces/SettingsPreview.tsx` | Screenshot; values match REL/DUE matrices |
+| ~~Read-only relative-date **preview** table~~ | — | **DROPPED (2026-07-12)** — see requirements ST-4; the only Settings control is Due Date Rollup |
 
-**AC:** ST-1, ST-2, ST-3, ST-4. **Gate:** tests green; Settings screenshot matches the mock's structure; preview shows a rolled-up date and a `pending`.
+**AC:** ST-1, ST-2, ST-3. (~~ST-4~~ dropped.) **Gate:** tests green; Settings screenshot matches the mock's structure.
 
 ### Phase 3 — Issue panel (independent targets) — headline
 Mock: [issue.html](../00-mocks/issue.html). **No inheritance** (Q11) — grouped independent targets.

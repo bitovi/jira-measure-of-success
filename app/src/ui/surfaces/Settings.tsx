@@ -1,20 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { call } from '@ui/bridge.js';
 import {
   DEFAULT_ROLLUP_METHOD,
   labelsFor,
   leafLabel,
   resolveConfig,
-  type PreviewRowDto,
   type RollupConfig,
   type RollupMethod,
 } from '@domain/index.js';
 
 /**
  * Settings — Due Date Rollup (global admin page). One dropdown per discovered
- * hierarchy level (ST-1/ST-2/ST-3) plus a read-only relative-target-date preview
- * (ST-4). Level names are read at runtime — nothing is hardcoded. Mock:
- * specs/00-mocks/settings.html.
+ * hierarchy level (ST-1/ST-2/ST-3). Level names are read at runtime — nothing is
+ * hardcoded. Mock: specs/00-mocks/settings.html.
  */
 const METHOD_ORDER: RollupMethod[] = [
   'childrenFirstThenParent',
@@ -31,7 +29,6 @@ function itypeLetter(name: string): string {
 export function Settings() {
   const [levels, setLevels] = useState<string[] | null>(null);
   const [methods, setMethods] = useState<Record<string, RollupMethod>>({});
-  const [preview, setPreview] = useState<PreviewRowDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
@@ -39,15 +36,13 @@ export function Settings() {
     let alive = true;
     (async () => {
       try {
-        const [lv, cfg, pv] = await Promise.all([
+        const [lv, cfg] = await Promise.all([
           call<string[]>('getHierarchyLevels'),
           call<RollupConfig>('getRollupConfig'),
-          call<PreviewRowDto[]>('getSettingsPreview'),
         ]);
         if (!alive) return;
         setLevels(lv);
         setMethods(resolveConfig(cfg, lv));
-        setPreview(pv);
       } catch (e: unknown) {
         if (alive) setError(String(e));
       }
@@ -74,8 +69,6 @@ export function Settings() {
     try {
       const config: RollupConfig = { dueDateRollup: { ...methods } };
       await call('saveRollupConfig', { config });
-      const pv = await call<PreviewRowDto[]>('getSettingsPreview');
-      setPreview(pv);
       setSaveState('saved');
     } catch {
       setSaveState('error');
@@ -163,22 +156,6 @@ export function Settings() {
         </div>
       </section>
 
-      {/* Relative KPI target dates preview */}
-      <section className="mt-4 rounded-lg border border-border bg-surface">
-        <header className="flex items-center gap-2 border-b border-border px-5 py-3">
-          <h2 className="text-base font-semibold">Relative KPI target dates</h2>
-          <span className="rounded bg-surface-sunken px-2 py-0.5 text-xs text-text-subtle">preview</span>
-        </header>
-        <div className="px-5 py-4">
-          <p className="mb-4 text-sm text-text-subtle">
-            When a KPI target date is an <strong className="text-text">offset</strong> instead of a
-            fixed date, the offset applies to the issue's effective due date computed with the rules
-            above. Read-only / derived.
-          </p>
-          <PreviewTable rows={preview} />
-        </div>
-      </section>
-
       <div className="mt-4 flex items-center justify-end gap-3">
         {saveState === 'saved' && <span className="text-sm text-success">Saved.</span>}
         {saveState === 'error' && <span className="text-sm text-danger">Save failed.</span>}
@@ -198,61 +175,4 @@ export function Settings() {
       </div>
     </div>
   );
-}
-
-function PreviewTable({ rows }: { rows: PreviewRowDto[] | null }) {
-  const empty = useMemo(() => !rows || rows.length === 0, [rows]);
-  if (!rows) return <div className="text-sm text-text-subtle">Loading preview…</div>;
-  if (empty) return <div className="text-sm text-text-subtle">No relative KPI target dates to preview.</div>;
-
-  return (
-    <table className="w-full border-collapse text-sm">
-      <thead>
-        <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-text-subtle">
-          <th className="py-2 font-semibold">Issue</th>
-          <th className="py-2 font-semibold">Effective due date</th>
-          <th className="py-2 font-semibold">KPI target timing</th>
-          <th className="py-2 font-semibold">Resolved target date</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.issueKey} className="border-b border-border">
-            <td className="py-2" style={{ paddingLeft: r.indent * 16 }}>
-              <span className="mr-1 inline-grid h-5 w-5 place-items-center rounded bg-brand align-middle text-[11px] font-bold text-white">
-                {itypeLetter(r.issueTypeName)}
-              </span>
-              {r.issueKey} · {r.summary}
-            </td>
-            <td className="py-2">
-              {r.effectiveDue.date ?? <span className="text-text-subtle">pending</span>}{' '}
-              <SourceTag endpoint={r.effectiveDue} />
-            </td>
-            <td className="py-2 font-mono text-xs">{r.timingLabel}</td>
-            <td className="py-2 font-mono text-xs">
-              {r.resolved.pending ? (
-                <span className="rounded bg-surface-sunken px-1.5 py-0.5 text-text-subtle">pending</span>
-              ) : (
-                r.resolved.date
-              )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function SourceTag({ endpoint }: { endpoint: PreviewRowDto['effectiveDue'] }) {
-  if (endpoint.source === 'own') {
-    return <span className="rounded bg-surface-sunken px-1.5 py-0.5 text-xs text-text-subtle">own date</span>;
-  }
-  if (endpoint.source === 'children') {
-    return (
-      <span className="rounded bg-surface-sunken px-1.5 py-0.5 text-xs text-brand">
-        from {endpoint.fromIssueKey ?? 'children'}
-      </span>
-    );
-  }
-  return null;
 }

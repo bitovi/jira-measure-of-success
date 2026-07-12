@@ -5,7 +5,6 @@ import {
   getHierarchyLevels,
   getRollupConfig,
   saveRollupConfig,
-  getSettingsPreview,
   getTimelineData,
   recordValue,
 } from './fixtures/mock-resolvers.js';
@@ -28,7 +27,6 @@ const resolvers: Record<string, Handler> = {
   getHierarchyLevels: () => getHierarchyLevels(),
   getRollupConfig: () => getRollupConfig(),
   saveRollupConfig: (p) => saveRollupConfig(p?.config),
-  getSettingsPreview: () => getSettingsPreview(),
   // Timeline
   getTimelineData: () => getTimelineData(),
   recordValue: (p) => recordValue(p?.kpiId, p?.date, p?.value),
