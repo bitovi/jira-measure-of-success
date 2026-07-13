@@ -1,5 +1,5 @@
-import type { DueTiming, IsoDate } from '../models/index.js';
-import type { ResolvedEndpoint } from './effectiveTiming.js';
+import type { DueTiming, IsoDate } from '../models/index';
+import type { ResolvedEndpoint } from './effectiveTiming';
 
 /**
  * Relative target-date resolution — Brief §4.2/§6.1, requirements §5.3.

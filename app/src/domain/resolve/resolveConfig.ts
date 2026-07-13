@@ -1,5 +1,5 @@
-import type { RollupConfig, RollupMethod } from '../models/index.js';
-import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD } from '../models/index.js';
+import type { RollupConfig, RollupMethod } from '../models/index';
+import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD } from '../models/index';
 
 /**
  * Resolve the STORED rollup config against the discovered hierarchy levels into

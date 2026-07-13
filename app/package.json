@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:forge": "SURFACE=issue-panel vite build -c vite.forge.config.ts && SURFACE=timeline vite build -c vite.forge.config.ts && SURFACE=settings vite build -c vite.forge.config.ts",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",

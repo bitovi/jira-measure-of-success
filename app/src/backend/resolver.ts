@@ -13,7 +13,7 @@ import {
   type RelativeTargetContext,
   type ResolvedEndpoint,
   type TimelineData,
-} from '@domain/index';
+} from '../domain/index';
 import {
   fetchAssignments,
   fetchHierarchyLevels,

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IsoDate } from './assignment.js';
+import { IsoDate } from './assignment';
 
 /**
  * A recorded KPI value ("reading"): a value at an effective date, plus who/when

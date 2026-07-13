@@ -1,4 +1,4 @@
-import type { Assignment, IsoDate, TargetType, Timing } from '../models/index.js';
+import type { Assignment, IsoDate, TargetType, Timing } from '../models/index';
 
 /**
  * Inheritance resolution — Brief §2.1.

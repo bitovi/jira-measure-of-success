@@ -1,4 +1,4 @@
-import type { IsoDate, KpiDirection } from '../models/index.js';
+import type { IsoDate, KpiDirection } from '../models/index';
 
 /**
  * Classify a KPI target as hit / missed / upcoming — Timeline TL-3 (requirements

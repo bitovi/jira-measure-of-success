@@ -5,12 +5,14 @@ modules:
       resolver:
         function: resolver
       title: KPIs
+      icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
   jira:projectPage:
     - key: kpi-timeline-page
       resource: timeline
       resolver:
         function: resolver
       title: KPI Timeline
+  jira:adminPage:
     - key: kpi-settings-page
       resource: settings
       resolver:
@@ -19,14 +21,11 @@ modules:
   jira:entityProperty:
     - key: kpi-index
       entityType: issue
+      propertyKey: kpi-assignments
       values:
         - path: kpiIds
           type: text
-      keyConfigurations:
-        - key: kpi-assignments
-          extractions:
-            - objectName: kpiIds
-              type: text
+          searchAlias: kpiIds
   function:
     - key: resolver
       handler: index.handler
@@ -48,4 +47,6 @@ permissions:
 app:
   runtime:
     name: nodejs22.x
+  id: ari:cloud:ecosystem::app/f92bb5d3-136d-4f6d-9245-fc31f4e8fdec
+
 # id assigned by `forge register` (deferred until a dev site is provisioned).

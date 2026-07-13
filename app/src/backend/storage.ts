@@ -5,7 +5,7 @@ import {
   DEFAULT_ROLLUP_METHOD,
   type KpiDefinition as KpiDefinitionT,
   type RollupConfig as RollupConfigT,
-} from '@domain/index';
+} from '../domain/index';
 
 /** App-level config in Forge KVS. Brief §4.4 — single low-write-frequency doc. */
 const ROLLUP_CONFIG_KEY = 'kpi:config:rollup';

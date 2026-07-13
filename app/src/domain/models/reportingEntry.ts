@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TargetType } from './assignment.js';
+import { TargetType } from './assignment';
 
 /**
  * Reporting index entry — Forge Custom Entity Store, keyed `{issueId}:{kpiId}`,

@@ -10,7 +10,7 @@ import globals from 'globals';
  * left off (fast, editor-friendly); `tsc --noEmit` remains the type gate.
  */
 export default tseslint.config(
-  { ignores: ['**/dist/**', 'storybook-static/**', 'coverage/**', 'node_modules/**'] },
+  { ignores: ['**/dist/**', 'storybook-static/**', 'coverage/**', 'node_modules/**', 'static/**'] },
 
   js.configs.recommended,
   ...tseslint.configs.recommended,
@@ -45,6 +45,12 @@ export default tseslint.config(
   {
     files: ['test-harness/mock-bridge.ts'],
     rules: { '@typescript-eslint/no-explicit-any': 'off' },
+  },
+
+  // Forge Custom UI entry points bootstrap a surface; not HMR component modules.
+  {
+    files: ['src/ui/entries/**/*.tsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
   },
 
   // Shared rules

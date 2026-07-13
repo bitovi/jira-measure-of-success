@@ -5,7 +5,7 @@ import {
   type Assignment,
   type ReadingChange,
   type TimingNode,
-} from '@domain/index';
+} from '../domain/index';
 
 /**
  * Jira access helpers for the resolver. These are the ONLY place that talks to

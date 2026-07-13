@@ -1,5 +1,5 @@
-import type { DueTiming, IsoDate, KpiDirection, TargetType } from './models/index.js';
-import type { TargetStatus } from './resolve/targetStatus.js';
+import type { DueTiming, IsoDate, KpiDirection, TargetType } from './models/index';
+import type { TargetStatus } from './resolve/targetStatus';
 
 /**
  * Resolver payload contracts — the `invoke(...)` seam between Custom UI and the

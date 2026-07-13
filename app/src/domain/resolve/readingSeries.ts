@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IsoDate } from '../models/assignment.js';
+import { IsoDate } from '../models/assignment';
 
 /**
  * Reading series storage — Option B (specs/01-initial-build/storage-model.md).

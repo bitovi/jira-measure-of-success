@@ -1,5 +1,5 @@
-import type { IsoDate, RollupConfig, RollupMethod } from '../models/index.js';
-import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD } from '../models/index.js';
+import type { IsoDate, RollupConfig, RollupMethod } from '../models/index';
+import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD } from '../models/index';
 
 /**
  * Effective due-date resolution — Brief §6.1.

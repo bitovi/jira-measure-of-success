@@ -1,4 +1,4 @@
-import type { Assignment, KpiDefinition } from '../models/index.js';
+import type { Assignment, KpiDefinition } from '../models/index';
 
 /**
  * Group an issue's KPI assignments by their relationship to the parent — Issue
