@@ -2,29 +2,36 @@ import Resolver from '@forge/resolver';
 import {
   effectiveTiming,
   groupByRelationship,
+  isValidProjectKey,
+  normalizeProjectKey,
   resolveRelativeTargetDate,
   type Assignment,
   type CatalogEntryDto,
+  type KpiSpaceStatus,
   type PanelData,
   type PanelRowDto,
   type RelativeTargetContext,
   type ResolvedEndpoint,
   type TimelineData,
-} from '@domain/index.js';
+} from '@domain/index';
 import {
   fetchAssignments,
   fetchHierarchyLevels,
   fetchIssueMeta,
   fetchSubtreeTimingNodes,
+  findProjectByKey,
+  createKpiProject,
   writeAssignments,
   writeReading,
-} from './jira.js';
+} from './jira';
 import {
   readCatalog,
+  readKpiSpaceConfig,
   readRollupConfig,
   writeCatalogEntry,
+  writeKpiSpaceConfig,
   writeRollupConfig,
-} from './storage.js';
+} from './storage';
 
 /**
  * Forge backend resolver — the real counterpart to test-harness/mock-bridge.ts.
@@ -122,6 +129,33 @@ resolver.define('getRollupConfig', async () => readRollupConfig());
 resolver.define('saveRollupConfig', async ({ payload }) => {
   const saved = await writeRollupConfig((payload as { config?: unknown })?.config);
   return { ok: true, saved };
+});
+
+// ── KPI space (storage-model.md) ─────────────────────────────────────────────
+async function kpiSpaceStatus(): Promise<KpiSpaceStatus> {
+  const cfg = await readKpiSpaceConfig();
+  if (!cfg.key) return { key: null, projectId: null, name: null, state: 'unset' };
+  const project = await findProjectByKey(cfg.key);
+  if (!project) return { key: cfg.key, projectId: null, name: null, state: 'missing' };
+  return { key: cfg.key, projectId: project.id, name: project.name, state: 'ready' };
+}
+
+resolver.define('getKpiSpace', async () => kpiSpaceStatus());
+
+resolver.define('saveKpiSpaceKey', async ({ payload }) => {
+  const key = normalizeProjectKey(String((payload as { key?: string })?.key ?? ''));
+  if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
+  await writeKpiSpaceConfig({ key, projectId: null, name: null });
+  return kpiSpaceStatus();
+});
+
+resolver.define('createKpiSpace', async ({ payload }) => {
+  const key = normalizeProjectKey(String((payload as { key?: string })?.key ?? ''));
+  if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
+  const existing = await findProjectByKey(key);
+  const project = existing ?? (await createKpiProject(key));
+  await writeKpiSpaceConfig({ key, projectId: project.id, name: project.name });
+  return { key, projectId: project.id, name: project.name, state: 'ready' } satisfies KpiSpaceStatus;
 });
 
 // The timeline aggregates across many issues, which requires a project-scoped

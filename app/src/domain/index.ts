@@ -8,4 +8,5 @@ export * from './resolve/targetStatus.js';
 export * from './resolve/panelGrouping.js';
 export * from './resolve/timelineAxis.js';
 export * from './resolve/readingSeries.js';
+export * from './resolve/projectKey.js';
 export * from './contracts.js';

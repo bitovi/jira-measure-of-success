@@ -80,3 +80,18 @@ export interface TimelineData {
   today: string;
   roots: TimelineNodeDto[];
 }
+
+// ── KPI space (storage-model.md) ────────────────────────────────────────
+// KPIs live as issues in a dedicated project. An admin sets the project key; the
+// app creates the project (+ KPI issue type) or connects to an existing one.
+export type KpiSpaceState =
+  | 'unset' // no key chosen yet
+  | 'missing' // key chosen but the project doesn't exist
+  | 'ready'; // project exists and is connected
+
+export interface KpiSpaceStatus {
+  key: string | null;
+  projectId: string | null;
+  name: string | null;
+  state: KpiSpaceState;
+}

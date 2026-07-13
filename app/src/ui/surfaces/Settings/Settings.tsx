@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react';
 import { useSettingsData, type UseSettings } from '@ui/data/useSettingsData/index.js';
 import {
   DEFAULT_ROLLUP_METHOD,
+  isValidProjectKey,
   labelsFor,
   leafLabel,
+  normalizeProjectKey,
   resolveConfig,
+  type KpiSpaceStatus,
   type RollupConfig,
   type RollupMethod,
 } from '@domain/index.js';
@@ -29,7 +32,7 @@ function itypeLetter(name: string): string {
 }
 
 export function Settings({ useSettings = useSettingsData }: { useSettings?: UseSettings }) {
-  const { levels, config, pending, error, save } = useSettings();
+  const { levels, config, space, pending, error, save, saveSpaceKey, createSpace } = useSettings();
   const [methods, setMethods] = useState<Record<string, RollupMethod>>({});
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
@@ -71,6 +74,8 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
         <strong className="text-text">effective due date</strong> is computed, which anchors any KPI
         target date set <em>relative</em> to the due date.
       </p>
+
+      {space && <KpiSpaceCard space={space} onSaveKey={saveSpaceKey} onCreate={createSpace} />}
 
       {/* Due Date Rollup card */}
       <section className="mt-6 rounded-lg border border-border bg-surface">
@@ -159,5 +164,109 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
         </button>
       </div>
     </div>
+  );
+}
+
+const SPACE_BADGE: Record<KpiSpaceStatus['state'], { label: string; cls: string }> = {
+  unset: { label: 'Not set', cls: 'bg-surface-sunken text-text-subtle' },
+  missing: { label: 'Not created', cls: 'bg-surface-sunken text-danger' },
+  ready: { label: 'Connected', cls: 'bg-surface-sunken text-success' },
+};
+
+/**
+ * KPI Space provisioning (storage-model.md). An admin picks a Jira project key;
+ * the app creates the KPI project (or records the key to connect an existing
+ * one). KPIs then live as issues in that project.
+ */
+function KpiSpaceCard({
+  space,
+  onSaveKey,
+  onCreate,
+}: {
+  space: KpiSpaceStatus;
+  onSaveKey: (key: string) => Promise<KpiSpaceStatus>;
+  onCreate: (key: string) => Promise<KpiSpaceStatus>;
+}) {
+  const [key, setKey] = useState(space.key ?? 'KPI');
+  const [busy, setBusy] = useState<'create' | 'save' | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const badge = SPACE_BADGE[space.state];
+  const valid = isValidProjectKey(key);
+
+  const run = async (which: 'create' | 'save') => {
+    setBusy(which);
+    setErr(null);
+    try {
+      await (which === 'create' ? onCreate(key) : onSaveKey(key));
+    } catch (e: unknown) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="mt-6 rounded-lg border border-border bg-surface">
+      <header className="flex items-center gap-2 border-b border-border px-5 py-3">
+        <h2 className="text-base font-semibold">KPI Space</h2>
+        <span className={`rounded px-2 py-0.5 text-xs ${badge.cls}`}>{badge.label}</span>
+      </header>
+      <div className="px-5 py-4">
+        <p className="mb-4 text-sm text-text-subtle">
+          KPIs are stored as issues in a dedicated Jira project so they can span every project and
+          be read/written over standard Jira REST. Choose the project key for that space.
+        </p>
+
+        {space.state === 'ready' ? (
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <span className="grid h-6 w-6 flex-none place-items-center rounded bg-brand text-[11px] font-bold text-white">
+              {key.charAt(0)}
+            </span>
+            <span className="font-medium text-text">{space.name}</span>
+            <span className="rounded bg-surface-sunken px-2 py-0.5 text-xs text-text-subtle">
+              {space.key}
+            </span>
+            <span className="text-xs text-text-subtle">KPIs live here.</span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="font-medium">Project key</span>
+              <input
+                className="w-40 rounded border border-border bg-surface px-2 py-1.5 text-sm uppercase tracking-wide"
+                value={key}
+                onChange={(e) => {
+                  setKey(normalizeProjectKey(e.target.value));
+                  setErr(null);
+                }}
+                placeholder="KPI"
+                aria-label="Project key"
+              />
+            </label>
+            <button
+              className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
+              onClick={() => run('create')}
+              disabled={!valid || busy !== null}
+            >
+              {busy === 'create' ? 'Creating…' : 'Create space'}
+            </button>
+            <button
+              className="rounded border border-border px-3 py-1.5 text-sm hover:bg-surface-sunken disabled:opacity-60"
+              onClick={() => run('save')}
+              disabled={!valid || busy !== null}
+            >
+              {busy === 'save' ? 'Saving…' : 'Save key'}
+            </button>
+            {!valid && <span className="text-xs text-danger">2–10 letters/digits, starts with a letter.</span>}
+            {space.state === 'missing' && valid && (
+              <span className="text-xs text-text-subtle">
+                No project <strong className="text-text">{space.key}</strong> yet — create it or connect an existing one.
+              </span>
+            )}
+          </div>
+        )}
+        {err && <p className="mt-2 text-xs text-danger">{err}</p>}
+      </div>
+    </section>
   );
 }

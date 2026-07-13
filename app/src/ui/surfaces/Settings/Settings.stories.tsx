@@ -15,9 +15,16 @@ function stub(over: Partial<SettingsController>): UseSettings {
   return () => ({
     levels: over.levels ?? null,
     config: over.config ?? null,
+    space: over.space ?? { key: null, projectId: null, name: null, state: 'unset' },
     pending: over.pending ?? false,
     error: over.error ?? null,
     save: over.save ?? (async () => {}),
+    saveSpaceKey:
+      over.saveSpaceKey ??
+      (async (key) => ({ key, projectId: null, name: null, state: 'missing' })),
+    createSpace:
+      over.createSpace ??
+      (async (key) => ({ key, projectId: `p-${key}`, name: `KPIs (${key})`, state: 'ready' })),
   });
 }
 
@@ -86,5 +93,48 @@ export const SaveInteraction: Story = {
     const c = within(canvasElement);
     await userEvent.click(c.getByRole('button', { name: /Save settings/i }));
     await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+  },
+};
+
+// ── KPI space ────────────────────────────────────────────────────────────────
+export const SpaceUnset: Story = {
+  args: { useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} } }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText('KPI Space')).toBeInTheDocument();
+    await expect(c.getByText('Not set')).toBeInTheDocument();
+    await expect(c.getByRole('button', { name: /Create space/i })).toBeInTheDocument();
+  },
+};
+
+export const SpaceReady: Story = {
+  args: {
+    useSettings: stub({
+      levels: LEVELS,
+      config: { dueDateRollup: {} },
+      space: { key: 'KPI', projectId: 'p-KPI', name: 'KPIs (KPI)', state: 'ready' },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText('Connected')).toBeInTheDocument();
+    await expect(c.getByText('KPIs (KPI)')).toBeInTheDocument();
+  },
+};
+
+/** Interaction: entering a key + "Create space" provisions the KPI project. */
+const createSpy = fn(async (key: string) => ({
+  key,
+  projectId: `p-${key}`,
+  name: `KPIs (${key})`,
+  state: 'ready' as const,
+}));
+export const CreateSpaceInteraction: Story = {
+  args: { useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} }, createSpace: createSpy }) },
+  play: async ({ canvasElement }) => {
+    createSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Create space/i }));
+    await waitFor(() => expect(createSpy).toHaveBeenCalledWith('KPI'));
   },
 };

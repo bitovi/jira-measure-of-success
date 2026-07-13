@@ -5,7 +5,7 @@ import {
   type Assignment,
   type ReadingChange,
   type TimingNode,
-} from '@domain/index.js';
+} from '@domain/index';
 
 /**
  * Jira access helpers for the resolver. These are the ONLY place that talks to
@@ -208,4 +208,38 @@ export async function fetchAncestorChain(
     depth += 1;
   }
   return chain;
+}
+
+// ── KPI space provisioning (storage-model.md) ────────────────────────────────
+
+/** Look up a project by key; null if it doesn't exist. */
+export async function findProjectByKey(key: string): Promise<{ id: string; name: string } | null> {
+  const res = await api.asApp().requestJira(route`/rest/api/3/project/${key}`);
+  if (!res.ok) return null;
+  const p = (await res.json()) as { id: string | number; name: string };
+  return { id: String(p.id), name: p.name };
+}
+
+/** Current user's account id — the project lead for a newly-created KPI space. */
+async function currentAccountId(): Promise<string> {
+  const res = await api.asUser().requestJira(route`/rest/api/3/myself`);
+  const me = (await res.json()) as { accountId: string };
+  return me.accountId;
+}
+
+/**
+ * Create the KPI project for `key`. NOTE: creating the dedicated `KPI` issue type
+ * + scheme and the app-only reading field is finished during the Phase-5
+ * integration pass on a live site; this creates the project shell.
+ */
+export async function createKpiProject(key: string): Promise<{ id: string; name: string }> {
+  const name = `KPIs (${key})`;
+  const leadAccountId = await currentAccountId();
+  const res = await api.asApp().requestJira(route`/rest/api/3/project`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, name, projectTypeKey: 'software', leadAccountId }),
+  });
+  const p = (await res.json()) as { id: string | number };
+  return { id: String(p.id), name };
 }

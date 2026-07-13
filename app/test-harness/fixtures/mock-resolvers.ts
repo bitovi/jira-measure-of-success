@@ -2,10 +2,13 @@ import {
   effectiveTiming,
   encodeReadingValue,
   groupByRelationship,
+  isValidProjectKey,
+  normalizeProjectKey,
   readingsFromChangelog,
   resolveRelativeTargetDate,
   targetStatus,
   type CatalogEntryDto,
+  type KpiSpaceStatus,
   type PanelData,
   type PanelRowDto,
   type ReadingChange,
@@ -184,6 +187,33 @@ export function getRollupConfig(): RollupConfig {
 export function saveRollupConfig(next: RollupConfig): { ok: true; saved: RollupConfig } {
   config = next;
   return { ok: true, saved: config };
+}
+
+// ── KPI space (storage-model.md) ─────────────────────────────────────────────
+// Admin sets a project key; the app creates/connects the KPI project. The
+// harness models the state machine in memory (starts unset).
+let kpiSpace: KpiSpaceStatus = { key: null, projectId: null, name: null, state: 'unset' };
+
+export function getKpiSpace(): KpiSpaceStatus {
+  return kpiSpace;
+}
+
+export function saveKpiSpaceKey(rawKey: string): KpiSpaceStatus {
+  const key = normalizeProjectKey(rawKey ?? '');
+  if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${rawKey}"`);
+  // Setting a key we've already provisioned keeps it ready; otherwise it's missing.
+  kpiSpace =
+    kpiSpace.state === 'ready' && kpiSpace.key === key
+      ? kpiSpace
+      : { key, projectId: null, name: null, state: 'missing' };
+  return kpiSpace;
+}
+
+export function createKpiSpace(rawKey: string): KpiSpaceStatus {
+  const key = normalizeProjectKey(rawKey ?? '');
+  if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${rawKey}"`);
+  kpiSpace = { key, projectId: `proj-${key}`, name: `KPIs (${key})`, state: 'ready' };
+  return kpiSpace;
 }
 
 // ── Timeline ────────────────────────────────────────────────────────────────

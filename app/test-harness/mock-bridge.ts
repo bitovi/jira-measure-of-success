@@ -5,6 +5,9 @@ import {
   getHierarchyLevels,
   getRollupConfig,
   saveRollupConfig,
+  getKpiSpace,
+  saveKpiSpaceKey,
+  createKpiSpace,
   getTimelineData,
   recordValue,
 } from './fixtures/mock-resolvers.js';
@@ -27,6 +30,9 @@ const resolvers: Record<string, Handler> = {
   getHierarchyLevels: () => getHierarchyLevels(),
   getRollupConfig: () => getRollupConfig(),
   saveRollupConfig: (p) => saveRollupConfig(p?.config),
+  getKpiSpace: () => getKpiSpace(),
+  saveKpiSpaceKey: (p) => saveKpiSpaceKey(p?.key),
+  createKpiSpace: (p) => createKpiSpace(p?.key),
   // Timeline
   getTimelineData: () => getTimelineData(),
   recordValue: (p) => recordValue(p?.kpiId, p?.date, p?.value),
