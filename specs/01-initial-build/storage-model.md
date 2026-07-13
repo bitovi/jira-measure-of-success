@@ -1,6 +1,6 @@
 # Storage Model — KPI space, targets, and readings
 
-Status: **Proposed (2026-07-12)** — revises tech-choices §10 ("Storage model — follow the brief") and repo-memory **Q6** (readings as per-issue entity properties). Not yet implemented; captured here so the trade-off is written down before code changes.
+Status: **Accepted (2026-07-12)** — readings use **Option B (changelog field)**. Revises tech-choices §10 ("Storage model — follow the brief") and repo-memory **Q6** (readings as per-issue entity properties). Domain reducer implemented; Forge backend + provisioning pending Phase 5.
 
 Scope: where KPI definitions, per-issue targets, and recorded readings live, and how they satisfy the hard requirement that **all data be reachable by CascadeMCP over standard Jira REST**.
 
@@ -25,9 +25,9 @@ Scope: where KPI definitions, per-issue targets, and recorded readings live, and
 
 ---
 
-## Open decision: how readings are stored on the KPI issue
+## Decision: how readings are stored on the KPI issue — **Option B (changelog field)**
 
-Two finalists. Both are 100% Jira-REST / CascadeMCP-reachable. Difference is capacity vs. editability.
+Two finalists were considered. Both are 100% Jira-REST / CascadeMCP-reachable; the difference is capacity vs. editability. **Option B is adopted** (2026-07-12).
 
 ### Option A — entity-property array
 One entity property on the KPI issue, e.g. `kpi-readings = { readings: [{date, value, recordedBy, recordedAt}, …] }`. Append = read-modify-write the array.
@@ -58,11 +58,11 @@ Write each reading into a dedicated **app-only field** on the KPI issue as an em
 | CascadeMCP / REST | ✅ | ✅ |
 | Complexity | low | moderate (changelog reducer + embedded-date encoding) |
 
-### Recommendation
+### Decision & rationale
 
-**Option B (changelog field).** Readings accumulate for years, so the unbounded, natively-audited, race-free model fits better; the bulk endpoint also collapses timeline enumeration into a single call. The embedded-date encoding neutralizes the ordering concern, and append + tombstone recovers edit/delete. Accept the one real cost: history can't be purged, and the field's raw value is just the last write (so it must be an app-only field users don't hand-edit).
+**Adopted: Option B (changelog field).** Readings accumulate for years, so the unbounded, natively-audited, race-free model fits better; the bulk endpoint also collapses timeline enumeration into a single call. The embedded-date encoding neutralizes the ordering concern, and append + tombstone recovers edit/delete. Accepted costs: history can't be purged, and the field's raw value is just the last write (so it must be an app-only field users don't hand-edit).
 
-Choose Option A instead only if curated, low-volume, directly-editable series (with history purge) outweigh capacity and audit.
+Option A was rejected: its 32 KB (~800-point) ceiling and read-modify-write race outweigh its easier in-place edit/purge for a long-lived, externally-writable series.
 
 ---
 
