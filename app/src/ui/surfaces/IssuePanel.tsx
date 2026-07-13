@@ -3,6 +3,8 @@ import { call } from '@ui/bridge.js';
 import type {
   Assignment,
   CatalogEntryDto,
+  DueAnchor,
+  DueTiming,
   PanelData,
   PanelRowDto,
   TargetType,
@@ -144,12 +146,13 @@ function TrackedRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(row.target === null ? '' : String(row.target));
-  const [date, setDate] = useState(row.targetDate?.date ?? '');
+  const [due, setDue] = useState<DueTiming>(row.dueTiming ?? DEFAULT_DUE);
 
   const confirm = () => {
     const num = value.trim() === '' ? null : Number(value.replace(/,/g, ''));
     if (num !== null && Number.isNaN(num)) return;
-    onSave(buildAssignment(row, { target: num, absoluteDate: date || null }));
+    if (due.mode === 'absolute' && !isIsoDate(due.absolute)) return;
+    onSave(buildAssignment(row, { target: num, due, start: row.start }));
     setEditing(false);
   };
 
@@ -187,7 +190,7 @@ function TrackedRow({
       </div>
 
       {editing ? (
-        <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-col gap-2">
           <label className="text-xs text-text-subtle">
             Target value
             <input
@@ -197,15 +200,10 @@ function TrackedRow({
               onChange={(e) => setValue(e.target.value)}
             />
           </label>
-          <label className="text-xs text-text-subtle">
+          <div className="text-xs text-text-subtle">
             Target date
-            <input
-              className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm"
-              value={date}
-              placeholder="YYYY-MM-DD"
-              onChange={(e) => setDate(e.target.value)}
-            />
-          </label>
+            <TargetDateEditor value={due} onChange={setDue} />
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-2 text-sm">
@@ -244,7 +242,7 @@ function TrackThisRow({
       <span className="text-sm text-text-subtle">{row.name}</span>
       <button
         className="ml-auto text-xs text-brand"
-        onClick={() => onTrack(buildAssignment(row, { target: null, absoluteDate: null }))}
+        onClick={() => onTrack(buildAssignment(row, { target: null, due: DEFAULT_DUE, start: null }))}
       >
         + Track this
       </button>
@@ -266,7 +264,7 @@ function AssociateForm({
   const trackedIds = new Set(existing.filter((r) => r.relationship !== 'onParentNotTracked').map((r) => r.kpiId));
   const [kpiId, setKpiId] = useState('');
   const [target, setTarget] = useState('');
-  const [date, setDate] = useState('');
+  const [due, setDue] = useState<DueTiming>(DEFAULT_DUE);
   const [targetType, setTargetType] = useState<TargetType>('absolute');
 
   // define-new fields
@@ -281,23 +279,19 @@ function AssociateForm({
     if (!chosen) return;
     const num = target.trim() === '' ? null : Number(target.replace(/,/g, ''));
     if (num !== null && Number.isNaN(num)) return;
+    if (due.mode === 'absolute' && !isIsoDate(due.absolute)) return;
     onSave({
       kpiId: chosen,
       inheritFromParent: false,
       target: num,
       targetType,
-      timing: {
-        start: null,
-        due: date
-          ? { mode: 'absolute', absolute: date, anchor: 'issueDueDate', offsetMonths: 0 }
-          : { mode: 'relative', absolute: null, anchor: 'issueDueDate', offsetMonths: 0 },
-      },
+      timing: { start: null, due },
       updatedBy: 'me',
       updatedAt: Date.now(),
     });
     setKpiId('');
     setTarget('');
-    setDate('');
+    setDue(DEFAULT_DUE);
     setDefining(false);
     setNewName('');
     setNewUnit('');
@@ -350,7 +344,7 @@ function AssociateForm({
           </label>
         )}
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <label className="text-xs text-text-subtle">
             Target value
             <input
@@ -371,15 +365,10 @@ function AssociateForm({
               <option value="delta">delta</option>
             </select>
           </label>
-          <label className="text-xs text-text-subtle">
-            Target date
-            <input
-              className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              placeholder="YYYY-MM-DD"
-            />
-          </label>
+        </div>
+        <div className="text-xs text-text-subtle">
+          Target date
+          <TargetDateEditor value={due} onChange={setDue} />
         </div>
 
         <div className="flex gap-2">
@@ -404,6 +393,76 @@ function AssociateForm({
 }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
+const DEFAULT_DUE: DueTiming = {
+  mode: 'relative',
+  absolute: null,
+  anchor: 'issueDueDate',
+  offsetMonths: 0,
+};
+
+const ANCHOR_LABELS: Record<DueAnchor, string> = {
+  issueDueDate: 'issue due date',
+  parentDueDate: 'parent due date',
+  kpiStart: 'KPI start',
+};
+
+function isIsoDate(v: string | null): v is string {
+  return v !== null && /^\d{4}-\d{2}-\d{2}$/.test(v);
+}
+
+/** Absolute-vs-relative target-date control (IP-7): a fixed date, or N months
+ *  after a resolved anchor (issue due / parent due / KPI start). */
+function TargetDateEditor({ value, onChange }: { value: DueTiming; onChange: (d: DueTiming) => void }) {
+  return (
+    <div className="mt-0.5 flex flex-col gap-1.5 rounded border border-border p-2">
+      <select
+        className="rounded border border-border px-2 py-1 text-sm"
+        value={value.mode}
+        onChange={(e) =>
+          onChange(
+            e.target.value === 'absolute'
+              ? { ...value, mode: 'absolute', absolute: value.absolute ?? '' }
+              : { ...value, mode: 'relative' },
+          )
+        }
+      >
+        <option value="absolute">Absolute date</option>
+        <option value="relative">N months after an anchor</option>
+      </select>
+
+      {value.mode === 'absolute' ? (
+        <input
+          className="rounded border border-border px-2 py-1 text-sm"
+          value={value.absolute ?? ''}
+          placeholder="YYYY-MM-DD"
+          onChange={(e) => onChange({ ...value, absolute: e.target.value })}
+        />
+      ) : (
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            className="w-16 rounded border border-border px-2 py-1 text-sm"
+            value={value.offsetMonths}
+            onChange={(e) => onChange({ ...value, offsetMonths: Number(e.target.value) || 0 })}
+          />
+          <span className="text-xs text-text-subtle">months after</span>
+          <select
+            className="flex-1 rounded border border-border px-2 py-1 text-sm"
+            value={value.anchor}
+            onChange={(e) => onChange({ ...value, anchor: e.target.value as DueAnchor })}
+          >
+            {(Object.keys(ANCHOR_LABELS) as DueAnchor[]).map((a) => (
+              <option key={a} value={a}>
+                {ANCHOR_LABELS[a]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function slug(name: string): string {
   return name
     .toLowerCase()
@@ -412,22 +471,17 @@ function slug(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Build an assignment from a row, applying value/date edits. */
+/** Build an assignment from a row, applying value/timing edits. */
 function buildAssignment(
   row: PanelRowDto,
-  edit: { target: number | null; absoluteDate: string | null },
+  edit: { target: number | null; due: DueTiming; start: string | null },
 ): Assignment {
   return {
     kpiId: row.kpiId,
     inheritFromParent: false,
     target: edit.target,
     targetType: row.targetType ?? 'absolute',
-    timing: {
-      start: null,
-      due: edit.absoluteDate
-        ? { mode: 'absolute', absolute: edit.absoluteDate, anchor: 'issueDueDate', offsetMonths: 0 }
-        : { mode: 'relative', absolute: null, anchor: 'issueDueDate', offsetMonths: 0 },
-    },
+    timing: { start: edit.start, due: edit.due },
     updatedBy: 'me',
     updatedAt: Date.now(),
   };

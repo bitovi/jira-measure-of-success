@@ -1,4 +1,4 @@
-import type { KpiDirection, TargetType } from './models/index.js';
+import type { DueTiming, IsoDate, KpiDirection, TargetType } from './models/index.js';
 import type { TargetStatus } from './resolve/targetStatus.js';
 
 /**
@@ -26,6 +26,10 @@ export interface PanelRowDto {
   target: number | null;
   targetType: TargetType | null;
   targetDate: ResolvedTargetDateDto | null;
+  /** raw due timing (absolute/relative anchor + offset) for editing; null for untracked rows */
+  dueTiming: DueTiming | null;
+  /** the assignment's KPI start date (anchor for relative `kpiStart` dates) */
+  start: IsoDate | null;
   relationship: PanelRelationship;
 }
 

@@ -113,6 +113,8 @@ export function getPanelData(issueId: string): PanelData {
       target: assignment?.target ?? null,
       targetType: assignment?.targetType ?? null,
       targetDate: assignment ? resolveDate(assignment, ctx) : null,
+      dueTiming: assignment?.timing.due ?? null,
+      start: assignment?.timing.start ?? null,
       relationship,
     });
   };

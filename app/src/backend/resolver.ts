@@ -76,6 +76,8 @@ async function buildPanelData(issueId: string): Promise<PanelData> {
       target: a?.target ?? null,
       targetType: a?.targetType ?? null,
       targetDate: a ? resolveRelativeTargetDate(a.timing.due, ctx, a.timing.start) : null,
+      dueTiming: a?.timing.due ?? null,
+      start: a?.timing.start ?? null,
       relationship,
     });
   };
