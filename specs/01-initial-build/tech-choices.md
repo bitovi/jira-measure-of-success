@@ -20,7 +20,7 @@ This document records the significant technology decisions, the alternatives con
 | 7 | Schema/validation library | **Zod** | Locked |
 | 8 | Styling mechanism | **Tailwind mapped to Atlaskit design tokens** | Locked |
 | 9 | Agentic workflow model | **Spec-Kit artifacts + Superpowers execution loop + Bitovi skills** | Locked |
-| 10 | Storage model | **Follow the brief (entity property + KVS + Custom Entity Store)** | Locked by brief |
+| 10 | Storage model | **KPI-as-issue in a dedicated space; all data Jira-REST/CascadeMCP-reachable** — see [storage-model.md](./storage-model.md) | Revised 2026-07-12 (supersedes "follow the brief") |
 | 11 | App name / package | **"Measure of Success" / `measure-of-success`** | Locked |
 
 ---
