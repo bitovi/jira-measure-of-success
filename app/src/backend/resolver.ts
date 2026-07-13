@@ -4,6 +4,7 @@ import {
   groupByRelationship,
   isValidProjectKey,
   normalizeProjectKey,
+  readingsFromChangelog,
   resolveRelativeTargetDate,
   type Assignment,
   type CatalogEntryDto,
@@ -14,17 +15,22 @@ import {
   type RelativeTargetContext,
   type ResolvedEndpoint,
   type TimelineData,
+  type TimelineNodeDto,
 } from '../domain/index';
 import {
   fetchAssignments,
   fetchHierarchyLevels,
   fetchIssueMeta,
+  fetchKpiMeta,
+  fetchKpiSpaceIssues,
+  fetchReadingChangelog,
   fetchSubtreeTimingNodes,
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
   writeAssignments,
   writeReading,
+  type KpiSpaceIssue,
 } from './jira';
 import {
   readCatalog,
@@ -160,9 +166,58 @@ resolver.define('createKpiSpace', async ({ payload }) => {
   return { key, projectId: project.id, name: project.name, state: 'ready' } satisfies KpiSpaceStatus;
 });
 
-// The timeline aggregates across many issues, which requires a project-scoped
-// enumeration wired during the Forge integration pass (Phase 5).
-resolver.define('getTimelineData', async () => ({ today: new Date().toISOString().slice(0, 10), roots: [] }) satisfies TimelineData);
+// The timeline enumerates KPI-space issues, reconstructs each KPI's reading
+// series from its field changelog (Option B), and nests them by issue parent —
+// mirroring the harness `getTimelineData`. Targets (authored on contributing
+// issues) are a follow-up; the list + readings render today.
+resolver.define('getTimelineData', async () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const space = await readKpiSpaceConfig();
+  if (!space.key || !space.projectId) return { today, roots: [] } satisfies TimelineData;
+
+  const issues = await fetchKpiSpaceIssues(space.key);
+  if (issues.length === 0) return { today, roots: [] } satisfies TimelineData;
+
+  const ids = issues.map((i) => i.id);
+  const [changelogByIssue, metas] = await Promise.all([
+    fetchReadingChangelog(ids),
+    Promise.all(issues.map((i) => fetchKpiMeta(i.id))),
+  ]);
+  const metaById = new Map(issues.map((i, idx) => [i.id, metas[idx]]));
+
+  // Adjacency restricted to KPI-space issues; issues whose parent is outside the
+  // space (or absent) are roots.
+  const idSet = new Set(ids);
+  const childrenOf = new Map<string, KpiSpaceIssue[]>();
+  const roots: KpiSpaceIssue[] = [];
+  for (const issue of issues) {
+    if (issue.parentId && idSet.has(issue.parentId)) {
+      const siblings = childrenOf.get(issue.parentId) ?? [];
+      siblings.push(issue);
+      childrenOf.set(issue.parentId, siblings);
+    } else {
+      roots.push(issue);
+    }
+  }
+
+  const toNode = (issue: KpiSpaceIssue, depth: number): TimelineNodeDto => {
+    const meta = metaById.get(issue.id);
+    const readings = readingsFromChangelog(changelogByIssue.get(issue.id) ?? []);
+    return {
+      id: issue.id,
+      kpiId: issue.key,
+      name: issue.name,
+      unit: meta?.unit ?? '',
+      direction: meta?.direction ?? null,
+      depth,
+      targets: [],
+      readings: readings.map((r) => ({ date: r.date, value: r.value })),
+      children: (childrenOf.get(issue.id) ?? []).map((c) => toNode(c, depth + 1)),
+    };
+  };
+
+  return { today, roots: roots.map((r) => toNode(r, 0)) } satisfies TimelineData;
+});
 resolver.define('recordValue', async ({ payload }) => {
   const { kpiId, date, value } = payload as {
     kpiId: string;

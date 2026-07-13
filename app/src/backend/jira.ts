@@ -168,6 +168,47 @@ export async function fetchChildren(issueId: string): Promise<string[]> {
   return (data.issues ?? []).map((i) => i.id);
 }
 
+export interface KpiSpaceIssue {
+  id: string;
+  key: string;
+  name: string;
+  parentId: string | null;
+}
+
+/**
+ * Enumerate every KPI issue in the KPI space (JQL `project = <key>`), reading the
+ * summary (KPI name) and parent (for nesting). Paginated to cover large spaces.
+ * The nested tree + readings are assembled by the `getTimelineData` resolver.
+ */
+export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceIssue[]> {
+  const issues: KpiSpaceIssue[] = [];
+  let startAt = 0;
+  for (let page = 0; page < 50; page += 1) {
+    const res = await api
+      .asApp()
+      .requestJira(
+        route`/rest/api/3/search?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=summary,parent&maxResults=100&startAt=${String(startAt)}`,
+      );
+    if (!res.ok) break;
+    const data = (await res.json()) as {
+      total?: number;
+      issues?: Array<{ id: string; key: string; fields?: { summary?: string; parent?: { id?: string } } }>;
+    };
+    const batch = data.issues ?? [];
+    for (const i of batch) {
+      issues.push({
+        id: String(i.id),
+        key: i.key,
+        name: i.fields?.summary ?? i.key,
+        parentId: i.fields?.parent?.id ? String(i.fields.parent.id) : null,
+      });
+    }
+    startAt += batch.length;
+    if (batch.length === 0 || startAt >= (data.total ?? startAt)) break;
+  }
+  return issues;
+}
+
 /**
  * Build the timing-node map for the subtree rooted at `issueId` (its own dates
  * plus all descendants), so `effectiveTiming` can roll up its due date.
