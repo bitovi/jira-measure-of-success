@@ -140,6 +140,38 @@ The Bitovi `playwright` skills (`visual-diff`, `computed-styles`, `discover-visu
 
 ### Decision: **Copilot browser tools for the dev loop; Playwright for regression baselines; loose-tolerance geometry diff for the timeline.** The mocks are a layout/interaction reference, not a pixel acceptance target.
 
+### §5 Addendum (2026-07-12): Storybook + injectable loader hooks + portable-stories tests
+
+Added **Storybook** (React + Vite) as a per-scenario visual workbench and, with
+it, an explicit **data-scenario testing** layer. This *complements* the locked
+choices — it rides on Vitest (§4) and does not replace the Copilot dev loop or
+Playwright baselines.
+
+- **Injectable loader hook** — surfaces take their data loader as a prop
+  (`usePanel`/`useSettings`/`useData`) defaulted to the real `@forge/bridge`
+  hook. Stories/tests inject a stub returning canned data, so every branch
+  (loading / error / empty / pending / each data shape) renders deterministically
+  with no bridge. This is the constitution's "pure core, thin adapters" rule
+  applied to the UI; the `call()` seam lives in one hook modlet per surface.
+- **Modlet structure** — surfaces and hooks are self-contained folders
+  (`IssuePanel/`, `usePanelData/`) with co-located `index.ts` + implementation +
+  `*.stories.tsx` + `*.test.tsx`. See the project skill
+  [`.claude/skills/create-react-modlet/`](../../.claude/skills/create-react-modlet/SKILL.md).
+- **Stories double as tests** — each surface's stories carry `play()` interaction
+  assertions and are replayed as tests via **portable stories**
+  (`composeStories`) in jsdom under a **separate** `vitest.stories.config.ts`.
+  No Playwright/browser download; fast.
+- **Segmented scripts** — `npm test` = pure-domain suite (node, `*.test.ts`);
+  `npm run test:stories` = story tests (jsdom, `src/ui/**/*.test.tsx`);
+  `npm run test:all` = both; `npm run storybook` = the workbench. The two suites
+  never overlap (extension-segmented).
+
+Why this over the alternatives: portable stories keep the story-tests in the
+Vitest/jsdom world already chosen (no Playwright browser install), and the
+injectable-hook approach beats per-story bridge mocking — it reaches the
+loading/error branches cleanly and keeps fetching out of the render.
+
+
 ---
 
 ## 6. Domain layer architecture: pure TypeScript, no Forge imports

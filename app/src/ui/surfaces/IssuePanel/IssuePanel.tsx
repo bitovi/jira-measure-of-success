@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { call } from '@ui/bridge.js';
+import { useMemo, useState } from 'react';
+import { usePanelData, type UsePanel } from '@ui/data/usePanelData/index.js';
 import type {
   Assignment,
   CatalogEntryDto,
   DueAnchor,
   DueTiming,
-  PanelData,
   PanelRowDto,
   TargetType,
 } from '@domain/index.js';
@@ -15,6 +14,9 @@ import type {
  * relationship to the parent (shared / only here / on parent, not tracked).
  * v1 authors INDEPENDENT targets (no value inheritance, Q11). Mock:
  * specs/00-mocks/issue.html. Stories IP-1, IP-4…IP-10.
+ *
+ * Data comes from an INJECTABLE loader hook (`usePanel`, defaulted to the real
+ * bridge hook) so stories/tests can pass canned scenarios — see usePanelData.ts.
  */
 const GROUP_META: Record<PanelRowDto['relationship'], { title: string; order: number }> = {
   shared: { title: 'Shared with parent', order: 0 },
@@ -32,25 +34,14 @@ function directionGlyph(direction: PanelRowDto['direction']): string {
   return '';
 }
 
-export function IssuePanel({ issueId = '10048' }: { issueId?: string }) {
-  const [data, setData] = useState<PanelData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const d = await call<PanelData>('getPanelData', { issueId });
-        if (alive) setData(d);
-      } catch (e: unknown) {
-        if (alive) setError(String(e));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [issueId]);
+export function IssuePanel({
+  issueId = '10048',
+  usePanel = usePanelData,
+}: {
+  issueId?: string;
+  usePanel?: UsePanel;
+}) {
+  const { data, pending, error, busy, save, remove } = usePanel(issueId);
 
   const groups = useMemo(() => {
     if (!data) return [];
@@ -65,26 +56,8 @@ export function IssuePanel({ issueId = '10048' }: { issueId?: string }) {
     );
   }, [data]);
 
-  const remove = async (kpiId: string) => {
-    setBusy(true);
-    try {
-      setData(await call<PanelData>('removeAssignment', { issueId, kpiId }));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const save = async (assignment: Assignment) => {
-    setBusy(true);
-    try {
-      setData(await call<PanelData>('saveAssignment', { issueId, assignment }));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (error) return <div className="p-4 text-danger">Failed to load KPIs: {error}</div>;
-  if (!data) return <div className="p-4 text-text-subtle">Loading KPIs…</div>;
+  if (pending || !data) return <div className="p-4 text-text-subtle">Loading KPIs…</div>;
 
   const tracked = data.rows.filter((r) => r.relationship !== 'onParentNotTracked');
   const isEmpty = tracked.length === 0;

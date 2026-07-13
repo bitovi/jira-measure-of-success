@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { call } from '@ui/bridge.js';
+import { useTimelineData, type UseTimeline } from '@ui/data/useTimelineData/index.js';
 import {
   quarterStartMs,
-  type TimelineData,
   type TimelineNodeDto,
   type TimelineReadingDto,
   type TimelineTargetDto,
@@ -14,6 +13,8 @@ import {
  * pan). Sparklines of recorded readings, target diamonds classified
  * hit/missed/upcoming, drill-in to source issues, and a record-value modal.
  * Mock: specs/00-mocks/kpi-timeline-v2.html. Stories TL-1…TL-7.
+ *
+ * Data comes from an INJECTABLE loader hook (`useData`) — see usePanelData.ts.
  */
 const LABEL_W = 300;
 const QUARTER_PX = 220;
@@ -40,29 +41,13 @@ function ms(iso: string): number {
   return new Date(iso).getTime();
 }
 
-export function Timeline() {
-  const [data, setData] = useState<TimelineData | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline }) {
+  const { data, pending, error, record: recordValue } = useData();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [modalKpi, setModalKpi] = useState<TimelineNodeDto | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const centeredRef = useRef(false);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const d = await call<TimelineData>('getTimelineData');
-        if (alive) setData(d);
-      } catch (e: unknown) {
-        if (alive) setError(String(e));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // Wide domain: 9 quarters centered on today; default view shows ~3 quarters
   // and the plot area scrolls horizontally to pan (Q5).
@@ -119,14 +104,13 @@ export function Timeline() {
       return next;
     });
 
-  const record = async (kpiId: string, date: string, value: number) => {
-    const d = await call<TimelineData>('recordValue', { kpiId, date, value });
-    setData(d);
+  const record = (kpiId: string, date: string, value: number) => {
+    recordValue(kpiId, date, value);
     setModalKpi(null);
   };
 
   if (error) return <div className="p-6 text-danger">Failed to load timeline: {error}</div>;
-  if (!data) return <div className="p-6 text-text-subtle">Loading timeline…</div>;
+  if (pending || !data) return <div className="p-6 text-text-subtle">Loading timeline…</div>;
   if (flat.length === 0) return <div className="p-6 text-text-subtle">No KPIs to show yet.</div>;
 
   return (
@@ -280,6 +264,7 @@ function TimelineRow({
         <button
           className="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded border border-border text-text-subtle hover:border-brand hover:text-brand"
           onClick={onRecord}
+          aria-label="Record a value"
           title="Record a value"
         >
           +

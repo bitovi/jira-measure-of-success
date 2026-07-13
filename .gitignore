@@ -5,6 +5,7 @@ node_modules/
 app/static/*/build/
 dist/
 build/
+storybook-static/
 
 # Test / coverage / visual baselines diff output
 coverage/

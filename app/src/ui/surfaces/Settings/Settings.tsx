@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { call } from '@ui/bridge.js';
+import { useSettingsData, type UseSettings } from '@ui/data/useSettingsData/index.js';
 import {
   DEFAULT_ROLLUP_METHOD,
   labelsFor,
@@ -13,6 +13,8 @@ import {
  * Settings — Due Date Rollup (global admin page). One dropdown per discovered
  * hierarchy level (ST-1/ST-2/ST-3). Level names are read at runtime — nothing is
  * hardcoded. Mock: specs/00-mocks/settings.html.
+ *
+ * Data comes from an INJECTABLE loader hook (`useSettings`) — see usePanelData.ts.
  */
 const METHOD_ORDER: RollupMethod[] = [
   'childrenFirstThenParent',
@@ -26,31 +28,14 @@ function itypeLetter(name: string): string {
   return name.charAt(0).toUpperCase();
 }
 
-export function Settings() {
-  const [levels, setLevels] = useState<string[] | null>(null);
+export function Settings({ useSettings = useSettingsData }: { useSettings?: UseSettings }) {
+  const { levels, config, pending, error, save } = useSettings();
   const [methods, setMethods] = useState<Record<string, RollupMethod>>({});
-  const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const [lv, cfg] = await Promise.all([
-          call<string[]>('getHierarchyLevels'),
-          call<RollupConfig>('getRollupConfig'),
-        ]);
-        if (!alive) return;
-        setLevels(lv);
-        setMethods(resolveConfig(cfg, lv));
-      } catch (e: unknown) {
-        if (alive) setError(String(e));
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
+    if (levels && config) setMethods(resolveConfig(config, levels));
+  }, [levels, config]);
 
   const leaf = levels ? levels[levels.length - 1] : undefined;
 
@@ -64,11 +49,11 @@ export function Settings() {
     setSaveState('idle');
   };
 
-  const save = async () => {
+  const doSave = async () => {
     setSaveState('saving');
     try {
-      const config: RollupConfig = { dueDateRollup: { ...methods } };
-      await call('saveRollupConfig', { config });
+      const next: RollupConfig = { dueDateRollup: { ...methods } };
+      await save(next);
       setSaveState('saved');
     } catch {
       setSaveState('error');
@@ -76,7 +61,7 @@ export function Settings() {
   };
 
   if (error) return <div className="p-6 text-danger">Failed to load settings: {error}</div>;
-  if (!levels) return <div className="p-6 text-text-subtle">Loading settings…</div>;
+  if (pending || !levels) return <div className="p-6 text-text-subtle">Loading settings…</div>;
 
   return (
     <div className="mx-auto max-w-3xl p-6 text-text">
@@ -167,7 +152,7 @@ export function Settings() {
         </button>
         <button
           className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
-          onClick={save}
+          onClick={doSave}
           disabled={saveState === 'saving'}
         >
           {saveState === 'saving' ? 'Saving…' : 'Save settings'}

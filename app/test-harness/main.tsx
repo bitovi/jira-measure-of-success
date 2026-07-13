@@ -1,8 +1,8 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { IssuePanel } from '@ui/surfaces/IssuePanel.js';
-import { Settings } from '@ui/surfaces/Settings.js';
-import { Timeline } from '@ui/surfaces/Timeline.js';
+import { IssuePanel } from '@ui/surfaces/IssuePanel/index.js';
+import { Settings } from '@ui/surfaces/Settings/index.js';
+import { Timeline } from '@ui/surfaces/Timeline/index.js';
 import '@ui/styles.css';
 
 /**
