@@ -93,14 +93,16 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
   const toggleCollapse = (id: string) =>
     setCollapsed((s) => {
       const next = new Set(s);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
   const toggleExpand = (id: string) =>
     setExpanded((s) => {
       const next = new Set(s);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 
