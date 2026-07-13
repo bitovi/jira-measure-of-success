@@ -12,12 +12,12 @@ import {
   type TimelineData,
 } from '@domain/index.js';
 import {
-  appendReading,
   fetchAssignments,
   fetchHierarchyLevels,
   fetchIssueMeta,
   fetchSubtreeTimingNodes,
   writeAssignments,
+  writeReading,
 } from './jira.js';
 import {
   readCatalog,
@@ -129,13 +129,14 @@ resolver.define('saveRollupConfig', async ({ payload }) => {
 resolver.define('getTimelineData', async () => ({ today: new Date().toISOString().slice(0, 10), roots: [] }) satisfies TimelineData);
 
 resolver.define('recordValue', async ({ payload }) => {
-  const { issueId, kpiId, date, value } = payload as {
-    issueId: string;
+  const { kpiId, date, value } = payload as {
     kpiId: string;
     date: string;
-    value: number;
+    value: number | null;
   };
-  await appendReading(issueId, kpiId, { date, value, recordedBy: 'me', recordedAt: Date.now() });
+  // Readings are KPI-global (storage-model.md): kpiId identifies the KPI issue
+  // whose reading-field changelog holds the series. value=null tombstones a date.
+  await writeReading(kpiId, date, value);
   return { ok: true };
 });
 

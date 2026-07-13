@@ -1,11 +1,14 @@
 import {
   effectiveTiming,
+  encodeReadingValue,
   groupByRelationship,
+  readingsFromChangelog,
   resolveRelativeTargetDate,
   targetStatus,
   type CatalogEntryDto,
   type PanelData,
   type PanelRowDto,
+  type ReadingChange,
   type RelativeTargetContext,
   type ResolvedEndpoint,
   type TimelineData,
@@ -37,6 +40,33 @@ const issues: FixtureIssue[] = structuredClone(ISSUES);
 const kpiTree: KpiTreeNode[] = structuredClone(KPI_TREE);
 
 const TODAY = '2026-07-10';
+
+// ── Reading storage — Option B (changelog of a per-KPI field) ────────────────
+// The harness models each KPI issue's reading-field changelog: every recorded
+// value is an embedded-date entry, and the series is reconstructed with the SAME
+// domain reducer the Forge backend uses. Seeded from the fixture readings so the
+// timeline renders identically while exercising the real encode/reduce path.
+const readingChangelog = new Map<string, ReadingChange[]>();
+(function seedReadingChangelog() {
+  const walk = (nodes: KpiTreeNode[]) => {
+    for (const n of nodes) {
+      readingChangelog.set(
+        n.kpiId,
+        n.readings.map((r) => ({
+          created: r.recordedAt,
+          to: encodeReadingValue(r.date, r.value),
+          by: r.recordedBy,
+        })),
+      );
+      if (n.children) walk(n.children);
+    }
+  };
+  walk(kpiTree);
+})();
+
+function readingsFor(kpiId: string) {
+  return readingsFromChangelog(readingChangelog.get(kpiId) ?? []);
+}
 
 function findIssue(id: string): FixtureIssue | undefined {
   return issues.find((i) => i.id === id) ?? issueById(id);
@@ -159,6 +189,7 @@ export function saveRollupConfig(next: RollupConfig): { ok: true; saved: RollupC
 // ── Timeline ────────────────────────────────────────────────────────────────
 let timelineIdSeq = 1;
 function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
+  const readings = readingsFor(node.kpiId);
   return {
     id: `n${timelineIdSeq++}`,
     kpiId: node.kpiId,
@@ -169,10 +200,10 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
     targets: node.targets.map((t) => ({
       date: t.date,
       value: t.value,
-      status: targetStatus(t, node.readings, node.direction, TODAY),
+      status: targetStatus(t, readings, node.direction, TODAY),
       source: t.source,
     })),
-    readings: node.readings.map((r) => ({ date: r.date, value: r.value })),
+    readings: readings.map((r) => ({ date: r.date, value: r.value })),
     children: (node.children ?? []).map((c) => toTimelineNode(c, depth + 1)),
   };
 }
@@ -182,22 +213,13 @@ export function getTimelineData(): TimelineData {
   return { today: TODAY, roots: kpiTree.map((n) => toTimelineNode(n, 0)) };
 }
 
-function findTreeNode(nodes: KpiTreeNode[], kpiId: string): KpiTreeNode | undefined {
-  for (const n of nodes) {
-    if (n.kpiId === kpiId) return n;
-    if (n.children) {
-      const found = findTreeNode(n.children, kpiId);
-      if (found) return found;
-    }
-  }
-  return undefined;
-}
-
-export function recordValue(kpiId: string, date: string, value: number): TimelineData {
-  const node = findTreeNode(kpiTree, kpiId);
-  if (node) {
-    node.readings.push({ date, value, recordedBy: 'acc-jm', recordedAt: Date.now() });
-    node.readings.sort((a, b) => a.date.localeCompare(b.date));
-  }
+/**
+ * Record (or, with value=null, tombstone) a KPI reading. Appends one entry to
+ * that KPI's field changelog — Option B: append-only, last-write-wins per date.
+ */
+export function recordValue(kpiId: string, date: string, value: number | null): TimelineData {
+  const log = readingChangelog.get(kpiId) ?? [];
+  log.push({ created: Date.now(), to: encodeReadingValue(date, value), by: 'acc-jm' });
+  readingChangelog.set(kpiId, log);
   return getTimelineData();
 }

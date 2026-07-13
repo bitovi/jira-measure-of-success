@@ -2,11 +2,12 @@ import { z } from 'zod';
 import { IsoDate } from './assignment.js';
 
 /**
- * Recorded KPI value ("reading") — stored per (issue, KPI) as a Jira issue
- * entity property under key `kpi-readings-{kpiId}` (requirements §8-Q6).
- * Jira is the source of record; readable/writable over standard REST so
- * external tools (CascadeMCP, API clients) can set values. Untrusted → parsed
- * with this schema at the boundary.
+ * A recorded KPI value ("reading"): a value at an effective date, plus who/when
+ * it was recorded. Readings are KPI-global (storage-model.md) and stored via
+ * Option B — the changelog of an app-only field on the KPI issue — then
+ * reconstructed by `readingsFromChangelog`. This schema is the in-memory /
+ * fixture shape; it is not the on-wire storage format. Untrusted input is parsed
+ * with it at boundaries.
  */
 export const KpiReading = z.object({
   date: IsoDate,
@@ -16,13 +17,16 @@ export const KpiReading = z.object({
 });
 export type KpiReading = z.infer<typeof KpiReading>;
 
-/** The whole entity-property value at key `kpi-readings-{kpiId}`. */
+/**
+ * @deprecated Legacy entity-property container (pre-Option-B, per-issue). Kept
+ * for reference only; readings now live in the KPI issue's field changelog.
+ */
 export const KpiReadingsProperty = z.object({
   readings: z.array(KpiReading),
 });
 export type KpiReadingsProperty = z.infer<typeof KpiReadingsProperty>;
 
-/** Entity-property key for a KPI's readings on an issue. */
+/** @deprecated Legacy per-issue readings property key (pre-Option-B). */
 export function readingsPropertyKey(kpiId: string): string {
   return `kpi-readings-${kpiId}`;
 }

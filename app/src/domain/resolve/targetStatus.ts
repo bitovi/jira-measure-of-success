@@ -1,4 +1,4 @@
-import type { IsoDate, KpiDirection, KpiReading } from '../models/index.js';
+import type { IsoDate, KpiDirection } from '../models/index.js';
 
 /**
  * Classify a KPI target as hit / missed / upcoming — Timeline TL-3 (requirements
@@ -15,8 +15,14 @@ export interface TimelineTarget {
   value: number;
 }
 
+/** Minimal reading shape these helpers need (KpiReading + ReadingPoint both fit). */
+export interface DatedValue {
+  date: IsoDate;
+  value: number;
+}
+
 /** Recorded value in effect at `iso` = last reading on or before it, else null. */
-export function valueAt(readings: KpiReading[], iso: IsoDate): number | null {
+export function valueAt(readings: readonly DatedValue[], iso: IsoDate): number | null {
   const t = new Date(iso).getTime();
   let latest: number | null = null;
   let latestT = -Infinity;
@@ -32,7 +38,7 @@ export function valueAt(readings: KpiReading[], iso: IsoDate): number | null {
 
 export function targetStatus(
   target: TimelineTarget,
-  readings: KpiReading[],
+  readings: readonly DatedValue[],
   direction: KpiDirection | null,
   asOf: IsoDate,
 ): TargetStatus {

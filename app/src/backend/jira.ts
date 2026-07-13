@@ -1,10 +1,9 @@
 import api, { route } from '@forge/api';
 import {
   AssignmentProperty,
-  KpiReadingsProperty,
-  readingsPropertyKey,
+  encodeReadingValue,
   type Assignment,
-  type KpiReading,
+  type ReadingChange,
   type TimingNode,
 } from '@domain/index.js';
 
@@ -71,31 +70,71 @@ export async function writeAssignments(issueId: string, assignments: Assignment[
     });
 }
 
-/** Recorded readings for one (issue, KPI) — entity property `kpi-readings-{kpiId}`. */
-export async function fetchReadings(issueId: string, kpiId: string): Promise<KpiReading[]> {
-  const key = readingsPropertyKey(kpiId);
-  const res = await api
-    .asUser()
-    .requestJira(route`/rest/api/3/issue/${issueId}/properties/${key}`);
-  if (res.status === 404) return [];
-  const body = (await res.json()) as { value?: unknown };
-  const parsed = KpiReadingsProperty.safeParse(body.value);
-  return parsed.success ? parsed.data.readings : [];
+/**
+ * Reading storage — Option B (specs/01-initial-build/storage-model.md). Each KPI
+ * issue has one app-only field whose CHANGELOG holds the reading series: every
+ * recorded value is an embedded-date payload, so each write is one changelog
+ * entry. The series is reconstructed by the pure `readingsFromChangelog` reducer.
+ * The field id is assigned when the KPI space is provisioned (Phase 5).
+ */
+const READING_FIELD_ID = 'customfield_kpi_reading'; // TODO: real id from KPI-space provisioning
+
+/** Record a reading on a KPI issue (value=null = tombstone/delete) by writing the encoded payload. */
+export async function writeReading(kpiIssueId: string, date: string, value: number | null): Promise<void> {
+  const encoded = encodeReadingValue(date, value);
+  await api.asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { [READING_FIELD_ID]: encoded } }),
+  });
 }
 
-export async function appendReading(issueId: string, kpiId: string, reading: KpiReading): Promise<void> {
-  const existing = await fetchReadings(issueId, kpiId);
-  const value: unknown = KpiReadingsProperty.parse({
-    readings: [...existing, reading].sort((a, b) => a.date.localeCompare(b.date)),
+/**
+ * Fetch the reading-field changelog for KPI issues via the bulk endpoint
+ * (`POST /rest/api/3/changelog/bulkfetch`, filtered to the reading field). Up to
+ * 1000 issues/request — one call covers a whole KPI space. Returns the raw
+ * changes for `readingsFromChangelog` to reduce into series.
+ */
+export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<string, ReadingChange[]>> {
+  const byIssue = new Map<string, ReadingChange[]>();
+  if (kpiIssueIds.length === 0) return byIssue;
+  const res = await api.asUser().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      issueIdsOrKeys: kpiIssueIds.slice(0, 1000),
+      fieldIds: [READING_FIELD_ID],
+      maxResults: 1000,
+    }),
   });
-  const key = readingsPropertyKey(kpiId);
-  await api
-    .asUser()
-    .requestJira(route`/rest/api/3/issue/${issueId}/properties/${key}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(value),
-    });
+  if (!res.ok) return byIssue;
+  const data = (await res.json()) as {
+    issueChangeLogs?: Array<{
+      issueId: string;
+      changeHistories?: Array<{
+        created: number | string;
+        author?: { accountId?: string };
+        items?: Array<{ fieldId?: string; field?: string; to?: string | null; toString?: string | null }>;
+      }>;
+    }>;
+  };
+  for (const log of data.issueChangeLogs ?? []) {
+    const changes: ReadingChange[] = [];
+    for (const h of log.changeHistories ?? []) {
+      const item = (h.items ?? []).find((i) => i.fieldId === READING_FIELD_ID || i.field === READING_FIELD_ID);
+      if (!item) continue;
+      // Bulk API returns `created` as Unix seconds/ms; normalize to ms.
+      const created =
+        typeof h.created === 'number'
+          ? h.created < 1e10
+            ? h.created * 1000
+            : h.created
+          : new Date(h.created).getTime();
+      changes.push({ created, to: item.toString ?? item.to ?? null, by: h.author?.accountId });
+    }
+    byIssue.set(log.issueId, changes);
+  }
+  return byIssue;
 }
 
 /** Direct children of an issue via JQL `parent = X`. */
