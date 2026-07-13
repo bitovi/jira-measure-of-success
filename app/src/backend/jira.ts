@@ -1,6 +1,8 @@
 import api, { route } from '@forge/api';
 import {
   AssignmentProperty,
+  KpiMetaProperty,
+  KPI_META_PROPERTY_KEY,
   encodeReadingValue,
   type Assignment,
   type CreateKpiInput,
@@ -78,18 +80,35 @@ export async function writeAssignments(issueId: string, assignments: Assignment[
  * entry. The series is reconstructed by the pure `readingsFromChangelog` reducer.
  * The field id is assigned when the KPI space is provisioned (Phase 5).
  */
-const READING_FIELD_ID = 'customfield_kpi_reading'; // TODO: real id from KPI-space provisioning
+/**
+ * The app-owned "KPI Reading" custom field (manifest `jira:customField` key
+ * `kpi-reading`). Its numeric `customfield_NNNNN` id is assigned at install per
+ * site, so resolve it once by matching the app field key/name, then cache it.
+ */
+let readingFieldIdCache: string | null = null;
+async function getReadingFieldId(): Promise<string> {
+  if (readingFieldIdCache) return readingFieldIdCache;
+  const res = await api.asApp().requestJira(route`/rest/api/3/field`);
+  const fields = (await res.json()) as Array<{ id: string; key?: string; name?: string }>;
+  const match = fields.find((f) => (f.key ?? '').includes('kpi-reading') || f.name === 'KPI Reading');
+  if (!match) {
+    throw new Error('KPI Reading field not found — deploy the app so its custom field is installed.');
+  }
+  readingFieldIdCache = match.id;
+  return match.id;
+}
 
 /** Record a reading on a KPI issue (value=null = tombstone/delete) by writing the encoded payload. */
 export async function writeReading(kpiIssueId: string, date: string, value: number | null): Promise<void> {
+  const fieldId = await getReadingFieldId();
   const encoded = encodeReadingValue(date, value);
-  await api.asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
+  // App-owned read-only field → must be written asApp.
+  await api.asApp().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields: { [READING_FIELD_ID]: encoded } }),
+    body: JSON.stringify({ fields: { [fieldId]: encoded } }),
   });
 }
-
 /**
  * Fetch the reading-field changelog for KPI issues via the bulk endpoint
  * (`POST /rest/api/3/changelog/bulkfetch`, filtered to the reading field). Up to
@@ -99,12 +118,13 @@ export async function writeReading(kpiIssueId: string, date: string, value: numb
 export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<string, ReadingChange[]>> {
   const byIssue = new Map<string, ReadingChange[]>();
   if (kpiIssueIds.length === 0) return byIssue;
+  const fieldId = await getReadingFieldId();
   const res = await api.asUser().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       issueIdsOrKeys: kpiIssueIds.slice(0, 1000),
-      fieldIds: [READING_FIELD_ID],
+      fieldIds: [fieldId],
       maxResults: 1000,
     }),
   });
@@ -122,7 +142,7 @@ export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<
   for (const log of data.issueChangeLogs ?? []) {
     const changes: ReadingChange[] = [];
     for (const h of log.changeHistories ?? []) {
-      const item = (h.items ?? []).find((i) => i.fieldId === READING_FIELD_ID || i.field === READING_FIELD_ID);
+      const item = (h.items ?? []).find((i) => i.fieldId === fieldId || i.field === fieldId);
       if (!item) continue;
       // Bulk API returns `created` as Unix seconds/ms; normalize to ms.
       const created =
@@ -266,5 +286,31 @@ export async function createKpiIssue(projectId: string, input: CreateKpiInput): 
     body: JSON.stringify({ fields }),
   });
   const created = (await res.json()) as { key: string };
+  // unit/direction are descriptive, low-churn → issue entity property (not a field).
+  await writeKpiMeta(created.key, {
+    unit: input.unit.trim(),
+    direction: input.direction ?? null,
+  });
   return created.key;
+}
+
+/** Persist a KPI's unit/direction as the `kpi-meta` entity property. */
+export async function writeKpiMeta(kpiIssueKey: string, meta: KpiMetaProperty): Promise<void> {
+  const value: unknown = KpiMetaProperty.parse(meta);
+  await api.asApp().requestJira(route`/rest/api/3/issue/${kpiIssueKey}/properties/${KPI_META_PROPERTY_KEY}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(value),
+  });
+}
+
+/** Read a KPI's unit/direction from the `kpi-meta` entity property (null if unset). */
+export async function fetchKpiMeta(kpiIssueId: string): Promise<KpiMetaProperty | null> {
+  const res = await api
+    .asUser()
+    .requestJira(route`/rest/api/3/issue/${kpiIssueId}/properties/${KPI_META_PROPERTY_KEY}`);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { value?: unknown };
+  const parsed = KpiMetaProperty.safeParse(body.value);
+  return parsed.success ? parsed.data : null;
 }

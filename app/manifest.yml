@@ -26,6 +26,15 @@ modules:
         - path: kpiIds
           type: text
           searchAlias: kpiIds
+  jira:customField:
+    - key: kpi-reading
+      name: KPI Reading
+      description: >-
+        Append-only KPI reading value (app-managed). Each recorded value is an
+        embedded-date entry; the reading series is reconstructed from this
+        field's changelog (storage-model.md, Option B).
+      type: string
+      readOnly: true
   function:
     - key: resolver
       handler: index.handler
