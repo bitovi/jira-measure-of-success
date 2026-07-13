@@ -10,6 +10,7 @@ import {
   createKpiSpace,
   getTimelineData,
   recordValue,
+  createKpi,
 } from './fixtures/mock-resolvers.js';
 
 /**
@@ -36,6 +37,7 @@ const resolvers: Record<string, Handler> = {
   // Timeline
   getTimelineData: () => getTimelineData(),
   recordValue: (p) => recordValue(p?.kpiId, p?.date, p?.value),
+  createKpi: (p) => createKpi(p),
 };
 
 export async function invoke<T = unknown>(key: string, payload?: unknown): Promise<T> {

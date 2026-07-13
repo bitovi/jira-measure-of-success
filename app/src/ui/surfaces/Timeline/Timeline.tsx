@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTimelineData, type UseTimeline } from '@ui/data/useTimelineData/index.js';
 import {
   quarterStartMs,
+  type CreateKpiInput,
+  type KpiDirection,
   type TimelineNodeDto,
   type TimelineReadingDto,
   type TimelineTargetDto,
@@ -42,10 +44,13 @@ function ms(iso: string): number {
 }
 
 export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline }) {
-  const { data, pending, error, record: recordValue } = useData();
+  const { data, pending, error, record: recordValue, createKpi } = useData();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [modalKpi, setModalKpi] = useState<TimelineNodeDto | null>(null);
+  const [creating, setCreating] = useState<{ parentKpiId: string | null; parentName?: string } | null>(
+    null,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const centeredRef = useRef(false);
 
@@ -111,18 +116,32 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
     setModalKpi(null);
   };
 
+  const submitCreate = (input: CreateKpiInput) => {
+    createKpi(input);
+    setCreating(null);
+  };
+
   if (error) return <div className="p-6 text-danger">Failed to load timeline: {error}</div>;
   if (pending || !data) return <div className="p-6 text-text-subtle">Loading timeline…</div>;
-  if (flat.length === 0) return <div className="p-6 text-text-subtle">No KPIs to show yet.</div>;
 
   return (
     <div className="p-6 text-text">
-      <h1 className="text-2xl font-semibold">KPI Timeline</h1>
-      <p className="mt-1 max-w-2xl text-sm text-text-subtle">
-        The KPI tree as a nested plan. Each KPI shows recorded values as a sparkline; diamonds mark
-        targets. Click a row's track to reveal the issues behind its targets; use + to record a value.
-        Scroll horizontally to pan across quarters.
-      </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">KPI Timeline</h1>
+          <p className="mt-1 max-w-2xl text-sm text-text-subtle">
+            The KPI tree as a nested plan. Each KPI shows recorded values as a sparkline; diamonds
+            mark targets. Click a row's track to reveal the issues behind its targets; use + to
+            record a value. Scroll horizontally to pan across quarters.
+          </p>
+        </div>
+        <button
+          className="mt-1 flex-none rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
+          onClick={() => setCreating({ parentKpiId: null })}
+        >
+          + Add KPI
+        </button>
+      </div>
 
       <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
         <div ref={scrollRef} className="overflow-x-auto">
@@ -149,20 +168,27 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
             </div>
 
             {/* Data rows */}
-            {flat.map(({ node, hasChildren }) => (
-              <TimelineRow
-                key={node.id}
-                node={node}
-                hasChildren={hasChildren}
-                collapsed={collapsed.has(node.id)}
-                expanded={expanded.has(node.id)}
-                axis={axis}
-                today={data.today}
-                onToggleCollapse={() => toggleCollapse(node.id)}
-                onToggleExpand={() => toggleExpand(node.id)}
-                onRecord={() => setModalKpi(node)}
-              />
-            ))}
+            {flat.length === 0 ? (
+              <div className="px-3 py-6 text-sm text-text-subtle">
+                No KPIs yet — use <strong className="text-text">+ Add KPI</strong> to create your first one.
+              </div>
+            ) : (
+              flat.map(({ node, hasChildren }) => (
+                <TimelineRow
+                  key={node.id}
+                  node={node}
+                  hasChildren={hasChildren}
+                  collapsed={collapsed.has(node.id)}
+                  expanded={expanded.has(node.id)}
+                  axis={axis}
+                  today={data.today}
+                  onToggleCollapse={() => toggleCollapse(node.id)}
+                  onToggleExpand={() => toggleExpand(node.id)}
+                  onRecord={() => setModalKpi(node)}
+                  onAddChild={() => setCreating({ parentKpiId: node.kpiId, parentName: node.name })}
+                />
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -178,6 +204,16 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
           defaultDate={data.today}
           onCancel={() => setModalKpi(null)}
           onRecord={(date, value) => record(modalKpi.kpiId, date, value)}
+        />
+      )}
+
+      {creating && (
+        <CreateKpiModal
+          parentName={creating.parentName}
+          onCancel={() => setCreating(null)}
+          onCreate={({ name, unit, direction }) =>
+            submitCreate({ name, unit, direction, parentKpiId: creating.parentKpiId })
+          }
         />
       )}
     </div>
@@ -215,6 +251,7 @@ function TimelineRow({
   onToggleCollapse,
   onToggleExpand,
   onRecord,
+  onAddChild,
 }: {
   node: TimelineNodeDto;
   hasChildren: boolean;
@@ -225,6 +262,7 @@ function TimelineRow({
   onToggleCollapse: () => void;
   onToggleExpand: () => void;
   onRecord: () => void;
+  onAddChild: () => void;
 }) {
   const dom = domainFor(node);
   const rowH = expanded ? ROW_H_EXPANDED : ROW_H;
@@ -265,6 +303,14 @@ function TimelineRow({
         )}
         <button
           className="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded border border-border text-text-subtle hover:border-brand hover:text-brand"
+          onClick={onAddChild}
+          aria-label="Add child KPI"
+          title="Add a child KPI"
+        >
+          <span className="text-[13px] leading-none">⤵</span>
+        </button>
+        <button
+          className="grid h-[22px] w-[22px] flex-none place-items-center rounded border border-border text-text-subtle hover:border-brand hover:text-brand"
           onClick={onRecord}
           aria-label="Record a value"
           title="Record a value"
@@ -499,6 +545,112 @@ function RecordModal({
             onClick={submit}
           >
             Record
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CreateKpiModal({
+  parentName,
+  onCancel,
+  onCreate,
+}: {
+  parentName?: string;
+  onCancel: () => void;
+  onCreate: (input: { name: string; unit: string; direction: KpiDirection | null }) => void;
+}) {
+  const [name, setName] = useState('');
+  const [unit, setUnit] = useState('');
+  const [direction, setDirection] = useState<'increase' | 'decrease' | 'none'>('increase');
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+
+  const submit = () => {
+    if (name.trim() === '') return;
+    onCreate({
+      name: name.trim(),
+      unit: unit.trim(),
+      direction: direction === 'none' ? null : direction,
+    });
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(9,30,66,0.54)]"
+      onClick={onCancel}
+    >
+      <div
+        className="w-[380px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg bg-surface shadow-xl"
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 pb-1 pt-4">
+          <h2 className="text-base font-semibold">New KPI</h2>
+          <p className="mt-1 text-xs text-text-subtle">
+            {parentName ? (
+              <>
+                Nested under <strong className="text-text">{parentName}</strong>
+              </>
+            ) : (
+              'A new top-level KPI'
+            )}
+          </p>
+        </div>
+        <div className="flex flex-col gap-3 px-5 py-3">
+          <label className="text-xs text-text-subtle">
+            Name
+            <input
+              className="mt-0.5 w-full rounded border border-border px-2 py-1.5 text-sm"
+              value={name}
+              placeholder="e.g. Revenue"
+              autoFocus
+              aria-label="KPI name"
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <label className="text-xs text-text-subtle">
+            Unit
+            <input
+              className="mt-0.5 w-full rounded border border-border px-2 py-1.5 text-sm"
+              value={unit}
+              placeholder="e.g. USD"
+              aria-label="KPI unit"
+              onChange={(e) => setUnit(e.target.value)}
+            />
+          </label>
+          <label className="text-xs text-text-subtle">
+            Direction
+            <select
+              className="mt-0.5 w-full rounded border border-border bg-surface px-2 py-1.5 text-sm"
+              value={direction}
+              aria-label="KPI direction"
+              onChange={(e) => setDirection(e.target.value as 'increase' | 'decrease' | 'none')}
+            >
+              <option value="increase">Higher is better</option>
+              <option value="decrease">Lower is better</option>
+              <option value="none">No direction</option>
+            </select>
+          </label>
+        </div>
+        <div className="flex justify-end gap-2 px-5 pb-4 pt-3">
+          <button className="rounded border border-border px-3 py-1.5 text-sm" onClick={onCancel}>
+            Cancel
+          </button>
+          <button
+            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
+            onClick={submit}
+            disabled={name.trim() === ''}
+          >
+            Create KPI
           </button>
         </div>
       </div>

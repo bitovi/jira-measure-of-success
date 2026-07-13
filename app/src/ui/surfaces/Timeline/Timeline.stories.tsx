@@ -65,6 +65,7 @@ function stub(over: Partial<TimelineController>): UseTimeline {
     pending: over.pending ?? false,
     error: over.error ?? null,
     record: over.record ?? (() => {}),
+    createKpi: over.createKpi ?? (() => {}),
   });
 }
 
@@ -95,7 +96,10 @@ export const NoReadings: Story = {
 export const EmptyTree: Story = {
   args: { useData: stub({ data: { today: '2026-07-10', roots: [] } }) },
   play: async ({ canvasElement }) => {
-    await expect(within(canvasElement).getByText(/No KPIs to show yet/i)).toBeInTheDocument();
+    const c = within(canvasElement);
+    await expect(c.getByText(/No KPIs yet/i)).toBeInTheDocument();
+    // Add KPI is available even with an empty tree.
+    await expect(c.getByRole('button', { name: /Add KPI/i })).toBeInTheDocument();
   },
 };
 
@@ -125,5 +129,44 @@ export const RecordValue: Story = {
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
     await waitFor(() => expect(recordSpy).toHaveBeenCalledTimes(1));
+  },
+};
+
+/** Interaction: "+ Add KPI" opens the create modal and Create calls the loader (root KPI). */
+const createSpy = fn();
+export const AddKpi: Story = {
+  args: { useData: stub({ data: POPULATED, createKpi: createSpy }) },
+  play: async ({ canvasElement }) => {
+    createSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
+    const dialog = within(await c.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Net Revenue');
+    await userEvent.type(dialog.getByLabelText('KPI unit'), 'USD');
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    await waitFor(() =>
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Net Revenue', unit: 'USD', parentKpiId: null }),
+      ),
+    );
+  },
+};
+
+/** Interaction: a row's add-child button nests the new KPI under that KPI. */
+const createChildSpy = fn();
+export const AddChildKpi: Story = {
+  args: { useData: stub({ data: POPULATED, createKpi: createChildSpy }) },
+  play: async ({ canvasElement }) => {
+    createChildSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Add child KPI' })[0]);
+    const dialog = within(await c.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Sub Metric');
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    await waitFor(() =>
+      expect(createChildSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Sub Metric', parentKpiId: 'revenue' }),
+      ),
+    );
   },
 };

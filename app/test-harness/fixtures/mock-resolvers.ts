@@ -8,6 +8,7 @@ import {
   resolveRelativeTargetDate,
   targetStatus,
   type CatalogEntryDto,
+  type CreateKpiInput,
   type KpiSpaceStatus,
   type PanelData,
   type PanelRowDto,
@@ -251,5 +252,47 @@ export function recordValue(kpiId: string, date: string, value: number | null): 
   const log = readingChangelog.get(kpiId) ?? [];
   log.push({ created: Date.now(), to: encodeReadingValue(date, value), by: 'acc-jm' });
   readingChangelog.set(kpiId, log);
+  return getTimelineData();
+}
+
+function findKpiNode(nodes: KpiTreeNode[], kpiId: string): KpiTreeNode | undefined {
+  for (const n of nodes) {
+    if (n.kpiId === kpiId) return n;
+    const found = n.children && findKpiNode(n.children, kpiId);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function slugifyKpi(name: string): string {
+  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'kpi';
+}
+
+function uniqueKpiId(base: string): string {
+  let id = base;
+  let n = 2;
+  while (findKpiNode(kpiTree, id)) id = `${base}-${n++}`;
+  return id;
+}
+
+/**
+ * Create a KPI (an issue in the KPI space). Appends a new tree node at the root
+ * or under `parentKpiId`, with an empty reading changelog. Returns the timeline.
+ */
+export function createKpi(input: CreateKpiInput): TimelineData {
+  const kpiId = uniqueKpiId(slugifyKpi(input.name));
+  const node: KpiTreeNode = {
+    kpiId,
+    name: input.name.trim() || 'Untitled KPI',
+    unit: input.unit.trim(),
+    direction: input.direction ?? null,
+    targets: [],
+    readings: [],
+    children: [],
+  };
+  readingChangelog.set(kpiId, []);
+  const parent = input.parentKpiId ? findKpiNode(kpiTree, input.parentKpiId) : undefined;
+  if (parent) (parent.children ??= []).push(node);
+  else kpiTree.push(node);
   return getTimelineData();
 }

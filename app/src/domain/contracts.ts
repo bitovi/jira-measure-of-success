@@ -95,3 +95,12 @@ export interface KpiSpaceStatus {
   name: string | null;
   state: KpiSpaceState;
 }
+
+/** Input for creating a KPI (an issue in the KPI space). Nest by parentKpiId. */
+export interface CreateKpiInput {
+  name: string;
+  unit: string;
+  direction: KpiDirection | null;
+  /** parent KPI to nest under; null/omitted = a root KPI */
+  parentKpiId?: string | null;
+}

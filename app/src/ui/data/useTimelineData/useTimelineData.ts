@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { call } from '@ui/bridge.js';
-import type { TimelineData } from '@domain/index.js';
+import type { CreateKpiInput, TimelineData } from '@domain/index.js';
 
 /**
  * Injectable loader hook for the Timeline (see usePanelData.ts for the pattern).
@@ -10,6 +10,8 @@ export interface TimelineController {
   pending: boolean;
   error: string | null;
   record(kpiId: string, date: string, value: number): void;
+  /** create a KPI (root or nested under parentKpiId) */
+  createKpi(input: CreateKpiInput): void;
 }
 
 export type UseTimeline = () => TimelineController;
@@ -32,10 +34,15 @@ export const useTimelineData: UseTimeline = () => {
     setData(await call<TimelineData>('recordValue', { kpiId, date, value }));
   };
 
+  const createKpi = async (input: CreateKpiInput) => {
+    setData(await call<TimelineData>('createKpi', input));
+  };
+
   return {
     data,
     pending: data === null && error === null,
     error,
     record: (kpiId, date, value) => void record(kpiId, date, value),
+    createKpi: (input) => void createKpi(input),
   };
 };

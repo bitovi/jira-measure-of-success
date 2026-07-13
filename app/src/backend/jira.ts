@@ -3,6 +3,7 @@ import {
   AssignmentProperty,
   encodeReadingValue,
   type Assignment,
+  type CreateKpiInput,
   type ReadingChange,
   type TimingNode,
 } from '../domain/index';
@@ -242,4 +243,28 @@ export async function createKpiProject(key: string): Promise<{ id: string; name:
   });
   const p = (await res.json()) as { id: string | number };
   return { id: String(p.id), name };
+}
+
+/** KPI-space issue-type name that KPI issues are created as. */
+const KPI_ISSUE_TYPE = 'KPI';
+
+/**
+ * Create a KPI as an issue in the KPI space. Nesting under `parentKpiId` uses the
+ * issue parent field. NOTE: unit/direction persist to the app-only KPI fields
+ * provisioned on the live site (Phase 5); summary carries the name today.
+ */
+export async function createKpiIssue(projectId: string, input: CreateKpiInput): Promise<string> {
+  const fields: Record<string, unknown> = {
+    project: { id: projectId },
+    issuetype: { name: KPI_ISSUE_TYPE },
+    summary: input.name.trim() || 'Untitled KPI',
+  };
+  if (input.parentKpiId) fields.parent = { key: input.parentKpiId };
+  const res = await api.asApp().requestJira(route`/rest/api/3/issue`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields }),
+  });
+  const created = (await res.json()) as { key: string };
+  return created.key;
 }

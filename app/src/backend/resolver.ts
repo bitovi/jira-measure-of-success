@@ -7,6 +7,7 @@ import {
   resolveRelativeTargetDate,
   type Assignment,
   type CatalogEntryDto,
+  type CreateKpiInput,
   type KpiSpaceStatus,
   type PanelData,
   type PanelRowDto,
@@ -20,6 +21,7 @@ import {
   fetchIssueMeta,
   fetchSubtreeTimingNodes,
   findProjectByKey,
+  createKpiIssue,
   createKpiProject,
   writeAssignments,
   writeReading,
@@ -161,7 +163,6 @@ resolver.define('createKpiSpace', async ({ payload }) => {
 // The timeline aggregates across many issues, which requires a project-scoped
 // enumeration wired during the Forge integration pass (Phase 5).
 resolver.define('getTimelineData', async () => ({ today: new Date().toISOString().slice(0, 10), roots: [] }) satisfies TimelineData);
-
 resolver.define('recordValue', async ({ payload }) => {
   const { kpiId, date, value } = payload as {
     kpiId: string;
@@ -172,6 +173,14 @@ resolver.define('recordValue', async ({ payload }) => {
   // whose reading-field changelog holds the series. value=null tombstones a date.
   await writeReading(kpiId, date, value);
   return { ok: true };
+});
+
+resolver.define('createKpi', async ({ payload }) => {
+  const input = payload as CreateKpiInput;
+  const space = await readKpiSpaceConfig();
+  if (!space.projectId) throw new Error('KPI space is not set up — configure it in Settings first.');
+  const kpiKey = await createKpiIssue(space.projectId, input);
+  return { ok: true, kpiKey };
 });
 
 export const handler = resolver.getDefinitions();
