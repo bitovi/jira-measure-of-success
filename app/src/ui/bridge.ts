@@ -60,17 +60,71 @@ export async function openKpiSettings(): Promise<void> {
 }
 
 /**
- * Deep link to a KPI's Jira issue (`/browse/{issueKey}`). KPIs are Jira issues
- * of type KPI in the KPI space, so the timeline can navigate straight to the
- * underlying issue. No-ops (with a warning) on an empty key so a KPI without a
- * resolvable issue key doesn't produce a broken navigation. Router access stays
- * behind this seam so stories/tests (which alias `@forge/bridge` to the mock
- * bridge) don't hit the real runtime.
+ * Deep link to the KPI Timeline global page (`jira:globalPage`, module key
+ * `kpi-timeline-page`). The URL is `/jira/apps/{appId}/{environmentId}` where
+ * both ids are derived at runtime from the bridge context `localId` ARI — the
+ * same mechanism as `openKpiSettings`. Router/context access stays behind this
+ * seam so stories/tests (which alias `@forge/bridge` to the mock bridge) don't
+ * hit the real runtime.
+ */
+export async function openKpiTimeline(): Promise<void> {
+  const ctx = await view.getContext();
+  const parsed = parseAppEnv((ctx as { localId?: string })?.localId ?? '');
+  if (!parsed) {
+    console.warn(
+      '[openKpiTimeline] could not derive appId/environmentId from context localId; skipping navigation',
+    );
+    return;
+  }
+  await router.navigate(`/jira/apps/${parsed.appId}/${parsed.environmentId}`);
+}
+
+/**
+ * Deep link to a KPI's Jira issue. KPIs are Jira issues of type KPI in the KPI
+ * space, so the timeline can navigate straight to the underlying issue. Uses the
+ * typed Forge navigation target (`{ target: 'issue', issueKey }`) rather than a
+ * relative `/browse/{key}` URL string: inside the Custom UI iframe (and under
+ * `forge tunnel`, served from `localhost`) a bare relative URL resolves against
+ * the iframe origin instead of the Jira site, sending users to
+ * `http://localhost:8001/browse/{key}`. The typed target always routes the host
+ * Jira app to the correct site. No-ops (with a warning) on an empty key. Router
+ * access stays behind this seam so stories/tests (which alias `@forge/bridge` to
+ * the mock bridge) don't hit the real runtime.
  */
 export async function openIssue(issueKey: string): Promise<void> {
   if (!issueKey) {
     console.warn('[openIssue] missing issueKey; skipping navigation');
     return;
   }
-  await router.navigate(`/browse/${issueKey}`);
+  await router.navigate({ target: 'issue', issueKey });
+}
+
+/**
+ * Open a work/KPI issue in a NEW browser tab, leaving the timeline in place.
+ * Uses the Forge router's `open` (new tab) rather than `navigate` (same tab).
+ * A relative `/browse/{key}` passed to `router.open` resolves against the Jira
+ * product (not the Custom UI iframe origin), so it lands on the correct site.
+ * No-ops (with a warning) on an empty key. Router access stays behind this seam
+ * so stories/tests (which alias `@forge/bridge` to the mock bridge) don't hit
+ * the real runtime.
+ */
+export async function openIssueNewTab(issueKey: string): Promise<void> {
+  if (!issueKey) {
+    console.warn('[openIssueNewTab] missing issueKey; skipping navigation');
+    return;
+  }
+  await router.open(`/browse/${issueKey}`);
+}
+
+/**
+ * The base URL of the Jira site this app is installed on (e.g.
+ * `https://your-site.atlassian.net`), read from the Forge bridge context. Used
+ * to build absolute `/browse/{key}` links so hover, middle-click and copy-link
+ * point at the real site rather than the Custom UI iframe origin. Returns `''`
+ * when unavailable (e.g. the harness/mock context) so callers fall back to a
+ * relative href.
+ */
+export async function getSiteUrl(): Promise<string> {
+  const ctx = await view.getContext();
+  return (ctx as { siteUrl?: string })?.siteUrl ?? '';
 }

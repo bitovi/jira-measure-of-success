@@ -12,6 +12,7 @@ import {
   fetchKpiSpaceIssues,
   fetchReadingChangelog,
   fetchSubtreeTimingNodes,
+  fetchTargetContributions,
   findProjectByKey,
   writeAssignments,
   KPI_ISSUE_TYPE,
@@ -221,6 +222,23 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     expect(read).toHaveLength(1);
     expect(read[0].kpiId).toBe(ctx.rootKey);
     expect(read[0].target).toBe(100);
+  });
+
+  it('fetchTargetContributions → discovers the targeted issue via the kpiIds index', async () => {
+    expect(ctx.rootKey, 'requires the writeAssignments round-trip to have run').toBeTruthy();
+    // The denormalized `kpiIds` search index (written by writeAssignments) trails
+    // the property write by a few seconds, so poll the `IS NOT EMPTY` query until
+    // the issue we just targeted shows up.
+    const contributions = await pollFor(
+      () => fetchTargetContributions(),
+      (c) => c.issues.some((i) => i.issueKey === ctx.rootKey),
+    );
+    const mine = contributions.issues.find((i) => i.issueKey === ctx.rootKey);
+    expect(mine, `issue ${ctx.rootKey} not surfaced by the kpiIds IS NOT EMPTY search`).toBeTruthy();
+    expect(
+      mine!.assignments.some((a) => a.kpiId === ctx.rootKey && a.target === 100),
+      'the discovered issue should carry the target we wrote',
+    ).toBe(true);
   });
 
   it('fetchReadingChangelog → reaches the bulk changelog endpoint', async () => {

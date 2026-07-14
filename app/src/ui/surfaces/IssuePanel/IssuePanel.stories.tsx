@@ -68,6 +68,8 @@ const PENDING_DATE: PanelData = {
 
 const EMPTY: PanelData = { issueKey: 'STORY-1', catalog: CATALOG, rows: [] };
 
+const NO_CATALOG: PanelData = { issueKey: 'STORY-1', catalog: [], rows: [] };
+
 /** Build a stub loader hook returning a fixed controller. */
 function stub(over: Partial<PanelController> & { data: PanelData | null }): UsePanel {
   return () => ({
@@ -104,6 +106,16 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     await expect(c.getByText(/No KPIs tracked/i)).toBeInTheDocument();
+  },
+};
+
+export const NoCatalog: Story = {
+  args: { usePanel: stub({ data: NO_CATALOG }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText(/KPIs are not defined yet/i)).toBeInTheDocument();
+    await expect(c.queryByText('Associate a KPI')).not.toBeInTheDocument();
+    await expect(c.getByRole('button', { name: /define a KPI/i })).toBeInTheDocument();
   },
 };
 

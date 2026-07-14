@@ -11,6 +11,8 @@ import {
   getTimelineData,
   recordValue,
   createKpi,
+  searchIssues,
+  addTarget,
 } from './fixtures/mock-resolvers.js';
 
 /**
@@ -38,6 +40,8 @@ const resolvers: Record<string, Handler> = {
   getTimelineData: () => getTimelineData(),
   recordValue: (p) => recordValue(p?.kpiId, p?.date, p?.value),
   createKpi: (p) => createKpi(p),
+  searchIssues: (p) => searchIssues(p?.query ?? ''),
+  addTarget: (p) => addTarget(p),
 };
 
 export async function invoke<T = unknown>(key: string, payload?: unknown): Promise<T> {
@@ -59,6 +63,7 @@ export async function requestJira(route: string): Promise<Response> {
 export const view = {
   getContext: async () => ({
     extension: { issue: { id: '10048', key: 'INIT-48' } },
+    siteUrl: 'https://example.atlassian.net',
     localId:
       'ari:cloud:ecosystem::extension/f92bb5d3-136d-4f6d-9245-fc31f4e8fdec/69a5cdec-507a-4dbe-a84f-0f37b35c1e3e/static/kpi-timeline-page',
   }),
@@ -66,7 +71,7 @@ export const view = {
 };
 
 export const router = {
-  open: (url: string) => console.info('[mock-bridge] open', url),
-  navigate: async (url: string) => console.info('[mock-bridge] navigate', url),
+  open: (url: unknown) => console.info('[mock-bridge] open', url),
+  navigate: async (url: unknown) => console.info('[mock-bridge] navigate', url),
 };
 export const showFlag = (opts: unknown) => console.info('[mock-bridge] flag', opts);

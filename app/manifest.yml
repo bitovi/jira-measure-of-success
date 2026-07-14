@@ -63,6 +63,13 @@ permissions:
     # provision/associate the `KPI` issue type + scheme.
     - manage:jira-project
     - manage:jira-configuration
+  # The timeline tooltip renders the contributing issue's TYPE icon, served from
+  # the Jira site (issuetype.iconUrl / issue-picker `img`). Custom UI must be
+  # allowed to load those images.
+  external:
+    images:
+      - 'https://*.atlassian.net'
+      - 'https://api.atlassian.com'
 
 app:
   runtime:

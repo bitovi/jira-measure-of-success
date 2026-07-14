@@ -9,6 +9,7 @@ import {
   type Assignment,
   type CreateKpiInput,
   type IssueLinkRef,
+  type IssuePickerItem,
   type ReadingChange,
   type TimingNode,
 } from '../domain/index';
@@ -66,7 +67,14 @@ export async function fetchAssignments(issueId: string): Promise<Assignment[]> {
 
 /** Persist the full assignment list for an issue (batched single write). */
 export async function writeAssignments(issueId: string, assignments: Assignment[]): Promise<void> {
-  const value: unknown = AssignmentProperty.parse({ assignments });
+  // Also persist a denormalized `kpiIds` list: the manifest indexes
+  // `kpi-assignments` → `kpiIds` (searchAlias), and that index is what the
+  // timeline uses to find which issues target a given KPI. Without writing it
+  // the index stays empty and no targets are ever discovered.
+  const value: unknown = AssignmentProperty.parse({
+    assignments,
+    kpiIds: [...new Set(assignments.map((a) => a.kpiId))],
+  });
   await api
     .asUser()
     .requestJira(route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`, {
@@ -74,6 +82,40 @@ export async function writeAssignments(issueId: string, assignments: Assignment[
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(value),
     });
+}
+
+/**
+ * Type-ahead issue search for the Add Target picker — Jira's issue-picker
+ * endpoint (`GET /rest/api/3/issue/picker`), the same source the native Parent
+ * field uses. Returns matched issues across its sections (recents + query),
+ * de-duplicated by key. The endpoint omits issue type, so `issueType` is null.
+ */
+export async function searchIssuePicker(query: string): Promise<IssuePickerItem[]> {
+  const res = await api
+    .asUser()
+    .requestJira(route`/rest/api/3/issue/picker?query=${query}`);
+  if (!res.ok) return [];
+  const data = (await res.json()) as {
+    sections?: Array<{
+      issues?: Array<{ id: number | string; key: string; summaryText?: string; img?: string }>;
+    }>;
+  };
+  const seen = new Set<string>();
+  const out: IssuePickerItem[] = [];
+  for (const section of data.sections ?? []) {
+    for (const issue of section.issues ?? []) {
+      if (seen.has(issue.key)) continue;
+      seen.add(issue.key);
+      out.push({
+        id: String(issue.id),
+        key: issue.key,
+        summary: issue.summaryText ?? issue.key,
+        issueType: null,
+        iconUrl: issue.img ?? null,
+      });
+    }
+  }
+  return out;
 }
 
 /**
@@ -300,6 +342,130 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
     rank: r.rank,
   }));
 }
+
+/** One contributing issue's KPI targets, plus the fields needed to place them. */
+export interface IssueTargetContributions {
+  issueId: string;
+  issueKey: string;
+  issueTypeName: string;
+  /** issue type icon URL (Jira `issuetype.iconUrl`), when available */
+  issueTypeIconUrl: string | null;
+  title: string;
+  /** the issue's own due date — anchor for `issueDueDate` relative timing */
+  ownDue: string | null;
+  parentId: string | null;
+  assignments: Assignment[];
+}
+
+export interface TargetContributions {
+  issues: IssueTargetContributions[];
+  /** parentId → parent's key + own due, for resolving `parentDueDate` anchors */
+  parentById: Map<string, { key: string; due: string | null }>;
+}
+
+/** JQL that finds every issue carrying a KPI target, via the denormalized index. */
+const ASSIGNMENT_INDEX_JQL = 'issue.property[kpi-assignments].kpiIds IS NOT EMPTY';
+
+/**
+ * Discover every issue that has authored a KPI target — in ONE JQL query against
+ * the denormalized `kpiIds` search index (`issue.property[kpi-assignments].kpiIds
+ * IS NOT EMPTY`), then read each issue's assignments and let the caller group
+ * them by KPI in memory. This deliberately avoids a per-KPI query fan-out.
+ *
+ * Caveat: only finds issues SAVED AFTER the `kpiIds` index was populated
+ * (writeAssignments) — assignments written before that must be re-saved or
+ * backfilled once. See specs/bug-fixes/timeline-targets-not-shown.md.
+ *
+ * Live-only: exercised via `forge tunnel` / `npm run test:e2e`; the mock harness
+ * bakes targets into fixtures instead. Non-throwing — a failed search yields no
+ * targets rather than crashing the timeline.
+ */
+export async function fetchTargetContributions(): Promise<TargetContributions> {
+  const fieldList = ['summary', 'issuetype', 'parent', 'duedate'].join(',');
+  interface Raw {
+    id: string;
+    key: string;
+    issueTypeName: string;
+    issueTypeIconUrl: string | null;
+    title: string;
+    ownDue: string | null;
+    parentId: string | null;
+  }
+  const raw: Raw[] = [];
+  let nextPageToken: string | undefined;
+  for (let page = 0; page < 50; page += 1) {
+    const res = await api
+      .asUser()
+      .requestJira(
+        nextPageToken
+          ? route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&maxResults=100&nextPageToken=${nextPageToken}`
+          : route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&maxResults=100`,
+      );
+    if (!res.ok) break;
+    const data = (await res.json()) as {
+      isLast?: boolean;
+      nextPageToken?: string;
+      issues?: Array<{
+        id: string;
+        key: string;
+        fields?: {
+          summary?: string;
+          duedate?: string | null;
+          issuetype?: { name?: string; iconUrl?: string };
+          parent?: { id?: string | number };
+        };
+      }>;
+    };
+    const batch = data.issues ?? [];
+    for (const i of batch) {
+      raw.push({
+        id: String(i.id),
+        key: i.key,
+        issueTypeName: i.fields?.issuetype?.name ?? 'Unknown',
+        issueTypeIconUrl: i.fields?.issuetype?.iconUrl ?? null,
+        title: i.fields?.summary ?? i.key,
+        ownDue: i.fields?.duedate ?? null,
+        parentId: i.fields?.parent?.id != null ? String(i.fields.parent.id) : null,
+      });
+    }
+    if (data.isLast || !data.nextPageToken || batch.length === 0) break;
+    nextPageToken = data.nextPageToken;
+  }
+
+  // Read each contributing issue's assignments (the `kpi-assignments` property).
+  const assignmentsByIssue = await Promise.all(raw.map((r) => fetchAssignments(r.id)));
+  const issues: IssueTargetContributions[] = raw.map((r, idx) => ({
+    issueId: r.id,
+    issueKey: r.key,
+    issueTypeName: r.issueTypeName,
+    issueTypeIconUrl: r.issueTypeIconUrl,
+    title: r.title,
+    ownDue: r.ownDue,
+    parentId: r.parentId,
+    assignments: assignmentsByIssue[idx],
+  }));
+
+  // Resolve each distinct parent's OWN due (for `parentDueDate` anchors),
+  // reusing dates already fetched as contributing issues before re-querying Jira.
+  const ownById = new Map(raw.map((r) => [r.id, { key: r.key, due: r.ownDue }]));
+  const parentById = new Map<string, { key: string; due: string | null }>();
+  const toFetch: string[] = [];
+  for (const pid of new Set(raw.map((r) => r.parentId).filter((p): p is string => p !== null))) {
+    const known = ownById.get(pid);
+    if (known) parentById.set(pid, known);
+    else toFetch.push(pid);
+  }
+  const fetched = await Promise.all(
+    toFetch.map(async (pid) => {
+      const meta = await fetchIssueMeta(pid);
+      return [pid, { key: meta.issueKey, due: meta.ownDueDate }] as const;
+    }),
+  );
+  for (const [pid, info] of fetched) parentById.set(pid, info);
+
+  return { issues, parentById };
+}
+
 
 /**
  * Build the timing-node map for the subtree rooted at `issueId` (its own dates

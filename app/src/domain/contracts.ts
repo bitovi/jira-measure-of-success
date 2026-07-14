@@ -37,7 +37,7 @@ export interface CatalogEntryDto {
   id: string;
   name: string;
   unit: string;
-  direction: KpiDirection;
+  direction: KpiDirection | null;
 }
 
 export interface PanelData {
@@ -55,7 +55,7 @@ export interface TimelineTargetDto {
   date: string;
   value: number;
   status: TargetStatus;
-  source: { issue: string; type: string; title: string };
+  source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 
 export interface TimelineReadingDto {
@@ -106,4 +106,38 @@ export interface CreateKpiInput {
   direction: KpiDirection | null;
   /** parent KPI to nest under; null/omitted = a root KPI */
   parentKpiId?: string | null;
+}
+
+// ── Add target (issue picker) ────────────────────────────────────────────────
+/**
+ * A candidate contributing issue for the Add Target picker — a type-ahead over
+ * Jira's issue-picker endpoint (`GET /rest/api/3/issue/picker`), the same source
+ * the native Parent field uses.
+ */
+export interface IssuePickerItem {
+  id: string;
+  key: string;
+  summary: string;
+  /** issue type display name when known (Jira's picker endpoint omits it) */
+  issueType: string | null;
+  /** issue type icon URL (Jira's picker `img`), when available */
+  iconUrl: string | null;
+}
+
+/**
+ * Input for adding a target to a KPI. A target is held as an assignment on a
+ * contributing work issue (kpi-assignments), due on an absolute date — so the
+ * picker chooses the issue that owns the target.
+ */
+export interface AddTargetInput {
+  kpiId: string;
+  issueId: string;
+  issueKey: string;
+  issueType: string | null;
+  /** issue type icon URL, when available */
+  issueTypeIconUrl: string | null;
+  issueSummary: string;
+  /** ISO date the target is due */
+  date: string;
+  value: number;
 }

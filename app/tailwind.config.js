@@ -17,6 +17,7 @@ export default {
         'text-subtle': 'var(--ds-text-subtle, #626f86)',
         brand: 'var(--ds-background-brand-bold, #1868db)',
         success: 'var(--ds-text-success, #216e4e)',
+        warning: 'var(--ds-text-warning, #a54800)',
         danger: 'var(--ds-text-danger, #ae2e24)',
       },
     },

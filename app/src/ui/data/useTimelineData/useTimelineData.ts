@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { call } from '@ui/bridge.js';
-import type { CreateKpiInput, TimelineData } from '@domain/index.js';
+import type { AddTargetInput, CreateKpiInput, IssuePickerItem, TimelineData } from '@domain/index.js';
 
 /**
  * A mutation (record / createKpi) failure, surfaced as inline, dismissible
@@ -32,9 +32,14 @@ export interface TimelineController {
   actionError: TimelineActionError | null;
   /** Dismiss the current mutation error. */
   clearActionError(): void;
-  record(kpiId: string, date: string, value: number): void;
+  /** Record a value at a date. Pass `null` to delete (tombstone) that date. */
+  record(kpiId: string, date: string, value: number | null): void;
   /** create a KPI (root or nested under parentKpiId) */
   createKpi(input: CreateKpiInput): void;
+  /** Type-ahead search for a contributing issue (Add Target picker). */
+  searchIssues(query: string): Promise<IssuePickerItem[]>;
+  /** Add a target for a KPI, held on the chosen contributing issue. */
+  addTarget(input: AddTargetInput): void;
 }
 
 export type UseTimeline = () => TimelineController;
@@ -54,7 +59,7 @@ export const useTimelineData: UseTimeline = () => {
     };
   }, []);
 
-  const record = async (kpiId: string, date: string, value: number) => {
+  const record = async (kpiId: string, date: string, value: number | null) => {
     try {
       setActionError(null);
       setData(await call<TimelineData>('recordValue', { kpiId, date, value }));
@@ -72,6 +77,18 @@ export const useTimelineData: UseTimeline = () => {
     }
   };
 
+  const searchIssues = (query: string) =>
+    call<IssuePickerItem[]>('searchIssues', { query });
+
+  const addTarget = async (input: AddTargetInput) => {
+    try {
+      setActionError(null);
+      setData(await call<TimelineData>('addTarget', input));
+    } catch (e) {
+      setActionError(toActionError(e));
+    }
+  };
+
   return {
     data,
     pending: data === null && error === null,
@@ -80,5 +97,7 @@ export const useTimelineData: UseTimeline = () => {
     clearActionError: () => setActionError(null),
     record: (kpiId, date, value) => void record(kpiId, date, value),
     createKpi: (input) => void createKpi(input),
+    searchIssues,
+    addTarget: (input) => void addTarget(input),
   };
 };

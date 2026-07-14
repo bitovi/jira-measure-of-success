@@ -5,6 +5,7 @@ export * from './resolve/effectiveTiming';
 export * from './resolve/resolveConfig';
 export * from './resolve/relativeTargetDate';
 export * from './resolve/targetStatus';
+export * from './resolve/timelineTargets';
 export * from './resolve/panelGrouping';
 export * from './resolve/timelineAxis';
 export * from './resolve/readingSeries';

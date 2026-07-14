@@ -7,8 +7,10 @@ import {
   readingsFromChangelog,
   resolveRelativeTargetDate,
   targetStatus,
+  type AddTargetInput,
   type CatalogEntryDto,
   type CreateKpiInput,
+  type IssuePickerItem,
   type KpiSpaceStatus,
   type PanelData,
   type PanelRowDto,
@@ -28,6 +30,7 @@ import {
   KPI_TREE,
   ROLLUP_CONFIG,
   issueById,
+  issueTypeIconUri,
   type FixtureIssue,
   type KpiTreeNode,
 } from './hierarchy.js';
@@ -233,7 +236,7 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
       date: t.date,
       value: t.value,
       status: targetStatus(t, readings, node.direction, TODAY),
-      source: t.source,
+      source: { ...t.source, iconUrl: t.source.iconUrl ?? issueTypeIconUri(t.source.type) },
     })),
     readings: readings.map((r) => ({ date: r.date, value: r.value })),
     children: (node.children ?? []).map((c) => toTimelineNode(c, depth + 1)),
@@ -309,5 +312,75 @@ export function createKpi(input: CreateKpiInput): TimelineData {
   const parent = input.parentKpiId ? findKpiNode(kpiTree, input.parentKpiId) : undefined;
   if (parent) (parent.children ??= []).push(node);
   else kpiTree.push(node);
+  return getTimelineData();
+}
+
+// ── Add target (issue picker) ────────────────────────────────────────────────
+/**
+ * Type-ahead over the fixture issues — the harness stand-in for Jira's
+ * issue-picker endpoint. Matches on key or summary; empty query returns recents.
+ */
+export function searchIssues(query: string): IssuePickerItem[] {
+  const q = query.trim().toLowerCase();
+  const matches =
+    q === ''
+      ? issues
+      : issues.filter(
+          (i) => i.key.toLowerCase().includes(q) || i.summary.toLowerCase().includes(q),
+        );
+  return matches
+    .slice(0, 8)
+    .map((i) => ({
+      id: i.id,
+      key: i.key,
+      summary: i.summary,
+      issueType: i.issueTypeName,
+      iconUrl: issueTypeIconUri(i.issueTypeName),
+    }));
+}
+
+/**
+ * Add a target to a KPI, held on the chosen contributing issue. Pushes the
+ * target onto the KPI's timeline row (recomputing its status) and keeps the
+ * issue's assignment in sync so the panel stays consistent.
+ */
+export function addTarget(input: AddTargetInput): TimelineData {
+  const node = findKpiNode(kpiTree, input.kpiId);
+  if (node) {
+    node.targets = [
+      ...node.targets.filter(
+        (t) => !(t.date === input.date && t.source.issue === input.issueKey),
+      ),
+      {
+        date: input.date,
+        value: input.value,
+        source: {
+          issue: input.issueKey,
+          type: input.issueType ?? 'Issue',
+          title: input.issueSummary,
+          iconUrl: input.issueTypeIconUrl ?? issueTypeIconUri(input.issueType ?? 'Issue'),
+        },
+      },
+    ].sort((a, b) => a.date.localeCompare(b.date));
+
+    const issue = findIssue(input.issueId);
+    if (issue) {
+      const assignment: Assignment = {
+        kpiId: input.kpiId,
+        inheritFromParent: false,
+        target: input.value,
+        targetType: 'absolute',
+        timing: {
+          start: null,
+          due: { mode: 'absolute', absolute: input.date, anchor: 'issueDueDate', offsetMonths: 0 },
+        },
+        updatedBy: 'acc-jm',
+        updatedAt: Date.now(),
+      };
+      const idx = issue.assignments.findIndex((a) => a.kpiId === input.kpiId);
+      if (idx >= 0) issue.assignments[idx] = assignment;
+      else issue.assignments.push(assignment);
+    }
+  }
   return getTimelineData();
 }

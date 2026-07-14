@@ -178,13 +178,40 @@ export function issueById(id: string): FixtureIssue | undefined {
   return ISSUES.find((i) => i.id === id);
 }
 
+// ── Issue-type icons ────────────────────────────────────────────────────────
+const ISSUE_TYPE_ICON_COLORS: Record<string, string> = {
+  Outcome: '#8777D9',
+  Initiative: '#5243AA',
+  Increment: '#00A3BF',
+  Epic: '#904EE2',
+  Story: '#36B37E',
+  Task: '#4BADE8',
+  Bug: '#E5493A',
+  KPI: '#0052CC',
+};
+
+/**
+ * A small inline SVG data URI standing in for a Jira issue-type icon — harness
+ * only. The live app carries Jira's real `issuetype.iconUrl` instead.
+ */
+export function issueTypeIconUri(type: string): string {
+  const color = ISSUE_TYPE_ICON_COLORS[type] ?? '#6B778C';
+  const letter = (type.trim()[0] ?? '?').toUpperCase();
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">` +
+    `<rect width="16" height="16" rx="3" fill="${color}"/>` +
+    `<text x="8" y="12" font-size="10" font-family="Arial, sans-serif" fill="#fff" text-anchor="middle">${letter}</text>` +
+    `</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
 // ── Timeline KPI tree ───────────────────────────────────────────────────────
 // The timeline is organized by the KPI tree (nested KPIs), each KPI carrying
 // targets (set on source issues) and recorded readings.
 export interface TimelineTargetFixture {
   date: string;
   value: number;
-  source: { issue: string; type: string; title: string };
+  source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 
 export interface KpiTreeNode {

@@ -43,7 +43,7 @@ vi.mock('@forge/api', () => ({
     strings.reduce((acc, s, i) => acc + s + (i < values.length ? String(values[i]) : ''), ''),
 }));
 
-import { writeReading, createKpiIssue } from './jira.js';
+import { writeReading, createKpiIssue, writeAssignments } from './jira.js';
 
 describe('createKpiIssue', () => {
   beforeEach(() => {
@@ -93,3 +93,40 @@ describe('writeReading', () => {
     });
   });
 });
+
+describe('writeAssignments', () => {
+  beforeEach(() => {
+    requestJira.mockClear();
+  });
+
+  it('writes a denormalized kpiIds index so the property is JQL-searchable', async () => {
+    // The manifest indexes kpi-assignments -> kpiIds; without writing kpiIds the
+    // index stays empty and the timeline can never discover targeted KPIs.
+    putResult = { ok: true, status: 200 };
+    const base = {
+      inheritFromParent: false,
+      target: 250,
+      targetType: 'absolute' as const,
+      timing: {
+        start: null,
+        due: { mode: 'relative' as const, absolute: null, anchor: 'issueDueDate' as const, offsetMonths: 0 },
+      },
+      updatedBy: 'acc-jm',
+      updatedAt: 0,
+    };
+    await writeAssignments('10001', [
+      { kpiId: 'revenue', ...base },
+      { kpiId: 'costs', ...base },
+    ]);
+
+    const putCall = requestJira.mock.calls.find(
+      ([, opts]) => (opts as { method?: string } | undefined)?.method === 'PUT',
+    );
+    expect(putCall).toBeDefined();
+    const [, putOpts] = putCall as [unknown, { body: string }];
+    const body = JSON.parse(putOpts.body) as { assignments: unknown[]; kpiIds: string[] };
+    expect(body.kpiIds).toEqual(['revenue', 'costs']);
+    expect(body.assignments).toHaveLength(2);
+  });
+});
+

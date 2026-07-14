@@ -9,7 +9,12 @@ import type { TimelineController, UseTimeline } from '@ui/data/useTimelineData/i
  * shape (populated / empty tree / no-readings / loading / error) plus a
  * record-a-value interaction. The `*.test.tsx` sibling replays them.
  */
-const src = (issue: string, type: string, title: string) => ({ issue, type, title });
+const src = (issue: string, type: string, title: string) => ({
+  issue,
+  type,
+  title,
+  iconUrl: `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16' rx='3' fill='#5243AA'/></svg>`)}`,
+});
 
 const node = (over: Partial<TimelineNodeDto> & { id: string; kpiId: string; name: string }): TimelineNodeDto => ({
   issueKey: 'KPI-0',
@@ -71,6 +76,8 @@ function stub(over: Partial<TimelineController>): UseTimeline {
     clearActionError: over.clearActionError ?? (() => {}),
     record: over.record ?? (() => {}),
     createKpi: over.createKpi ?? (() => {}),
+    searchIssues: over.searchIssues ?? (async () => []),
+    addTarget: over.addTarget ?? (() => {}),
   });
 }
 
@@ -99,9 +106,30 @@ export const OpenIssue: Story = {
     openIssueSpy.mockClear();
     const c = within(canvasElement);
     const link = c.getByRole('link', { name: 'Revenue' });
-    await expect(link).toHaveAttribute('href', '/browse/KPI-1');
+    await waitFor(() =>
+      expect(link).toHaveAttribute('href', 'https://example.atlassian.net/browse/KPI-1'),
+    );
     await userEvent.click(link);
     await waitFor(() => expect(openIssueSpy).toHaveBeenCalledWith('KPI-1'));
+  },
+};
+
+/** Interaction: a target diamond deep-links to the work item that set it. */
+const openTargetSpy = fn();
+export const OpenTargetIssue: Story = {
+  args: { useData: stub({ data: POPULATED }), onOpenIssueNewTab: openTargetSpy },
+  play: async ({ canvasElement }) => {
+    openTargetSpy.mockClear();
+    const c = within(canvasElement);
+    const diamond = c.getByRole('link', {
+      name: /Target .* due 2026-06-30 .* Open Outcome OUT-12 in Jira \(new tab\)/i,
+    });
+    await waitFor(() =>
+      expect(diamond).toHaveAttribute('href', 'https://example.atlassian.net/browse/OUT-12'),
+    );
+    await expect(diamond).toHaveAttribute('target', '_blank');
+    await userEvent.click(diamond);
+    await waitFor(() => expect(openTargetSpy).toHaveBeenCalledWith('OUT-12'));
   },
 };
 
@@ -152,6 +180,44 @@ export const RecordValue: Story = {
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
     await waitFor(() => expect(recordSpy).toHaveBeenCalledTimes(1));
+  },
+};
+
+/**
+ * Interaction: clicking a recorded value opens the edit modal; Save overwrites
+ * the value at that date (last-write-wins per date).
+ */
+const editSpy = fn();
+export const EditValue: Story = {
+  args: { useData: stub({ data: POPULATED, record: editSpy }) },
+  play: async ({ canvasElement }) => {
+    editSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(
+      c.getByRole('button', { name: 'Edit value 1,243,000 USD on 2026-07-06' }),
+    );
+    const dialog = within(await c.findByRole('dialog'));
+    const input = dialog.getByLabelText('Value');
+    await userEvent.clear(input);
+    await userEvent.type(input, '1250000');
+    await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(editSpy).toHaveBeenCalledWith('revenue', '2026-07-06', 1_250_000));
+  },
+};
+
+/** Interaction: Delete in the edit modal tombstones the value (record with null). */
+const deleteSpy = fn();
+export const DeleteValue: Story = {
+  args: { useData: stub({ data: POPULATED, record: deleteSpy }) },
+  play: async ({ canvasElement }) => {
+    deleteSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(
+      c.getByRole('button', { name: 'Edit value 1,000,000 USD on 2026-01-03' }),
+    );
+    const dialog = within(await c.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('revenue', '2026-01-03', null));
   },
 };
 
@@ -223,6 +289,61 @@ export const SpaceNotSetUp: Story = {
     await waitFor(() => expect(openSettingsSpy).toHaveBeenCalledTimes(1));
     await userEvent.click(alert.getByRole('button', { name: /Dismiss/i }));
     await waitFor(() => expect(dismissSpy).toHaveBeenCalledTimes(1));
+  },
+};
+
+/**
+ * Interaction: the “Add a target” row action opens the Add Target modal, where a
+ * type-ahead issue picker (like Jira's Parent field) chooses the contributing
+ * issue; Add calls the loader with the KPI + issue + date + value.
+ */
+const addTargetSpy = fn();
+const searchIssuesStub = async (q: string) => {
+  const all = [
+    { id: '10012', key: 'OUT-12', summary: 'Grow POS revenue', issueType: 'Outcome', iconUrl: null },
+    { id: '10048', key: 'INIT-48', summary: 'Multi-store support', issueType: 'Initiative', iconUrl: null },
+  ];
+  const s = q.trim().toLowerCase();
+  return s === ''
+    ? all
+    : all.filter((i) => i.key.toLowerCase().includes(s) || i.summary.toLowerCase().includes(s));
+};
+export const AddTarget: Story = {
+  args: { useData: stub({ data: POPULATED, addTarget: addTargetSpy, searchIssues: searchIssuesStub }) },
+  play: async ({ canvasElement }) => {
+    addTargetSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Add a target' })[0]);
+    const dialog = within(await c.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('Search for an issue'), 'INIT');
+    await userEvent.click(await dialog.findByRole('button', { name: /INIT-48/ }));
+    await userEvent.type(dialog.getByLabelText('Target value'), '2000000');
+    await userEvent.click(dialog.getByRole('button', { name: 'Add target' }));
+    await waitFor(() =>
+      expect(addTargetSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ kpiId: 'revenue', issueKey: 'INIT-48', value: 2_000_000 }),
+      ),
+    );
+  },
+};
+
+/**
+ * Interaction: an issue that already has a target for this KPI is shown in the
+ * picker but is NOT selectable (one target per issue+KPI). Revenue already has
+ * targets set on OUT-12, so OUT-12 appears disabled while INIT-48 stays pickable.
+ */
+export const ExcludeExistingTarget: Story = {
+  args: { useData: stub({ data: POPULATED, searchIssues: searchIssuesStub }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Add a target' })[0]);
+    const dialog = within(await c.findByRole('dialog'));
+    await userEvent.click(dialog.getByLabelText('Search for an issue'));
+    // OUT-12 already targets Revenue → present but not a selectable button.
+    await dialog.findByText('OUT-12');
+    await expect(dialog.queryByRole('button', { name: /OUT-12/ })).toBeNull();
+    // INIT-48 has no Revenue target → selectable.
+    await expect(await dialog.findByRole('button', { name: /INIT-48/ })).toBeInTheDocument();
   },
 };
 

@@ -60,5 +60,14 @@ export type Assignment = z.infer<typeof Assignment>;
 /** The whole issue-entity-property value: an array of assignments. */
 export const AssignmentProperty = z.object({
   assignments: z.array(Assignment),
+  /**
+   * Denormalized list of the assigned KPI ids, written alongside `assignments`
+   * so the manifest's `kpi-assignments` → `kpiIds` search index (searchAlias)
+   * is populated. This is what lets the timeline discover which issues set a
+   * target for a given KPI (JQL `issue.property[kpi-assignments].kpiIds = ...`).
+   * Optional on read for backward-compat with assignments saved before the
+   * index was written.
+   */
+  kpiIds: z.array(z.string()).optional(),
 });
 export type AssignmentProperty = z.infer<typeof AssignmentProperty>;

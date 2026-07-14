@@ -6,14 +6,18 @@ import {
   normalizeProjectKey,
   readingsFromChangelog,
   resolveRelativeTargetDate,
+  buildKpiTargets,
+  type AddTargetInput,
   type Assignment,
   type CatalogEntryDto,
   type CreateKpiInput,
   type KpiSpaceStatus,
+  type KpiTargetContribution,
   type PanelData,
   type PanelRowDto,
   type RelativeTargetContext,
   type ResolvedEndpoint,
+  type TargetSourceIssue,
   type TimelineData,
   type TimelineNodeDto,
 } from '../domain/index';
@@ -25,17 +29,18 @@ import {
   fetchKpiSpaceIssues,
   fetchReadingChangelog,
   fetchSubtreeTimingNodes,
+  fetchTargetContributions,
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
   ensureKpiIssueTypeOnProject,
   KPI_ISSUE_TYPE,
+  searchIssuePicker,
   writeAssignments,
   writeReading,
   type KpiSpaceIssue,
 } from './jira';
 import {
-  readCatalog,
   readKpiSpaceConfig,
   readRollupConfig,
   writeCatalogEntry,
@@ -55,20 +60,38 @@ import {
  */
 const resolver = new Resolver();
 
-function catalogDto(catalog: Awaited<ReturnType<typeof readCatalog>>): CatalogEntryDto[] {
-  return catalog.map((k) => ({ id: k.id, name: k.name, unit: k.unit, direction: k.direction }));
+/**
+ * The KPI picker catalog is sourced from the KPI space (KPIs are Jira issues),
+ * NOT the legacy KVS catalog: each issue's key is the KPI id and its unit/
+ * direction come from the `kpi-meta` entity property. Empty when the space is
+ * unset or has no KPIs yet — the panel then shows a "define a KPI first" prompt.
+ */
+async function buildKpiCatalog(): Promise<CatalogEntryDto[]> {
+  const space = await readKpiSpaceConfig();
+  if (!space.key) return [];
+  const issues = await fetchKpiSpaceIssues(space.key);
+  if (issues.length === 0) return [];
+  const metas = await Promise.all(issues.map((i) => fetchKpiMeta(i.id)));
+  return issues.map((issue, idx) => ({
+    id: issue.key,
+    name: issue.name,
+    unit: metas[idx]?.unit ?? '',
+    direction: metas[idx]?.direction ?? null,
+  }));
 }
 
 async function buildPanelData(issueId: string): Promise<PanelData> {
   const [meta, own, catalog, config] = await Promise.all([
     fetchIssueMeta(issueId),
     fetchAssignments(issueId),
-    readCatalog(),
+    buildKpiCatalog(),
     readRollupConfig(),
   ]);
   const parentId = meta.parentId;
   const parentAssignments = parentId ? await fetchAssignments(parentId) : [];
-  const grouped = groupByRelationship(own, parentAssignments, catalog);
+  // The catalog only attaches (unused) display metadata to grouped rows here;
+  // rows below look KPIs up in `catalog` directly, so pass an empty list.
+  const grouped = groupByRelationship(own, parentAssignments, []);
 
   // Timing rollup needs the subtree; root at the parent so we can resolve both.
   const nodes = await fetchSubtreeTimingNodes(parentId ?? issueId);
@@ -102,7 +125,7 @@ async function buildPanelData(issueId: string): Promise<PanelData> {
   for (const r of grouped.onlyHere) push(r.kpiId, 'onlyHere', r.assignment);
   for (const r of grouped.onParentNotTracked) push(r.kpiId, 'onParentNotTracked');
 
-  return { issueKey: meta.issueKey, rows, catalog: catalogDto(catalog) };
+  return { issueKey: meta.issueKey, rows, catalog };
 }
 
 resolver.define('getPanelData', async ({ payload }) => {
@@ -180,9 +203,10 @@ resolver.define('createKpiSpace', async ({ payload, context }) => {
 });
 
 // The timeline enumerates KPI-space issues, reconstructs each KPI's reading
-// series from its field changelog (Option B), and nests them by issue parent —
-// mirroring the harness `getTimelineData`. Targets (authored on contributing
-// issues) are a follow-up; the list + readings render today.
+// series from its field changelog (Option B), nests them by issue parent, and
+// aggregates the targets authored on contributing issues (issue `kpi-assignments`
+// properties, discovered via the `kpiIds` search index) onto each KPI row —
+// mirroring the harness `getTimelineData`.
 async function buildTimelineData(): Promise<TimelineData> {
   const today = new Date().toISOString().slice(0, 10);
   const space = await readKpiSpaceConfig();
@@ -192,11 +216,33 @@ async function buildTimelineData(): Promise<TimelineData> {
   if (issues.length === 0) return { today, roots: [] } satisfies TimelineData;
 
   const ids = issues.map((i) => i.id);
-  const [changelogByIssue, metas] = await Promise.all([
+  const [changelogByIssue, metas, contributions] = await Promise.all([
     fetchReadingChangelog(ids),
     Promise.all(issues.map((i) => fetchKpiMeta(i.id))),
+    fetchTargetContributions(),
   ]);
   const metaById = new Map(issues.map((i, idx) => [i.id, metas[idx]]));
+
+  // Group every contributing issue's targets by the KPI they point at (a KPI's
+  // id is its issue key). Each contribution carries the source issue's own/parent
+  // due so relative target dates resolve at read time.
+  const contributionsByKpi = new Map<string, KpiTargetContribution[]>();
+  for (const ci of contributions.issues) {
+    const parent = ci.parentId ? contributions.parentById.get(ci.parentId) : undefined;
+    const source: TargetSourceIssue = {
+      key: ci.issueKey,
+      type: ci.issueTypeName,
+      title: ci.title,
+      iconUrl: ci.issueTypeIconUrl,
+      due: ci.ownDue,
+      parent: parent ? { key: parent.key, due: parent.due } : undefined,
+    };
+    for (const a of ci.assignments) {
+      const list = contributionsByKpi.get(a.kpiId) ?? [];
+      list.push({ assignment: a, source });
+      contributionsByKpi.set(a.kpiId, list);
+    }
+  }
 
   // Adjacency restricted to KPI-space issues; issues whose parent is outside the
   // space (or absent) are roots.
@@ -228,6 +274,7 @@ async function buildTimelineData(): Promise<TimelineData> {
   const toNode = (issue: KpiSpaceIssue, depth: number): TimelineNodeDto => {
     const meta = metaById.get(issue.id);
     const readings = readingsFromChangelog(changelogByIssue.get(issue.id) ?? []);
+    const readingPoints = readings.map((r) => ({ date: r.date, value: r.value }));
     return {
       id: issue.id,
       kpiId: issue.key,
@@ -236,8 +283,13 @@ async function buildTimelineData(): Promise<TimelineData> {
       unit: meta?.unit ?? '',
       direction: meta?.direction ?? null,
       depth,
-      targets: [],
-      readings: readings.map((r) => ({ date: r.date, value: r.value })),
+      targets: buildKpiTargets(
+        contributionsByKpi.get(issue.key) ?? [],
+        readingPoints,
+        meta?.direction ?? null,
+        today,
+      ),
+      readings: readingPoints,
       children: (childrenOf.get(issue.id) ?? []).map((c) => toNode(c, depth + 1)),
     };
   };
@@ -259,11 +311,62 @@ resolver.define('recordValue', async ({ payload }) => {
   return buildTimelineData();
 });
 
+// Type-ahead issue search for the Add Target picker (Jira's issue-picker
+// endpoint) — the same source the native Parent field uses.
+resolver.define('searchIssues', async ({ payload }) => {
+  const query = String((payload as { query?: string })?.query ?? '');
+  return searchIssuePicker(query);
+});
+
+// Add a target to a KPI, held as an assignment (due on an absolute date) on the
+// chosen contributing work issue. One assignment per (issue, KPI) — updates in
+// place if the issue already targets this KPI. Mirrors the harness `addTarget`.
+resolver.define('addTarget', async ({ payload, context }) => {
+  const input = payload as AddTargetInput;
+  const existing = await fetchAssignments(input.issueId);
+  const assignment: Assignment = {
+    kpiId: input.kpiId,
+    inheritFromParent: false,
+    target: input.value,
+    targetType: 'absolute',
+    timing: {
+      start: null,
+      due: { mode: 'absolute', absolute: input.date, anchor: 'issueDueDate', offsetMonths: 0 },
+    },
+    updatedBy: (context as { accountId?: string })?.accountId ?? 'app',
+    updatedAt: Date.now(),
+  };
+  const idx = existing.findIndex((a) => a.kpiId === input.kpiId);
+  const next = [...existing];
+  if (idx >= 0) next[idx] = assignment;
+  else next.push(assignment);
+  await writeAssignments(input.issueId, next);
+  return buildTimelineData();
+});
+
+/**
+ * Jira's JQL index lags issue creation by ~1–2s, so an immediate re-enumeration
+ * misses the just-created KPI — leaving the timeline unchanged until a manual
+ * refresh. Poll the lightweight KPI-space enumeration until the new key is
+ * indexed (bounded) so the timeline built afterwards reliably includes it.
+ */
+async function waitForKpiIndexed(projectKey: string, kpiKey: string): Promise<void> {
+  const attempts = 6;
+  const delayMs = 400;
+  for (let i = 0; i < attempts; i += 1) {
+    const issues = await fetchKpiSpaceIssues(projectKey);
+    if (issues.some((issue) => issue.key === kpiKey)) return;
+    if (i < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
+
 resolver.define('createKpi', async ({ payload }) => {
   const input = payload as CreateKpiInput;
   const space = await readKpiSpaceConfig();
-  if (!space.projectId) throw new Error('KPI space is not set up — configure it in Settings first.');
-  await createKpiIssue(space.projectId, input);
+  if (!space.key || !space.projectId)
+    throw new Error('KPI space is not set up — configure it in Settings first.');
+  const createdKey = await createKpiIssue(space.projectId, input);
+  await waitForKpiIndexed(space.key, createdKey);
   return buildTimelineData();
 });
 

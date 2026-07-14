@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { usePanelData, type UsePanel } from '@ui/data/usePanelData/index.js';
+import { openKpiTimeline } from '@ui/bridge.js';
 import type {
   Assignment,
   CatalogEntryDto,
@@ -61,18 +62,13 @@ export function IssuePanel({
 
   const tracked = data.rows.filter((r) => r.relationship !== 'onParentNotTracked');
   const isEmpty = tracked.length === 0;
+  const noCatalog = data.catalog.length === 0;
 
   return (
     <div className="max-w-xl p-4 text-text">
-      <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-base font-semibold">KPIs</h2>
-        <span className="rounded bg-surface-sunken px-2 py-0.5 text-xs text-text-subtle">
-          {tracked.length}
-        </span>
-        {busy && <span className="text-xs text-text-subtle">saving…</span>}
-      </div>
+      {busy && <div className="mb-3 text-xs text-text-subtle">saving…</div>}
 
-      {isEmpty && (
+      {isEmpty && !noCatalog && (
         <p className="mb-3 rounded border border-dashed border-border p-3 text-sm text-text-subtle">
           No KPIs tracked on this issue yet. Associate one below.
         </p>
@@ -93,17 +89,21 @@ export function IssuePanel({
         </div>
       ))}
 
-      <AssociateForm catalog={data.catalog} existing={data.rows} onSave={save} />
-
-      <div className="mt-3 flex gap-2 rounded bg-surface-sunken p-3 text-xs text-text-subtle">
-        <span className="grid h-4 w-4 flex-none place-items-center rounded-full bg-brand text-[10px] text-white">
-          i
-        </span>
-        <span>
-          KPIs are grouped by their relationship to the parent issue. Each issue sets its own targets;
-          sharing a KPI with the parent links this issue's contribution into the parent's rollup.
-        </span>
-      </div>
+      {noCatalog ? (
+        <p className="rounded border border-dashed border-border p-3 text-sm text-text-subtle">
+          KPIs are not defined yet. You must first{' '}
+          <button
+            type="button"
+            className="text-brand underline"
+            onClick={() => void openKpiTimeline()}
+          >
+            define a KPI
+          </button>
+          .
+        </p>
+      ) : (
+        <AssociateForm catalog={data.catalog} existing={data.rows} onSave={save} />
+      )}
     </div>
   );
 }
@@ -223,8 +223,6 @@ function TrackThisRow({
   );
 }
 
-const DEFINE_NEW = '__define_new__';
-
 function AssociateForm({
   catalog,
   existing,
@@ -240,21 +238,15 @@ function AssociateForm({
   const [due, setDue] = useState<DueTiming>(DEFAULT_DUE);
   const [targetType, setTargetType] = useState<TargetType>('absolute');
 
-  // define-new fields
-  const [defining, setDefining] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newUnit, setNewUnit] = useState('');
-
   const options = catalog.filter((c) => !trackedIds.has(c.id));
 
   const submit = () => {
-    const chosen = defining ? slug(newName) : kpiId;
-    if (!chosen) return;
+    if (!kpiId) return;
     const num = target.trim() === '' ? null : Number(target.replace(/,/g, ''));
     if (num !== null && Number.isNaN(num)) return;
     if (due.mode === 'absolute' && !isIsoDate(due.absolute)) return;
     onSave({
-      kpiId: chosen,
+      kpiId,
       inheritFromParent: false,
       target: num,
       targetType,
@@ -265,57 +257,27 @@ function AssociateForm({
     setKpiId('');
     setTarget('');
     setDue(DEFAULT_DUE);
-    setDefining(false);
-    setNewName('');
-    setNewUnit('');
   };
 
   return (
     <div className="rounded border border-dashed border-border p-3">
       <div className="mb-2 text-sm font-medium text-text-subtle">Associate a KPI</div>
       <div className="flex flex-col gap-2">
-        {defining ? (
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs text-text-subtle">
-              Name
-              <input
-                className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. Churn Rate"
-              />
-            </label>
-            <label className="text-xs text-text-subtle">
-              Unit
-              <input
-                className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm"
-                value={newUnit}
-                onChange={(e) => setNewUnit(e.target.value)}
-                placeholder="e.g. %"
-              />
-            </label>
-          </div>
-        ) : (
-          <label className="text-xs text-text-subtle">
-            KPI
-            <select
-              className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm"
-              value={kpiId}
-              onChange={(e) => {
-                if (e.target.value === DEFINE_NEW) setDefining(true);
-                else setKpiId(e.target.value);
-              }}
-            >
-              <option value="">Choose KPI…</option>
-              {options.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name}
-                </option>
-              ))}
-              <option value={DEFINE_NEW}>— Define new… —</option>
-            </select>
-          </label>
-        )}
+        <label className="text-xs text-text-subtle">
+          KPI
+          <select
+            className="mt-0.5 w-full rounded border border-border px-2 py-1 text-sm"
+            value={kpiId}
+            onChange={(e) => setKpiId(e.target.value)}
+          >
+            <option value="">Choose KPI…</option>
+            {options.map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs text-text-subtle">
@@ -349,16 +311,8 @@ function AssociateForm({
             className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
             onClick={submit}
           >
-            {defining ? 'Create & associate' : 'Associate KPI'}
+            Associate KPI
           </button>
-          {defining && (
-            <button
-              className="rounded border border-border px-3 py-1.5 text-sm"
-              onClick={() => setDefining(false)}
-            >
-              Cancel
-            </button>
-          )}
         </div>
       </div>
     </div>
@@ -405,9 +359,9 @@ function TargetDateEditor({ value, onChange }: { value: DueTiming; onChange: (d:
 
       {value.mode === 'absolute' ? (
         <input
+          type="date"
           className="rounded border border-border px-2 py-1 text-sm"
           value={value.absolute ?? ''}
-          placeholder="YYYY-MM-DD"
           onChange={(e) => onChange({ ...value, absolute: e.target.value })}
         />
       ) : (
@@ -434,14 +388,6 @@ function TargetDateEditor({ value, onChange }: { value: DueTiming; onChange: (d:
       )}
     </div>
   );
-}
-
-function slug(name: string): string {
-  return name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 }
 
 /** Build an assignment from a row, applying value/timing edits. */
