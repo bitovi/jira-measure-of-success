@@ -6,12 +6,13 @@ modules:
         function: resolver
       title: KPIs
       icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
-  jira:projectPage:
+  jira:globalPage:
     - key: kpi-timeline-page
       resource: timeline
       resolver:
         function: resolver
       title: KPI Timeline
+      layout: native
   jira:adminPage:
     - key: kpi-settings-page
       resource: settings
