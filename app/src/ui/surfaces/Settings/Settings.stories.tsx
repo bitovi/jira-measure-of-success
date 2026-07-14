@@ -42,7 +42,7 @@ export const Default: Story = {
     const c = within(canvasElement);
     await expect(c.getByText('Due Date Rollup')).toBeInTheDocument();
     await expect(c.getByText('Outcome')).toBeInTheDocument();
-    await expect(c.getByText('no children to roll up')).toBeInTheDocument();
+    await expect(c.getByText('Story')).toBeInTheDocument();
   },
 };
 
@@ -65,8 +65,8 @@ export const ShallowHierarchy: Story = {
 export const SingleLevel: Story = {
   args: { useSettings: stub({ levels: ['Task'], config: { dueDateRollup: {} } }) },
   play: async ({ canvasElement }) => {
-    // the only level is the leaf → its note shows
-    await expect(within(canvasElement).getByText('no children to roll up')).toBeInTheDocument();
+    // the only level is the leaf → it has no children to roll up, only its name shows
+    await expect(within(canvasElement).getByText('Task')).toBeInTheDocument();
   },
 };
 
@@ -119,6 +119,23 @@ export const SpaceReady: Story = {
     const c = within(canvasElement);
     await expect(c.getByText('Connected')).toBeInTheDocument();
     await expect(c.getByText('KPIs (KPI)')).toBeInTheDocument();
+  },
+};
+
+/** Project exists but the KPI issue type isn't associated — offer to finish setup. */
+export const SpaceMisconfigured: Story = {
+  args: {
+    useSettings: stub({
+      levels: LEVELS,
+      config: { dueDateRollup: {} },
+      space: { key: 'KPI', projectId: 'p-KPI', name: 'KPIs (KPI)', state: 'misconfigured' },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText('Needs setup')).toBeInTheDocument();
+    await expect(c.getByText(/missing the/i)).toBeInTheDocument();
+    await expect(c.getByRole('button', { name: /Create space/i })).toBeInTheDocument();
   },
 };
 

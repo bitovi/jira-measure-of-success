@@ -59,10 +59,14 @@ export async function requestJira(route: string): Promise<Response> {
 export const view = {
   getContext: async () => ({
     extension: { issue: { id: '10048', key: 'INIT-48' } },
-    localId: 'harness',
+    localId:
+      'ari:cloud:ecosystem::extension/f92bb5d3-136d-4f6d-9245-fc31f4e8fdec/69a5cdec-507a-4dbe-a84f-0f37b35c1e3e/static/kpi-timeline-page',
   }),
   theme: { enable: async () => {} },
 };
 
-export const router = { open: (url: string) => console.info('[mock-bridge] open', url) };
+export const router = {
+  open: (url: string) => console.info('[mock-bridge] open', url),
+  navigate: async (url: string) => console.info('[mock-bridge] navigate', url),
+};
 export const showFlag = (opts: unknown) => console.info('[mock-bridge] flag', opts);

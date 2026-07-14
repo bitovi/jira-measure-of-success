@@ -5,6 +5,12 @@ description: Discover all visual states of a component by interactively explorin
 
 # Skill: Discover Visual States
 
+> **Browser tooling — works for both toolsets.** Use whichever is configured:
+> Playwright MCP (`mcp_playwright_browser_*`) for Claude, or the Copilot browser
+> tools (`open_browser_page`, `click_element`, `screenshot_page`, `read_page`) for
+> VS Code Copilot. Where this skill shows `mcp_playwright_*` calls, use the
+> equivalent tool from whichever set is available.
+
 Explore the production page to discover every distinct visual state a component can be in. Save the interactions needed to reach each state to `pixel-perfect.config.json`. The pixel-perfect skill then replays those same interactions on both production and Storybook — no separate story per state required.
 
 ---

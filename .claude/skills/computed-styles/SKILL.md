@@ -5,7 +5,13 @@ description: Extract and compare computed CSS styles between a baseline URL and 
 
 # Skill: Computed Style Comparison
 
-Use Playwright MCP's `evaluate` to extract `getComputedStyle()` values from a **baseline** page and a **current** page, compare them property-by-property, and fix the differences with Tailwind classes.
+> **Browser tooling — works for both toolsets.** Use whichever is configured:
+> Playwright MCP's `evaluate` (`mcp_playwright_browser_evaluate`) for Claude, or the
+> Copilot browser tools (`run_playwright_code` / `read_page`) for VS Code Copilot.
+> Where this skill shows `mcp_playwright_*` calls, use the equivalent tool from
+> whichever set is available.
+
+Use the browser tools' `evaluate` capability to extract `getComputedStyle()` values from a **baseline** page and a **current** page, compare them property-by-property, and fix the differences with Tailwind classes.
 
 ---
 

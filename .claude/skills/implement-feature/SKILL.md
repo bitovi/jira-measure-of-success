@@ -41,8 +41,11 @@ Build pages using ONLY extracted reusable components. NO inline buttons/forms/ca
 ### 6. Mock Data & API
 Update mock API handlers. Generate 15-20+ items for scrollbar testing.
 
-### 7. Automated Verification (Playwright MCP)
-Verify feature, stories, responsiveness. Generate E2E tests if Playwright MCP is available.
+### 7. Automated Verification (browser tools)
+Verify feature, stories, and responsiveness using the available browser tools
+(Playwright MCP for Claude, or the Copilot browser tools for VS Code Copilot).
+Generate persistent E2E tests only if a Playwright test runner is available;
+otherwise rely on interactive browser-tool verification plus Vitest story tests.
 
 ### 8. Testing & Storybook
 Validate reusable components have stories and tests.

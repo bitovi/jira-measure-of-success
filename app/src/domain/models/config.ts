@@ -43,7 +43,7 @@ export function labelsFor(selfName: string, childName: string): Record<RollupMet
     childrenOnly: `From ${children}`,
     parentFirstThenChildren: `From ${selfName}, then ${children}`,
     parentOnly: `From ${selfName} only`,
-    widestRange: `From ${selfName} or ${children} (earliest → latest) (default)`,
+    widestRange: `From ${selfName} or ${children} (earliest → latest)`,
   };
 }
 

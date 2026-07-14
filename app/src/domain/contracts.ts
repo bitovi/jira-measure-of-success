@@ -66,6 +66,8 @@ export interface TimelineReadingDto {
 export interface TimelineNodeDto {
   id: string;
   kpiId: string;
+  /** Jira issue key of the KPI issue (for deep-linking to /browse/{key}) */
+  issueKey: string;
   name: string;
   unit: string;
   direction: KpiDirection | null;
@@ -87,7 +89,8 @@ export interface TimelineData {
 export type KpiSpaceState =
   | 'unset' // no key chosen yet
   | 'missing' // key chosen but the project doesn't exist
-  | 'ready'; // project exists and is connected
+  | 'misconfigured' // project exists but the KPI issue type isn't available in it
+  | 'ready'; // project exists, has the KPI issue type, and is connected
 
 export interface KpiSpaceStatus {
   key: string | null;

@@ -5,8 +5,16 @@ description: Create, maintain, and verify end-to-end (E2E) tests using Playwrigh
 
 # Write E2E Test Skill
 
+> **Browser tooling — works for both toolsets.** Use whichever is configured:
+> Playwright MCP (`mcp_playwright_browser_*`) for Claude, or the Copilot browser
+> tools (`open_browser_page`, `read_page`, `screenshot_page`, `click_element`,
+> `type_in_page`) for VS Code Copilot. Where this skill says "Playwright", use the
+> equivalent tool from whichever set is available. Authoring **persistent** `.spec.ts`
+> E2E files needs a Playwright test runner — if none is configured, verify
+> interactively with the browser tools and cover flows with Vitest story tests instead.
+
 ## Purpose
-Guide the creation, maintenance, and verification of end-to-end (E2E) tests using Playwright MCP.
+Guide the creation, maintenance, and verification of end-to-end (E2E) tests using the available browser tools.
 
 ## When to Use
 - A new feature or flow is implemented and needs E2E coverage

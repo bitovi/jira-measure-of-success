@@ -5,6 +5,12 @@ description: Compare a baseline URL against a dev or Storybook URL by taking Pla
 
 # Skill: Visual Diff
 
+> **Browser tooling — works for both toolsets.** Use whichever is configured:
+> Playwright MCP (`mcp_playwright_browser_*`) for Claude, or the Copilot browser
+> tools (`open_browser_page`, `screenshot_page`, `read_page`, plus
+> `run_playwright_code` for scripted diffs) for VS Code Copilot. Where this skill
+> shows `mcp_playwright_*` calls, use the equivalent tool from whichever set is available.
+
 Compare two URLs visually — a **baseline** (e.g. production site) and a **current** (e.g. local dev server or Storybook story) — to find pixel-level differences and guide corrections.
 
 ---
@@ -28,7 +34,7 @@ Compare two URLs visually — a **baseline** (e.g. production site) and a **curr
 
 Before starting, confirm:
 
-1. **Playwright MCP** is configured in `.vscode/mcp.json` with `--caps=vision`
+1. **Playwright MCP** is configured in `.vscode/mcp.json` with `--caps=vision` (Claude), **or** the Copilot browser tools are available (VS Code Copilot)
 2. **pixelmatch** and **pngjs** are installed: check `package.json` devDependencies
 3. **The baseline URL is accessible** (external site, or a running server)
 4. **The current URL is accessible** (dev server on `:4321`, Storybook on `:6006`, etc.)

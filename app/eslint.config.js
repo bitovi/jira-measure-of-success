@@ -29,9 +29,9 @@ export default tseslint.config(
     },
   },
 
-  // Backend + build/config files — node globals
+  // Backend + build/config files + API E2E — node globals
   {
-    files: ['src/backend/**/*.ts', '*.{js,ts}', '.storybook/**/*.ts'],
+    files: ['src/backend/**/*.ts', 'test-e2e/**/*.ts', '*.{js,ts}', '.storybook/**/*.ts'],
     languageOptions: { globals: { ...globals.node } },
   },
 

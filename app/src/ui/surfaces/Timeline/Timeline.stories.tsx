@@ -12,6 +12,7 @@ import type { TimelineController, UseTimeline } from '@ui/data/useTimelineData/i
 const src = (issue: string, type: string, title: string) => ({ issue, type, title });
 
 const node = (over: Partial<TimelineNodeDto> & { id: string; kpiId: string; name: string }): TimelineNodeDto => ({
+  issueKey: 'KPI-0',
   unit: 'USD',
   direction: 'increase',
   depth: 0,
@@ -27,6 +28,7 @@ const POPULATED: TimelineData = {
     node({
       id: 'n1',
       kpiId: 'revenue',
+      issueKey: 'KPI-1',
       name: 'Revenue',
       unit: 'USD',
       readings: [
@@ -41,6 +43,7 @@ const POPULATED: TimelineData = {
         node({
           id: 'n2',
           kpiId: 'orders',
+          issueKey: 'KPI-2',
           name: '# of Orders',
           unit: 'count',
           depth: 1,
@@ -64,6 +67,8 @@ function stub(over: Partial<TimelineController>): UseTimeline {
     data: over.data ?? null,
     pending: over.pending ?? false,
     error: over.error ?? null,
+    actionError: over.actionError ?? null,
+    clearActionError: over.clearActionError ?? (() => {}),
     record: over.record ?? (() => {}),
     createKpi: over.createKpi ?? (() => {}),
   });
@@ -83,6 +88,20 @@ export const Populated: Story = {
     const c = within(canvasElement);
     await expect(c.getByText('Revenue')).toBeInTheDocument();
     await expect(c.getByText('# of Orders')).toBeInTheDocument();
+  },
+};
+
+/** Interaction: the KPI name is a link that navigates to the KPI's Jira issue. */
+const openIssueSpy = fn();
+export const OpenIssue: Story = {
+  args: { useData: stub({ data: POPULATED }), onOpenIssue: openIssueSpy },
+  play: async ({ canvasElement }) => {
+    openIssueSpy.mockClear();
+    const c = within(canvasElement);
+    const link = c.getByRole('link', { name: 'Revenue' });
+    await expect(link).toHaveAttribute('href', '/browse/KPI-1');
+    await userEvent.click(link);
+    await waitFor(() => expect(openIssueSpy).toHaveBeenCalledWith('KPI-1'));
   },
 };
 
@@ -117,7 +136,11 @@ export const ErrorState: Story = {
   },
 };
 
-/** Interaction: the + opens the record modal, and Record calls the loader. */
+/**
+ * Interaction: the record button opens the record modal, and Record calls the
+ * loader. Row action buttons are hover-revealed (opacity-0 -> group-hover) but
+ * stay in the a11y tree, so getByRole/click still find them without hovering.
+ */
 const recordSpy = fn();
 export const RecordValue: Story = {
   args: { useData: stub({ data: POPULATED, record: recordSpy }) },
@@ -152,7 +175,10 @@ export const AddKpi: Story = {
   },
 };
 
-/** Interaction: a row's add-child button nests the new KPI under that KPI. */
+/**
+ * Interaction: a row's add-child (+) button nests the new KPI under that KPI.
+ * The button is hover-revealed but remains findable by accessible name.
+ */
 const createChildSpy = fn();
 export const AddChildKpi: Story = {
   args: { useData: stub({ data: POPULATED, createKpi: createChildSpy }) },
@@ -168,5 +194,53 @@ export const AddChildKpi: Story = {
         expect.objectContaining({ name: 'Sub Metric', parentKpiId: 'revenue' }),
       ),
     );
+  },
+};
+
+/**
+ * A mutation failed because the KPI space isn't configured — the inline banner
+ * appears with an "Open Settings" action that routes to the admin page (spied),
+ * and a dismiss control that clears the error.
+ */
+const openSettingsSpy = fn();
+const dismissSpy = fn();
+export const SpaceNotSetUp: Story = {
+  args: {
+    useData: stub({
+      data: POPULATED,
+      actionError: { kind: 'space-not-set-up', message: 'KPI space is not set up — configure it in Settings first.' },
+      clearActionError: dismissSpy,
+    }),
+    onOpenSettings: openSettingsSpy,
+  },
+  play: async ({ canvasElement }) => {
+    openSettingsSpy.mockClear();
+    dismissSpy.mockClear();
+    const c = within(canvasElement);
+    const alert = within(await c.findByRole('alert'));
+    await expect(alert.getByText(/KPI space isn’t set up/i)).toBeInTheDocument();
+    await userEvent.click(alert.getByRole('button', { name: /Open Settings/i }));
+    await waitFor(() => expect(openSettingsSpy).toHaveBeenCalledTimes(1));
+    await userEvent.click(alert.getByRole('button', { name: /Dismiss/i }));
+    await waitFor(() => expect(dismissSpy).toHaveBeenCalledTimes(1));
+  },
+};
+
+/**
+ * A generic mutation failure shows the plain inline error message and NO
+ * "Open Settings" action.
+ */
+export const GenericActionError: Story = {
+  args: {
+    useData: stub({
+      data: POPULATED,
+      actionError: { kind: 'generic', message: 'Network request failed' },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const alert = within(await c.findByRole('alert'));
+    await expect(alert.getByText(/Network request failed/i)).toBeInTheDocument();
+    await expect(alert.queryByRole('button', { name: /Open Settings/i })).toBeNull();
   },
 };

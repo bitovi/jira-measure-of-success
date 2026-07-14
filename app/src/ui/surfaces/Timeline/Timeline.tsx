@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useTimelineData, type UseTimeline } from '@ui/data/useTimelineData/index.js';
+import { useTimelineData, type UseTimeline, type TimelineActionError } from '@ui/data/useTimelineData/index.js';
+import { openKpiSettings, openIssue } from '@ui/bridge.js';
 import {
   quarterStartMs,
   type CreateKpiInput,
@@ -43,8 +44,17 @@ function ms(iso: string): number {
   return new Date(iso).getTime();
 }
 
-export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline }) {
-  const { data, pending, error, record: recordValue, createKpi } = useData();
+export function Timeline({
+  useData = useTimelineData,
+  onOpenSettings = openKpiSettings,
+  onOpenIssue = openIssue,
+}: {
+  useData?: UseTimeline;
+  onOpenSettings?: () => void | Promise<void>;
+  onOpenIssue?: (issueKey: string) => void | Promise<void>;
+}) {
+  const { data, pending, error, actionError, clearActionError, record: recordValue, createKpi } =
+    useData();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [modalKpi, setModalKpi] = useState<TimelineNodeDto | null>(null);
@@ -71,14 +81,23 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
     return { quarters, domainStart, domainEnd, plotWidth, xOf, todayMs };
   }, [data]);
 
-  // Center the scroll on today (previous quarter at the left edge) once.
+  // On load, land on the CURRENT quarter (previous quarter just to its left,
+  // current + next visible) rather than the far-right end of the 9-quarter
+  // domain (Q5 default window). Center the current quarter within the plot
+  // viewport (excluding the sticky label column), clamped to the scroll range —
+  // so a wide viewport (small max-scroll) doesn't pin us to the domain's end.
   useEffect(() => {
-    if (data && scrollRef.current && !centeredRef.current) {
-      const prevQuarterStart = addQuarters(quarterStartMs(axis.todayMs), -1);
-      const x = ((prevQuarterStart - axis.domainStart) / (axis.domainEnd - axis.domainStart)) * axis.plotWidth;
-      scrollRef.current.scrollLeft = x;
-      centeredRef.current = true;
-    }
+    const node = scrollRef.current;
+    if (!data || !node || centeredRef.current) return;
+    const plotX = (msVal: number) =>
+      ((msVal - axis.domainStart) / (axis.domainEnd - axis.domainStart)) * axis.plotWidth;
+    const currentQuarterStart = quarterStartMs(axis.todayMs);
+    const currentMidX =
+      LABEL_W + (plotX(currentQuarterStart) + plotX(addQuarters(currentQuarterStart, 1))) / 2;
+    const plotViewportCenter = (LABEL_W + node.clientWidth) / 2;
+    const maxScroll = node.scrollWidth - node.clientWidth;
+    node.scrollLeft = Math.max(0, Math.min(currentMidX - plotViewportCenter, maxScroll));
+    centeredRef.current = true;
   }, [data, axis]);
 
   const flat = useMemo(() => {
@@ -128,8 +147,7 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
     <div className="p-6 text-text">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">KPI Timeline</h1>
-          <p className="mt-1 max-w-2xl text-sm text-text-subtle">
+          <p className="max-w-2xl text-sm text-text-subtle">
             The KPI tree as a nested plan. Each KPI shows recorded values as a sparkline; diamonds
             mark targets. Click a row's track to reveal the issues behind its targets; use + to
             record a value. Scroll horizontally to pan across quarters.
@@ -142,6 +160,14 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
           + Add KPI
         </button>
       </div>
+
+      {actionError && (
+        <ActionErrorBanner
+          error={actionError}
+          onDismiss={clearActionError}
+          onOpenSettings={onOpenSettings}
+        />
+      )}
 
       <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
         <div ref={scrollRef} className="overflow-x-auto">
@@ -186,6 +212,7 @@ export function Timeline({ useData = useTimelineData }: { useData?: UseTimeline 
                   onToggleExpand={() => toggleExpand(node.id)}
                   onRecord={() => setModalKpi(node)}
                   onAddChild={() => setCreating({ parentKpiId: node.kpiId, parentName: node.name })}
+                  onOpenIssue={onOpenIssue}
                 />
               ))
             )}
@@ -252,6 +279,7 @@ function TimelineRow({
   onToggleExpand,
   onRecord,
   onAddChild,
+  onOpenIssue,
 }: {
   node: TimelineNodeDto;
   hasChildren: boolean;
@@ -263,6 +291,7 @@ function TimelineRow({
   onToggleExpand: () => void;
   onRecord: () => void;
   onAddChild: () => void;
+  onOpenIssue: (issueKey: string) => void | Promise<void>;
 }) {
   const dom = domainFor(node);
   const rowH = expanded ? ROW_H_EXPANDED : ROW_H;
@@ -277,7 +306,7 @@ function TimelineRow({
   const todayX = axis.xOf(today);
 
   return (
-    <div className="flex border-b border-border last:border-b-0">
+    <div className="group flex border-b border-border last:border-b-0">
       {/* Label cell (sticky) */}
       <div
         className="sticky left-0 z-10 flex flex-none items-center gap-2 border-r border-border bg-surface px-3"
@@ -292,9 +321,25 @@ function TimelineRow({
         >
           {collapsed ? '▶' : '▼'}
         </button>
-        <span className="truncate text-sm font-semibold" style={{ paddingLeft: node.depth * 12 }}>
-          {node.name}
-        </span>
+        {node.issueKey ? (
+          <a
+            href={`/browse/${node.issueKey}`}
+            className="truncate text-sm font-semibold text-brand hover:underline"
+            style={{ paddingLeft: node.depth * 12 }}
+            title={`Open ${node.name} (${node.issueKey}) in Jira`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              void onOpenIssue(node.issueKey);
+            }}
+          >
+            {node.name}
+          </a>
+        ) : (
+          <span className="truncate text-sm font-semibold" style={{ paddingLeft: node.depth * 12 }}>
+            {node.name}
+          </span>
+        )}
         <span className="flex-none text-xs text-text-subtle">{node.unit}</span>
         {node.direction && (
           <span className={node.direction === 'increase' ? 'text-[11px] text-success' : 'text-[11px] text-danger'}>
@@ -302,20 +347,20 @@ function TimelineRow({
           </span>
         )}
         <button
-          className="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded border border-border text-text-subtle hover:border-brand hover:text-brand"
+          className="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100"
           onClick={onAddChild}
           aria-label="Add child KPI"
-          title="Add a child KPI"
+          title="Create child KPI"
         >
-          <span className="text-[13px] leading-none">⤵</span>
+          <span className="text-[13px] leading-none">+</span>
         </button>
         <button
-          className="grid h-[22px] w-[22px] flex-none place-items-center rounded border border-border text-text-subtle hover:border-brand hover:text-brand"
+          className="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100"
           onClick={onRecord}
           aria-label="Record a value"
           title="Record a value"
         >
-          +
+          <span className="text-[13px] leading-none">●</span>
         </button>
       </div>
 
@@ -415,29 +460,50 @@ function Sparkline({
 }) {
   const sorted = [...readings].sort((a, b) => a.date.localeCompare(b.date));
   const points = sorted.map((r) => `${axis.xOf(r.date)},${yOf(r.value)}`).join(' ');
+  const [hover, setHover] = useState<{ x: number; y: number; value: number; date: string } | null>(null);
   return (
-    <svg
-      className="pointer-events-none absolute left-0 top-0"
-      width={axis.plotWidth + PAD_R}
-      height={plotH}
-    >
-      <polyline points={points} fill="none" stroke="#22a06b" strokeWidth={1.5} />
-      {sorted.map((r, i) => (
-        <circle
-          key={i}
-          cx={axis.xOf(r.date)}
-          cy={yOf(r.value)}
-          r={4}
-          fill="#22a06b"
-          stroke="#fff"
-          strokeWidth={2}
+    <>
+      {/* svg stays click-through so the track cell handles expand/collapse; only
+          the data-point marks opt back into pointer events for hover. */}
+      <svg
+        className="pointer-events-none absolute left-0 top-0"
+        width={axis.plotWidth + PAD_R}
+        height={plotH}
+      >
+        <polyline points={points} fill="none" stroke="#22a06b" strokeWidth={1.5} />
+        <g className="pointer-events-auto">
+          {sorted.map((r, i) => {
+            const cx = axis.xOf(r.date);
+            const cy = yOf(r.value);
+            return (
+              <g
+                key={i}
+                className="cursor-pointer"
+                onMouseEnter={() => setHover({ x: cx, y: cy, value: r.value, date: r.date })}
+                onMouseLeave={() => setHover(null)}
+              >
+                {/* larger transparent hit target for comfortable hovering */}
+                <circle cx={cx} cy={cy} r={7} fill="transparent" />
+                <circle cx={cx} cy={cy} r={4} fill="#22a06b" stroke="#fff" strokeWidth={2} />
+                <title>
+                  {fmtVal(r.value)} · {r.date}
+                </title>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
+      {hover && (
+        <div
+          className="pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded border border-border bg-surface px-2 py-1 text-[11px] text-text shadow"
+          style={{ left: hover.x, top: hover.y - 8 }}
+          role="tooltip"
         >
-          <title>
-            {fmtVal(r.value)} · {r.date}
-          </title>
-        </circle>
-      ))}
-    </svg>
+          <span className="font-semibold tabular-nums">{fmtVal(hover.value)}</span>
+          <span className="text-text-subtle"> · {hover.date}</span>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -467,6 +533,50 @@ function Diamond({
       title={`Target ${fmtVal(target.value)} ${node.unit} — ${statusLabel} · due ${target.date} · Set on ${target.source.type} ${target.source.issue} — ${target.source.title}`}
       onClick={(e) => e.stopPropagation()}
     />
+  );
+}
+
+function ActionErrorBanner({
+  error,
+  onDismiss,
+  onOpenSettings,
+}: {
+  error: TimelineActionError;
+  onDismiss: () => void;
+  onOpenSettings: () => void | Promise<void>;
+}) {
+  const spaceNotSetUp = error.kind === 'space-not-set-up';
+  return (
+    <div
+      role="alert"
+      className="mt-4 flex items-start gap-3 rounded-lg border border-danger bg-surface px-4 py-3 text-sm"
+    >
+      <div className="flex-1">
+        <p className="font-semibold text-danger">
+          {spaceNotSetUp ? 'KPI space isn’t set up' : 'Couldn’t save your change'}
+        </p>
+        <p className="mt-0.5 text-text-subtle">
+          {spaceNotSetUp
+            ? 'Create or select the project that stores your KPIs in Settings, then try again.'
+            : error.message}
+        </p>
+        {spaceNotSetUp && (
+          <button
+            className="mt-2 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
+            onClick={() => void onOpenSettings()}
+          >
+            Open Settings
+          </button>
+        )}
+      </div>
+      <button
+        className="flex-none rounded px-2 py-1 text-text-subtle hover:text-text"
+        onClick={onDismiss}
+        aria-label="Dismiss"
+      >
+        ✕
+      </button>
+    </div>
   );
 }
 
@@ -520,7 +630,8 @@ function RecordModal({
           <label className="text-xs text-text-subtle">
             Date
             <input
-              className="mt-0.5 w-full rounded border border-border px-2 py-1.5 text-sm"
+              type="date"
+              className="mt-0.5 h-9 w-full rounded border border-border px-2 py-1.5 text-sm"
               value={date}
               onChange={(e) => setDate(e.target.value)}
             />

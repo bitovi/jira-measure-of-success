@@ -5,6 +5,11 @@ description: Make UIs responsive across all devices and verify responsiveness us
 
 # Responsive Design & Verification Skill
 
+> **Browser tooling — works for both toolsets.** Use whichever is configured:
+> Playwright MCP (`mcp_playwright_browser_*`) for Claude, or the Copilot browser
+> tools (`open_browser_page`, `screenshot_page`, `read_page`) for VS Code Copilot.
+> Where this skill says "Playwright", use the equivalent tool from whichever set is available.
+
 ## Purpose
 Ensure all UI features are fully responsive and work correctly across all device sizes, from mobile to desktop.
 

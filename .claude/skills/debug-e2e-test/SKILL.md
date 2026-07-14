@@ -5,6 +5,12 @@ description: Debug and fix failing Playwright E2E tests. Use when tests fail, wh
 
 # Skill: Debug E2E Test
 
+> **Browser tooling — works for both toolsets.** Use whichever is configured:
+> Playwright MCP (`mcp_playwright_browser_*`) for Claude, or the Copilot browser
+> tools (`open_browser_page`, `read_page`, `screenshot_page`, `click_element`) for
+> VS Code Copilot. Where this skill says "Playwright MCP", use the equivalent tool
+> from whichever set is available.
+
 Systematic workflow for debugging and fixing failing Playwright E2E tests.
 
 ## When to Use
@@ -56,7 +62,7 @@ grep -r "text the test looks for" src/ --include="*.tsx"
 
 Check: routes, text content, element types, selectors.
 
-### Step 7: Use Playwright MCP (If Needed)
+### Step 7: Use the browser tools (If Needed)
 
 If artifacts don't reveal the issue:
 1. Navigate to the page

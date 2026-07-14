@@ -19,6 +19,7 @@ modules:
       resolver:
         function: resolver
       title: KPI Settings
+      layout: blank
   jira:entityProperty:
     - key: kpi-index
       entityType: issue
@@ -53,6 +54,15 @@ permissions:
     - read:jira-work
     - write:jira-work
     - storage:app
+    # Writing the app-managed KPI Reading field via the app custom field value
+    # API (PUT /rest/api/3/app/field/{id}/value). Docs list this as currently
+    # optional but recommended and eventually mandatory. Adding a scope requires
+    # `forge install --upgrade` on next deploy.
+    - write:app-data:jira
+    # KPI-space provisioning (Settings → Create space): create the project and
+    # provision/associate the `KPI` issue type + scheme.
+    - manage:jira-project
+    - manage:jira-configuration
 
 app:
   runtime:

@@ -5,6 +5,12 @@ description: Orchestrate a complete visual QA workflow to make a dev/Storybook p
 
 # Skill: Pixel-Perfect Orchestration
 
+> **Browser tooling — works for both toolsets.** Use whichever is configured:
+> Playwright MCP (`mcp_playwright_browser_*`) for Claude, or the Copilot browser
+> tools (`open_browser_page`, `screenshot_page`, `read_page`, `run_playwright_code`)
+> for VS Code Copilot. Where this skill shows `mcp_playwright_*` calls, use the
+> equivalent tool from whichever set is available.
+
 Drive a page or component to pixel-perfect fidelity with a baseline by orchestrating **visual-diff** (screenshot comparison) and **computed-styles** (CSS property extraction) in a converging loop.
 
 ---

@@ -100,9 +100,9 @@ Only for work against a live site. Preconditions and steps:
    npm --prefix app exec -- forge install list
    ```
    If not installed: `forge install --non-interactive --site <your-site>.atlassian.net --product Jira --environment development`.
-7. **Start the tunnel** (long-running, background) from `app/`:
+7. **Start the tunnel** (long-running, background) via the npm script so it runs with `app/` as cwd:
    ```bash
-   cd app && forge tunnel
+   npm --prefix app run tunnel        # = forge tunnel (Node.js runtime tunnel needs no Docker)
    ```
    Then have the developer open the app in Jira; resolver `console.log`s stream in the tunnel terminal. Backend edits are live; UI edits require re-running `build:forge` (or wiring a resource `tunnel` port for hot-reload).
 

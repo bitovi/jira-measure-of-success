@@ -9,4 +9,5 @@ export * from './resolve/panelGrouping';
 export * from './resolve/timelineAxis';
 export * from './resolve/readingSeries';
 export * from './resolve/projectKey';
+export * from './resolve/kpiLinks';
 export * from './contracts';

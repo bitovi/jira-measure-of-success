@@ -189,6 +189,8 @@ export interface TimelineTargetFixture {
 
 export interface KpiTreeNode {
   kpiId: string;
+  /** Jira issue key of the KPI issue (KPIs are issues in the KPI space) */
+  issueKey: string;
   name: string;
   unit: string;
   direction: KpiDirection | null;
@@ -241,6 +243,7 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
 export const KPI_TREE: KpiTreeNode[] = [
   {
     kpiId: 'revenue',
+    issueKey: 'KPI-1',
     name: 'Revenue',
     unit: 'USD',
     direction: 'increase',
@@ -257,6 +260,7 @@ export const KPI_TREE: KpiTreeNode[] = [
     children: [
       {
         kpiId: 'orders',
+        issueKey: 'KPI-2',
         name: '# of Orders',
         unit: 'count',
         direction: 'increase',
@@ -272,6 +276,7 @@ export const KPI_TREE: KpiTreeNode[] = [
         children: [
           {
             kpiId: 'stores',
+            issueKey: 'KPI-3',
             name: 'Number of Stores',
             unit: 'count',
             direction: 'increase',
@@ -283,6 +288,7 @@ export const KPI_TREE: KpiTreeNode[] = [
             children: [
               {
                 kpiId: 'feature-parity',
+                issueKey: 'KPI-4',
                 name: 'Feature Parity',
                 unit: 'score',
                 direction: 'increase',
@@ -297,6 +303,7 @@ export const KPI_TREE: KpiTreeNode[] = [
               },
               {
                 kpiId: 'time-to-install',
+                issueKey: 'KPI-5',
                 name: 'Time To Install',
                 unit: 'hours',
                 direction: 'decrease',
@@ -310,6 +317,7 @@ export const KPI_TREE: KpiTreeNode[] = [
           },
           {
             kpiId: 'order-throughput',
+            issueKey: 'KPI-6',
             name: 'Order Throughput',
             unit: 'orders/hr',
             direction: 'increase',
@@ -324,6 +332,7 @@ export const KPI_TREE: KpiTreeNode[] = [
             children: [
               {
                 kpiId: 'time-to-checkout',
+                issueKey: 'KPI-7',
                 name: 'Time To Checkout',
                 unit: 'seconds',
                 direction: 'decrease',
@@ -335,6 +344,7 @@ export const KPI_TREE: KpiTreeNode[] = [
               },
               {
                 kpiId: 'error-rate',
+                issueKey: 'KPI-8',
                 name: 'Error Rate',
                 unit: '%',
                 direction: 'decrease',
@@ -352,6 +362,7 @@ export const KPI_TREE: KpiTreeNode[] = [
   },
   {
     kpiId: 'costs',
+    issueKey: 'KPI-9',
     name: 'Costs',
     unit: 'USD',
     direction: 'decrease',
@@ -366,6 +377,7 @@ export const KPI_TREE: KpiTreeNode[] = [
   },
   {
     kpiId: 'opportunity-enablement',
+    issueKey: 'KPI-10',
     name: 'Opportunity Enablement',
     unit: 'future value',
     direction: null,

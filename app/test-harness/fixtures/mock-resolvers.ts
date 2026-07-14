@@ -224,6 +224,7 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
   return {
     id: `n${timelineIdSeq++}`,
     kpiId: node.kpiId,
+    issueKey: node.issueKey,
     name: node.name,
     unit: node.unit,
     direction: node.direction,
@@ -275,6 +276,19 @@ function uniqueKpiId(base: string): string {
   return id;
 }
 
+/** Generate a fresh, plausible KPI issue key (KPI-N) for a newly created KPI. */
+function nextIssueKey(): string {
+  let count = 0;
+  const walk = (nodes: KpiTreeNode[]) => {
+    for (const n of nodes) {
+      count++;
+      if (n.children) walk(n.children);
+    }
+  };
+  walk(kpiTree);
+  return `KPI-${count + 1}`;
+}
+
 /**
  * Create a KPI (an issue in the KPI space). Appends a new tree node at the root
  * or under `parentKpiId`, with an empty reading changelog. Returns the timeline.
@@ -283,6 +297,7 @@ export function createKpi(input: CreateKpiInput): TimelineData {
   const kpiId = uniqueKpiId(slugifyKpi(input.name));
   const node: KpiTreeNode = {
     kpiId,
+    issueKey: nextIssueKey(),
     name: input.name.trim() || 'Untitled KPI',
     unit: input.unit.trim(),
     direction: input.direction ?? null,

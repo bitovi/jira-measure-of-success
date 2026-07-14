@@ -28,6 +28,8 @@ import {
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
+  ensureKpiIssueTypeOnProject,
+  KPI_ISSUE_TYPE,
   writeAssignments,
   writeReading,
   type KpiSpaceIssue,
@@ -145,7 +147,10 @@ async function kpiSpaceStatus(): Promise<KpiSpaceStatus> {
   if (!cfg.key) return { key: null, projectId: null, name: null, state: 'unset' };
   const project = await findProjectByKey(cfg.key);
   if (!project) return { key: cfg.key, projectId: null, name: null, state: 'missing' };
-  return { key: cfg.key, projectId: project.id, name: project.name, state: 'ready' };
+  // The project exists, but KPI issues can only be created if the KPI issue type
+  // is available in it — otherwise it's connected-but-not-usable.
+  const state = project.issueTypeNames.includes(KPI_ISSUE_TYPE) ? 'ready' : 'misconfigured';
+  return { key: cfg.key, projectId: project.id, name: project.name, state };
 }
 
 resolver.define('getKpiSpace', async () => kpiSpaceStatus());
@@ -157,20 +162,28 @@ resolver.define('saveKpiSpaceKey', async ({ payload }) => {
   return kpiSpaceStatus();
 });
 
-resolver.define('createKpiSpace', async ({ payload }) => {
+resolver.define('createKpiSpace', async ({ payload, context }) => {
   const key = normalizeProjectKey(String((payload as { key?: string })?.key ?? ''));
   if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
   const existing = await findProjectByKey(key);
-  const project = existing ?? (await createKpiProject(key));
+  // The invoking user (from context) leads a newly-created project — this keeps
+  // provisioning a pure `asApp` flow with no 3LO/`asUser` consent prompt.
+  const leadAccountId = (context as { accountId?: string })?.accountId;
+  if (!existing && !leadAccountId) {
+    throw new Error('Could not determine the current user to lead the new KPI project.');
+  }
+  const project = existing ?? (await createKpiProject(key, leadAccountId as string));
+  // Provision + associate the KPI issue type (also repairs a 'misconfigured' space).
+  await ensureKpiIssueTypeOnProject(project.id);
   await writeKpiSpaceConfig({ key, projectId: project.id, name: project.name });
-  return { key, projectId: project.id, name: project.name, state: 'ready' } satisfies KpiSpaceStatus;
+  return kpiSpaceStatus();
 });
 
 // The timeline enumerates KPI-space issues, reconstructs each KPI's reading
 // series from its field changelog (Option B), and nests them by issue parent —
 // mirroring the harness `getTimelineData`. Targets (authored on contributing
 // issues) are a follow-up; the list + readings render today.
-resolver.define('getTimelineData', async () => {
+async function buildTimelineData(): Promise<TimelineData> {
   const today = new Date().toISOString().slice(0, 10);
   const space = await readKpiSpaceConfig();
   if (!space.key || !space.projectId) return { today, roots: [] } satisfies TimelineData;
@@ -200,12 +213,25 @@ resolver.define('getTimelineData', async () => {
     }
   }
 
+  // Order siblings by native LexoRank (same order a backlog drag produces);
+  // issues without a rank keep their created-ASC enumeration order (sort is
+  // stable). Applied to roots and every children list.
+  const byRank = (a: KpiSpaceIssue, b: KpiSpaceIssue): number => {
+    if (a.rank && b.rank) return a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0;
+    if (a.rank) return -1;
+    if (b.rank) return 1;
+    return 0;
+  };
+  roots.sort(byRank);
+  for (const siblings of childrenOf.values()) siblings.sort(byRank);
+
   const toNode = (issue: KpiSpaceIssue, depth: number): TimelineNodeDto => {
     const meta = metaById.get(issue.id);
     const readings = readingsFromChangelog(changelogByIssue.get(issue.id) ?? []);
     return {
       id: issue.id,
       kpiId: issue.key,
+      issueKey: issue.key,
       name: issue.name,
       unit: meta?.unit ?? '',
       direction: meta?.direction ?? null,
@@ -217,7 +243,10 @@ resolver.define('getTimelineData', async () => {
   };
 
   return { today, roots: roots.map((r) => toNode(r, 0)) } satisfies TimelineData;
-});
+}
+
+resolver.define('getTimelineData', async () => buildTimelineData());
+
 resolver.define('recordValue', async ({ payload }) => {
   const { kpiId, date, value } = payload as {
     kpiId: string;
@@ -227,15 +256,15 @@ resolver.define('recordValue', async ({ payload }) => {
   // Readings are KPI-global (storage-model.md): kpiId identifies the KPI issue
   // whose reading-field changelog holds the series. value=null tombstones a date.
   await writeReading(kpiId, date, value);
-  return { ok: true };
+  return buildTimelineData();
 });
 
 resolver.define('createKpi', async ({ payload }) => {
   const input = payload as CreateKpiInput;
   const space = await readKpiSpaceConfig();
   if (!space.projectId) throw new Error('KPI space is not set up — configure it in Settings first.');
-  const kpiKey = await createKpiIssue(space.projectId, input);
-  return { ok: true, kpiKey };
+  await createKpiIssue(space.projectId, input);
+  return buildTimelineData();
 });
 
 export const handler = resolver.getDefinitions();
