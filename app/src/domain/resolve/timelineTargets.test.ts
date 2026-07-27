@@ -31,36 +31,38 @@ function contribution(over: Partial<KpiTargetContribution['source']>, a: Assignm
 }
 
 describe('buildKpiTargets', () => {
-  it('maps an absolute target with source info + status', () => {
+  it('maps an absolute target with source info + status (not provisional)', () => {
     // Recorded 120 by the 2026-06-30 target (increase KPI) → hit.
-    const targets = buildKpiTargets(
+    const { dated, undated } = buildKpiTargets(
       [contribution({}, assignment({ kpiId: 'revenue', target: 100, timing: { start: null, due: absolute('2026-06-30') } }))],
       [{ date: '2026-06-01', value: 120 }],
       'increase',
       TODAY,
     );
-    expect(targets).toEqual([
+    expect(undated).toEqual([]);
+    expect(dated).toEqual([
       {
         date: '2026-06-30',
         value: 100,
         status: 'hit',
+        provisional: false,
         source: { issue: 'INIT-48', type: 'Initiative', title: 'Multi-store support', iconUrl: null },
       },
     ]);
   });
 
   it('resolves a relative target date from the issue own due', () => {
-    const targets = buildKpiTargets(
+    const { dated } = buildKpiTargets(
       [contribution({ due: '2026-09-30' }, assignment({ kpiId: 'revenue', timing: { start: null, due: relative('issueDueDate', 1) } }))],
       [],
       'increase',
       TODAY,
     );
-    expect(targets[0]?.date).toBe('2026-10-31'); // 2026-09-30 + 1mo, EOM-preserving
+    expect(dated[0]?.date).toBe('2026-10-31'); // 2026-09-30 + 1mo, EOM-preserving
   });
 
   it('resolves parentDueDate from the parent own due', () => {
-    const targets = buildKpiTargets(
+    const { dated } = buildKpiTargets(
       [
         contribution(
           { due: '2026-09-30', parent: { key: 'OUT-12', due: '2026-12-31' } },
@@ -71,25 +73,51 @@ describe('buildKpiTargets', () => {
       'increase',
       TODAY,
     );
-    expect(targets[0]?.date).toBe('2026-12-31');
+    expect(dated[0]?.date).toBe('2026-12-31');
   });
 
-  it('skips delta targets, null-value targets, and unresolvable dates', () => {
-    const targets = buildKpiTargets(
+  it('resolves a delta (percent) target to a provisional estimate marker (FR-22/23)', () => {
+    // +10% of the baseline carried from the last reading (200) = 220, provisional.
+    const { dated } = buildKpiTargets(
+      [contribution({ due: '2026-06-30' }, assignment({ kpiId: 'r', targetType: 'delta', target: 10, timing: { start: null, due: relative('issueDueDate', 0) } }))],
+      [{ date: '2026-05-01', value: 200 }],
+      'increase',
+      TODAY,
+    );
+    expect(dated[0]?.value).toBeCloseTo(220, 6);
+    expect(dated[0]?.provisional).toBe(true);
+  });
+
+  it('routes a pending-date target into the undated lane (FR-24)', () => {
+    const { dated, undated } = buildKpiTargets(
+      [contribution({ due: null }, assignment({ kpiId: 'r', targetType: 'delta', target: 10, timing: { start: null, due: relative('issueDueDate', 1) } }))],
+      [{ date: '2026-05-01', value: 200 }],
+      'increase',
+      TODAY,
+    );
+    expect(dated).toEqual([]);
+    expect(undated).toHaveLength(1);
+    expect(undated[0]?.date).toBeNull();
+    expect(undated[0]?.provisional).toBe(true);
+    expect(undated[0]?.value).toBeCloseTo(220, 6);
+  });
+
+  it('skips null-value targets and delta targets with no baseline reading', () => {
+    const { dated, undated } = buildKpiTargets(
       [
-        contribution({}, assignment({ kpiId: 'r', targetType: 'delta', target: 50 })),
         contribution({}, assignment({ kpiId: 'r', target: null })),
-        contribution({ due: null }, assignment({ kpiId: 'r', timing: { start: null, due: relative('issueDueDate', 1) } })),
+        contribution({}, assignment({ kpiId: 'r', targetType: 'delta', target: 50 })),
       ],
       [],
       'increase',
       TODAY,
     );
-    expect(targets).toEqual([]);
+    expect(dated).toEqual([]);
+    expect(undated).toEqual([]);
   });
 
-  it('sorts targets chronologically', () => {
-    const targets = buildKpiTargets(
+  it('sorts dated targets chronologically', () => {
+    const { dated } = buildKpiTargets(
       [
         contribution({ key: 'A-1' }, assignment({ kpiId: 'r', timing: { start: null, due: absolute('2026-12-31') } })),
         contribution({ key: 'B-2' }, assignment({ kpiId: 'r', timing: { start: null, due: absolute('2026-03-31') } })),
@@ -98,7 +126,7 @@ describe('buildKpiTargets', () => {
       'increase',
       TODAY,
     );
-    expect(targets.map((t) => t.date)).toEqual(['2026-03-31', '2026-12-31']);
-    expect(targets.map((t) => t.source.issue)).toEqual(['B-2', 'A-1']);
+    expect(dated.map((t) => t.date)).toEqual(['2026-03-31', '2026-12-31']);
+    expect(dated.map((t) => t.source.issue)).toEqual(['B-2', 'A-1']);
   });
 });

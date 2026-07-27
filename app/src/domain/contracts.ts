@@ -1,5 +1,7 @@
 import type { DueTiming, IsoDate, KpiDirection, TargetType } from './models/index';
 import type { TargetStatus } from './resolve/targetStatus';
+import type { BaselineState } from './resolve/baseline';
+import type { DisplayState, TargetWarning } from './resolve/displayState';
 
 /**
  * Resolver payload contracts — the `invoke(...)` seam between Custom UI and the
@@ -17,6 +19,21 @@ export interface ResolvedTargetDateDto {
   source: string;
 }
 
+/**
+ * Read-time resolution of a relative target's VALUE (Feature 03). Attached to a
+ * panel row so the saved-target card can render the baseline note + status pill
+ * without any arithmetic in React.
+ */
+export interface ResolvedTargetValueDto {
+  /** null only when `state === 'needsBaseline'` */
+  value: number | null;
+  baseline: number | null;
+  baselineDate: string | null;
+  baselineFrom: string | null;
+  state: BaselineState;
+  provisional: boolean;
+}
+
 export interface PanelRowDto {
   kpiId: string;
   name: string;
@@ -31,6 +48,21 @@ export interface PanelRowDto {
   /** the assignment's KPI start date (anchor for relative `kpiStart` dates) */
   start: IsoDate | null;
   relationship: PanelRelationship;
+  // ── Feature 03: relative-value resolution (null for untracked rows) ────────
+  /** resolved target value + baseline state (null for untracked rows) */
+  resolvedValue: ResolvedTargetValueDto | null;
+  /** combined display state driving the status pill (the 8 FR-26 states) */
+  displayState: DisplayState | null;
+  /** the warning to surface, if any (stale baseline / unconfirmed result / needs baseline) */
+  warning: TargetWarning;
+  /** compute-on-read freeze: closed issue + past due date (FR-16) */
+  frozen: boolean;
+  /** the contributing issue's effective due date (the baseline anchor); null when pending */
+  dueDate: string | null;
+  /** true when the due date was rolled up from descendants (UI: "Rolled up due date") */
+  dueDateRolledUp: boolean;
+  /** recorded value in effect at the target date (for met/missed/unknown rows) */
+  actual: number | null;
 }
 
 export interface CatalogEntryDto {
@@ -38,12 +70,35 @@ export interface CatalogEntryDto {
   name: string;
   unit: string;
   direction: KpiDirection | null;
+  /** the KPI's latest recorded value, for the authoring "current value" note (FR-5) */
+  currentValue?: number | null;
+  /** nesting depth in the KPI tree (0 = root); entries are ordered depth-first so the
+   *  picker can indent to show parent/child relationships. Defaults to 0 when absent. */
+  depth?: number;
 }
 
 export interface PanelData {
   issueKey: string;
   rows: PanelRowDto[];
   catalog: CatalogEntryDto[];
+  /** the issue's effective due date (baseline + relative-timing anchor); null pending */
+  issueDueDate: string | null;
+  /** true when that due date was rolled up from descendants ("Rolled up due date") */
+  issueDueRolledUp: boolean;
+  /**
+   * Set ONLY when THIS issue is itself a KPI (lives in the KPI space, Feature
+   * 04). When present the panel renders the single-KPI chart (KpiView) instead
+   * of the associate/target-editor form. Carries this KPI's own series.
+   */
+  kpiView?: KpiViewDto | null;
+}
+
+/** The single-KPI chart payload for a KPI issue's panel (Feature 04). */
+export interface KpiViewDto {
+  /** this KPI's own series (readings + dated/undated targets) */
+  node: TimelineNodeDto;
+  /** ISO "today" for the axis marker + status classification */
+  today: string;
 }
 
 // ── Settings preview ────────────────────────────────────────────────────────
@@ -52,9 +107,12 @@ export interface PanelData {
 
 // ── Timeline ────────────────────────────────────────────────────────────────
 export interface TimelineTargetDto {
-  date: string;
+  /** null = pending/undated (Feature 03, FR-24) — rendered in the Undated lane */
+  date: string | null;
   value: number;
   status: TargetStatus;
+  /** true = an estimate (baseline not yet baselined); rendered distinct (FR-23) */
+  provisional: boolean;
   source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 
@@ -73,8 +131,12 @@ export interface TimelineNodeDto {
   direction: KpiDirection | null;
   depth: number;
   targets: TimelineTargetDto[];
+  /** pending targets with no resolvable date — right-pinned "Undated" lane (FR-24) */
+  undated: TimelineTargetDto[];
   readings: TimelineReadingDto[];
   children: TimelineNodeDto[];
+  /** true while relative/rolled-up targets are still resolving (shimmer, FR-20/25) */
+  resolving?: boolean;
 }
 
 export interface TimelineData {

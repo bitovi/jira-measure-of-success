@@ -1,4 +1,4 @@
-import api, { route } from '@forge/api';
+import api, { assumeTrustedRoute, route, routeFromAbsolute } from '@forge/api';
 import {
   AssignmentProperty,
   KpiMetaProperty,
@@ -21,6 +21,19 @@ import {
  */
 const ASSIGNMENT_PROPERTY_KEY = 'kpi-assignments';
 const MAX_DEPTH = 10;
+/**
+ * Batch size for `id in (...)` / `parent in (...)` JQL clauses — matches
+ * bitovi/jira-timeline-report's own convention (`fetchChildrenResponses`,
+ * "batches of 40"). Keeps JQL/URL length well under Jira's limits while
+ * turning what would be N single-issue REST calls into a handful of bulk ones.
+ */
+const BATCH_SIZE = 40;
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
 
 interface IssueParentInfo {
   parentId: string | null;
@@ -28,12 +41,14 @@ interface IssueParentInfo {
   issueTypeName: string;
   ownStart: string | null;
   ownDueDate: string | null;
+  /** true when the issue's status category is "done" (Feature 03 freeze) */
+  closed: boolean;
 }
 
 export async function fetchIssueMeta(issueId: string): Promise<IssueParentInfo> {
   const res = await api
     .asUser()
-    .requestJira(route`/rest/api/3/issue/${issueId}?fields=parent,issuetype,duedate,customfield_10015`);
+    .requestJira(route`/rest/api/3/issue/${issueId}?fields=parent,issuetype,duedate,customfield_10015,status`);
   const data = (await res.json()) as {
     key: string;
     fields: {
@@ -42,6 +57,7 @@ export async function fetchIssueMeta(issueId: string): Promise<IssueParentInfo> 
       duedate?: string | null;
       /** Jira Cloud's default "Start date" field */
       customfield_10015?: string | null;
+      status?: { statusCategory?: { key?: string } };
     };
   };
   return {
@@ -50,6 +66,7 @@ export async function fetchIssueMeta(issueId: string): Promise<IssueParentInfo> 
     issueTypeName: data.fields.issuetype?.name ?? 'Unknown',
     ownStart: data.fields.customfield_10015 ?? null,
     ownDueDate: data.fields.duedate ?? null,
+    closed: data.fields.status?.statusCategory?.key === 'done',
   };
 }
 
@@ -237,6 +254,71 @@ export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<
   return byIssue;
 }
 
+/**
+ * Normalize an issue-type/avatar icon URL to a `Route` `requestJira` can call.
+ *
+ * For built-in issue types (Epic, Story, ...) Jira returns a plain site-
+ * relative-looking absolute URL, so `routeFromAbsolute` (strip the domain,
+ * keep pathname+search) is all that's needed. But for CUSTOM issue types
+ * (Initiative, Outcome, KPI, ...) the search API instead returns the icon URL
+ * already in Atlassian's API-gateway absolute form —
+ * `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/2/universal_avatar/...`
+ * — because that's the same gateway host `asUser().requestJira()` used to make
+ * the search call in the first place. `routeFromAbsolute` only strips the
+ * domain, so the `/ex/jira/{cloudId}` segment would stay in the "path" handed
+ * to `requestJira`, which prefixes its own gateway routing onto it — the
+ * resulting double-prefixed request fails outright (`NEEDS_AUTHENTICATION_ERR`)
+ * before it ever reaches the real endpoint. Strip anything before `/rest/` so
+ * `requestJira` always gets a plain site-relative REST path.
+ */
+function toJiraRoute(absoluteUrl: string) {
+  const { pathname, search } = new URL(absoluteUrl);
+  const restIndex = pathname.indexOf('/rest/');
+  if (restIndex <= 0) return routeFromAbsolute(absoluteUrl);
+  return assumeTrustedRoute(`${pathname.slice(restIndex)}${search}`);
+}
+
+/**
+ * Proxy an issue-type icon into a same-origin `data:` URL.
+ *
+ * The Custom UI iframe runs on a different origin from Atlassian's icon hosts
+ * (`api.atlassian.com`, the site CDN). A plain <img> would display, but the
+ * timeline tints its target markers with CSS `mask-image`, which requires a
+ * CORS-clean image — and those hosts send no `Access-Control-Allow-Origin`, so
+ * the mask fails silently and the marker renders blank (intermittently, thanks
+ * to cache poisoning). Fetching the bytes server-side (no browser CORS) and
+ * inlining them as a `data:` URL makes the tinted marker reliable.
+ *
+ * Best-effort: returns null on any failure so the UI falls back to a diamond.
+ */
+export async function fetchIconDataUrl(iconUrl: string): Promise<string | null> {
+  try {
+    const res = await api.asUser().requestJira(toJiraRoute(iconUrl));
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') ?? 'image/png';
+    const base64 = Buffer.from(await res.arrayBuffer()).toString('base64');
+    return `data:${contentType};base64,${base64}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a batch of issue-type icon URLs to same-origin `data:` URLs, deduped
+ * (issue types repeat heavily across contributing issues, so many targets share
+ * one icon). Already-inlined `data:` URLs and nulls are skipped. Failures are
+ * omitted so the caller keeps the original URL (UI then shows the diamond).
+ */
+export async function inlineIssueTypeIcons(
+  urls: ReadonlyArray<string | null>,
+): Promise<Map<string, string>> {
+  const unique = [...new Set(urls.filter((u): u is string => !!u && !u.startsWith('data:')))];
+  const resolved = await Promise.all(unique.map(async (u) => [u, await fetchIconDataUrl(u)] as const));
+  const map = new Map<string, string>();
+  for (const [u, data] of resolved) if (data) map.set(u, data);
+  return map;
+}
+
 /** Direct children of an issue via JQL `parent = X`. */
 export async function fetchChildren(issueId: string): Promise<string[]> {
   const res = await api
@@ -245,6 +327,86 @@ export async function fetchChildren(issueId: string): Promise<string[]> {
   if (!res.ok) return [];
   const data = (await res.json()) as { issues?: Array<{ id: string }> };
   return (data.issues ?? []).map((i) => i.id);
+}
+
+/**
+ * Bulk-fetch issue meta (parent id, type, dates, status) for MANY issues at
+ * once via `id in (...)` JQL, chunked at BATCH_SIZE — the same batching
+ * bitovi/jira-timeline-report uses instead of one `fetchIssueMeta` GET per
+ * issue. Unresolvable/deleted ids are simply absent from the returned map.
+ */
+export async function fetchIssuesByIds(issueIds: string[]): Promise<Map<string, IssueParentInfo>> {
+  const out = new Map<string, IssueParentInfo>();
+  const unique = [...new Set(issueIds)];
+  if (unique.length === 0) return out;
+  const fieldList = ['parent', 'issuetype', 'duedate', 'customfield_10015', 'status'].join(',');
+  await Promise.all(
+    chunkArray(unique, BATCH_SIZE).map(async (batch) => {
+      const jql = `id in (${batch.join(',')})`;
+      const res = await api
+        .asUser()
+        .requestJira(route`/rest/api/3/search/jql?jql=${jql}&fields=${fieldList}&maxResults=100`);
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        issues?: Array<{
+          id: string;
+          key: string;
+          fields?: {
+            parent?: { id: string };
+            issuetype?: { name: string };
+            duedate?: string | null;
+            customfield_10015?: string | null;
+            status?: { statusCategory?: { key?: string } };
+          };
+        }>;
+      };
+      for (const issue of data.issues ?? []) {
+        out.set(String(issue.id), {
+          parentId: issue.fields?.parent?.id ?? null,
+          issueKey: issue.key,
+          issueTypeName: issue.fields?.issuetype?.name ?? 'Unknown',
+          ownStart: issue.fields?.customfield_10015 ?? null,
+          ownDueDate: issue.fields?.duedate ?? null,
+          closed: issue.fields?.status?.statusCategory?.key === 'done',
+        });
+      }
+    }),
+  );
+  return out;
+}
+
+/**
+ * Bulk-fetch direct children for MANY parent issues in one batched call per
+ * BATCH_SIZE parents (`parent in (...)` JQL) instead of one `fetchChildren`
+ * JQL `parent = X` search PER parent — the exact level-batching pattern
+ * bitovi/jira-timeline-report uses to descend a hierarchy one level at a time.
+ * Children are grouped by `fields.parent.id` client-side, since a single
+ * `in (...)` response doesn't otherwise indicate which clause matched.
+ */
+export async function fetchChildrenForIds(parentIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const unique = [...new Set(parentIds)];
+  if (unique.length === 0) return out;
+  await Promise.all(
+    chunkArray(unique, BATCH_SIZE).map(async (batch) => {
+      const jql = `parent in (${batch.join(',')})`;
+      const res = await api
+        .asUser()
+        .requestJira(route`/rest/api/3/search/jql?jql=${jql}&fields=id,parent&maxResults=1000`);
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        issues?: Array<{ id: string; fields?: { parent?: { id: string } } }>;
+      };
+      for (const issue of data.issues ?? []) {
+        const parentId = issue.fields?.parent?.id;
+        if (!parentId) continue;
+        const list = out.get(parentId) ?? [];
+        list.push(String(issue.id));
+        out.set(parentId, list);
+      }
+    }),
+  );
+  return out;
 }
 
 export interface KpiSpaceIssue {
@@ -455,41 +617,70 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
     if (known) parentById.set(pid, known);
     else toFetch.push(pid);
   }
-  const fetched = await Promise.all(
-    toFetch.map(async (pid) => {
-      const meta = await fetchIssueMeta(pid);
-      return [pid, { key: meta.issueKey, due: meta.ownDueDate }] as const;
-    }),
-  );
-  for (const [pid, info] of fetched) parentById.set(pid, info);
+  const fetched = await fetchIssuesByIds(toFetch);
+  for (const pid of toFetch) {
+    const meta = fetched.get(pid);
+    if (meta) parentById.set(pid, { key: meta.issueKey, due: meta.ownDueDate });
+  }
 
   return { issues, parentById };
 }
 
 
 /**
- * Build the timing-node map for the subtree rooted at `issueId` (its own dates
- * plus all descendants), so `effectiveTiming` can roll up its due date.
- * Bounded by MAX_DEPTH; visited-guarded against cycles.
+ * Build the timing-node map for the subtrees rooted at `rootIds` (each root's
+ * own dates plus all its descendants), so `effectiveTiming` can roll up due
+ * dates for each root from the SAME shared map. Descends level-by-level,
+ * batch-fetching every node still in the frontier via `fetchIssuesByIds` /
+ * `fetchChildrenForIds` (BATCH_SIZE ids per call) instead of one call per
+ * node — the level-batching pattern bitovi/jira-timeline-report uses.
+ *
+ * Multiple roots share ONE traversal: a node reachable from more than one
+ * root (e.g. a common ancestor) is fetched once, whichever root reaches it
+ * first — safe because `TimingNode` carries no depth/root info, and
+ * `effectiveTiming(rootId, nodes, ...)` recurses structurally via `childIds`,
+ * not via how the map was populated. `depth` below is purely a traversal
+ * safety cap (MAX_DEPTH), not per-root bookkeeping.
  */
-export async function fetchSubtreeTimingNodes(issueId: string): Promise<Map<string, TimingNode>> {
+export async function fetchSubtreeTimingNodesForRoots(rootIds: string[]): Promise<Map<string, TimingNode>> {
   const nodes = new Map<string, TimingNode>();
-  const queue: Array<{ id: string; depth: number }> = [{ id: issueId, depth: 0 }];
-  while (queue.length) {
-    const { id, depth } = queue.shift()!;
-    if (nodes.has(id) || depth > MAX_DEPTH) continue;
-    const [meta, childIds] = await Promise.all([fetchIssueMeta(id), fetchChildren(id)]);
-    nodes.set(id, {
-      id,
-      issueKey: meta.issueKey,
-      issueTypeName: meta.issueTypeName,
-      ownStart: meta.ownStart,
-      ownDue: meta.ownDueDate,
-      childIds,
-    });
-    for (const childId of childIds) queue.push({ id: childId, depth: depth + 1 });
+  let frontier = [...new Set(rootIds)];
+  let depth = 0;
+  while (frontier.length > 0 && depth <= MAX_DEPTH) {
+    const unvisited = frontier.filter((id) => !nodes.has(id));
+    if (unvisited.length === 0) break;
+    const [metaById, childrenById] = await Promise.all([
+      fetchIssuesByIds(unvisited),
+      fetchChildrenForIds(unvisited),
+    ]);
+    const nextFrontier: string[] = [];
+    for (const id of unvisited) {
+      const meta = metaById.get(id);
+      if (!meta) continue; // unresolvable/deleted issue — skip, same as the old per-node guard
+      const childIds = childrenById.get(id) ?? [];
+      nodes.set(id, {
+        id,
+        issueKey: meta.issueKey,
+        issueTypeName: meta.issueTypeName,
+        ownStart: meta.ownStart,
+        ownDue: meta.ownDueDate,
+        childIds,
+      });
+      nextFrontier.push(...childIds);
+    }
+    frontier = nextFrontier;
+    depth += 1;
   }
   return nodes;
+}
+
+/**
+ * Single-root convenience wrapper around `fetchSubtreeTimingNodesForRoots`,
+ * kept for callers (and `test-e2e/jira-api.e2e.ts`) that only need one
+ * subtree.
+ */
+export async function fetchSubtreeTimingNodes(issueId: string): Promise<Map<string, TimingNode>> {
+  return fetchSubtreeTimingNodesForRoots([issueId]);
 }
 
 /**

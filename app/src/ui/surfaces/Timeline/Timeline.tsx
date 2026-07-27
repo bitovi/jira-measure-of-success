@@ -2,76 +2,87 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTimelineData, type UseTimeline, type TimelineActionError } from '@ui/data/useTimelineData/index.js';
 import { openKpiSettings, openIssue, openIssueNewTab, getSiteUrl } from '@ui/bridge.js';
 import {
-  quarterStartMs,
+  buildAxis,
+  axisDatesOf,
+  bandScale,
+  computeHover,
+  fmtVal,
+  PAD_R,
+  PlotCrosshair,
+  PlotTooltip,
+  ProjectionLine,
+  ProjectionModal,
+  ReadingDot,
+  RecordModal,
+  EditReadingModal,
+  Sparkline,
+  TargetMarker,
+  type Axis,
+  type HoverState,
+} from '@ui/plot/index.js';
+import {
+  collectContributingProjects,
+  filterTimelineByProjects,
+  projectSeries,
   type AddTargetInput,
   type CreateKpiInput,
   type IssuePickerItem,
-  type KpiDirection,
   type TimelineNodeDto,
   type TimelineReadingDto,
   type TimelineTargetDto,
 } from '@domain/index.js';
 
 /**
- * KPI Timeline v2 (Custom UI) — the KPI tree as a nested plan against a shared,
- * horizontally-scrollable date axis (Q5: 3-quarter default window, scroll to
- * pan). Sparklines of recorded readings, target diamonds classified
- * hit/missed/upcoming, drill-in to source issues, and a record-value modal.
+ * KPI Timeline v2 (Custom UI) — the KPI tree as a nested plan against a shared
+ * date axis. The horizontal axis FITS THE DATA RANGE (Feature 04, §4a): the
+ * domain is the union of every visible KPI's readings + dated targets (plus
+ * today), snapped outward to whole quarters — so the plot scrolls only when the
+ * range is genuinely wider than the viewport. Sparklines of recorded readings,
+ * target markers (the source issue's type icon, tinted gray/green/red for
+ * upcoming/hit/missed), drill-in to source issues, and a record-value modal.
+ * The plot primitives (axis, sparkline, markers, hover, modals) are shared with
+ * the KPI View via `@ui/plot` — see specs/04-kpi-view/plan.md.
  * Mock: specs/00-mocks/kpi-timeline-v2.html. Stories TL-1…TL-7.
  *
  * Data comes from an INJECTABLE loader hook (`useData`) — see usePanelData.ts.
  */
 const LABEL_W = 300;
-const QUARTER_PX = 220;
-const PAD_R = 16;
-const ROW_H = 44;
+const ROW_H = 60;
 const HEADER_H = 33;
+// Right-pinned "Undated" lane holding projection chips for pending targets (FR-24).
+const UNDATED_W = 140;
+// Per-depth indent for the label column's chevron + name (Jira Plans style —
+// the chevron indents together with the text, not pinned at the left edge).
+const INDENT_STEP = 20;
 
 /** Stable empty set for the issue picker's default `excludedKeys`. */
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
+// Project filter (contributing issues can live in any Jira project). The
+// selection is kept in the URL (`?projects=ECOM,POS`) via `history.replaceState`
+// — shareable/refresh-safe without spamming browser back-history on every
+// checkbox toggle.
+const PROJECTS_PARAM = 'projects';
+
+function readSelectedProjectsFromUrl(): Set<string> | null {
+  if (typeof window === 'undefined') return null;
+  const raw = new URLSearchParams(window.location.search).get(PROJECTS_PARAM);
+  if (!raw) return null;
+  const keys = raw.split(',').filter(Boolean);
+  return keys.length > 0 ? new Set(keys) : null;
+}
+
+function writeSelectedProjectsToUrl(selected: Set<string> | null): void {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  if (selected && selected.size > 0) url.searchParams.set(PROJECTS_PARAM, [...selected].sort().join(','));
+  else url.searchParams.delete(PROJECTS_PARAM);
+  window.history.replaceState(window.history.state, '', url);
+}
+
 interface FlatRow {
   node: TimelineNodeDto;
   hasChildren: boolean;
-}
-
-function fmtVal(v: number): string {
-  return v.toLocaleString(undefined, { maximumFractionDigits: Math.abs(v) >= 100 ? 0 : 1 });
-}
-function ms(iso: string): number {
-  return new Date(iso).getTime();
-}
-
-// Value in effect at time t (ms): exact between two readings via linear
-// interpolation; flat before the first / after the last reading. Mirrors the
-// mock's valueDetailAt so hovering anywhere on a row reports a value.
-function valueDetailAt(
-  readings: TimelineReadingDto[],
-  t: number,
-): { value: number; kind: 'before' | 'interp' | 'after' } | null {
-  if (!readings.length) return null;
-  const pts = [...readings].sort((a, b) => ms(a.date) - ms(b.date));
-  const times = pts.map((p) => ms(p.date));
-  if (t <= times[0]) return { value: pts[0].value, kind: 'before' };
-  if (t >= times[times.length - 1]) return { value: pts[pts.length - 1].value, kind: 'after' };
-  for (let i = 0; i < pts.length - 1; i++) {
-    if (t >= times[i] && t <= times[i + 1]) {
-      const f = (t - times[i]) / (times[i + 1] - times[i]);
-      return { value: pts[i].value + f * (pts[i + 1].value - pts[i].value), kind: 'interp' };
-    }
-  }
-  return null;
-}
-
-interface HoverState {
-  x: number; // px within the plot (for crosshair / date flag)
-  clientX: number;
-  clientY: number;
-  flipX: boolean; // render tooltip to the left of the cursor near the right edge
-  dateISO: string;
-  primary: string;
-  kindLabel: string | null;
-  sub: string | null;
 }
 
 export function Timeline({
@@ -90,18 +101,33 @@ export function Timeline({
   const { data, pending, error, actionError, clearActionError, record: recordValue, createKpi, searchIssues, addTarget } =
     useData();
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [selectedProjects, setSelectedProjects] = useState<Set<string> | null>(() =>
+    readSelectedProjectsFromUrl(),
+  );
+  const isFirstProjectsRender = useRef(true);
+  useEffect(() => {
+    // Skip the initial mount — the URL already reflects `selectedProjects` (it
+    // was read FROM the URL above), so there's nothing to write back yet.
+    if (isFirstProjectsRender.current) {
+      isFirstProjectsRender.current = false;
+      return;
+    }
+    writeSelectedProjectsToUrl(selectedProjects);
+  }, [selectedProjects]);
   const [adding, setAdding] = useState<{ node: TimelineNodeDto; date: string } | null>(null);
   const [editing, setEditing] = useState<{ node: TimelineNodeDto; reading: TimelineReadingDto } | null>(
     null,
   );
-  const [creating, setCreating] = useState<{ parentKpiId: string | null; parentName?: string } | null>(
-    null,
-  );
+  const [creating, setCreating] = useState<{
+    presetParent: { kpiId: string; name: string } | null;
+  } | null>(null);
   const [addingTarget, setAddingTarget] = useState<{ node: TimelineNodeDto; date: string } | null>(
     null,
   );
+  const [projecting, setProjecting] = useState<{ node: TimelineNodeDto; target: TimelineTargetDto } | null>(
+    null,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
-  const centeredRef = useRef(false);
   const [siteUrl, setSiteUrl] = useState('');
 
   // Site base URL for absolute /browse links (so hover/middle-click/copy don't
@@ -116,41 +142,34 @@ export function Timeline({
     };
   }, [loadSiteUrl]);
 
-  // Wide domain: 9 quarters centered on today; default view shows ~3 quarters
-  // and the plot area scrolls horizontally to pan (Q5).
-  const axis = useMemo(() => {
-    const todayMs = data ? ms(data.today) : Date.now();
-    const firstQ = addQuarters(quarterStartMs(todayMs), -4);
-    const quarters = Array.from({ length: 9 }, (_, i) => {
-      const startMs = addQuarters(firstQ, i);
-      return { startMs, label: quarterLabel(startMs) };
-    });
-    const domainStart = firstQ;
-    const domainEnd = addQuarters(firstQ, 9);
-    const plotWidth = 9 * QUARTER_PX;
-    const xOf = (iso: string) =>
-      ((ms(iso) - domainStart) / (domainEnd - domainStart)) * plotWidth;
-    return { quarters, domainStart, domainEnd, plotWidth, xOf, todayMs };
-  }, [data]);
+  // Project filter — contributing issues can live in any Jira project.
+  // `availableProjects` lists every project key seen anywhere in the tree;
+  // `filteredRoots` is the subtree-filtered tree (unchanged when "All").
+  const availableProjects = useMemo(
+    () => (data ? collectContributingProjects(data.roots) : []),
+    [data],
+  );
+  const filteredRoots = useMemo(
+    () => (data ? filterTimelineByProjects(data.roots, selectedProjects) : []),
+    [data, selectedProjects],
+  );
 
-  // On load, land on the CURRENT quarter (previous quarter just to its left,
-  // current + next visible) rather than the far-right end of the 9-quarter
-  // domain (Q5 default window). Center the current quarter within the plot
-  // viewport (excluding the sticky label column), clamped to the scroll range —
-  // so a wide viewport (small max-scroll) doesn't pin us to the domain's end.
-  useEffect(() => {
-    const node = scrollRef.current;
-    if (!data || !node || centeredRef.current) return;
-    const plotX = (msVal: number) =>
-      ((msVal - axis.domainStart) / (axis.domainEnd - axis.domainStart)) * axis.plotWidth;
-    const currentQuarterStart = quarterStartMs(axis.todayMs);
-    const currentMidX =
-      (plotX(currentQuarterStart) + plotX(addQuarters(currentQuarterStart, 1))) / 2;
-    const viewportCenter = node.clientWidth / 2;
-    const maxScroll = node.scrollWidth - node.clientWidth;
-    node.scrollLeft = Math.max(0, Math.min(currentMidX - viewportCenter, maxScroll));
-    centeredRef.current = true;
-  }, [data, axis]);
+  // Fit-to-data-range date axis (Feature 04, §4a): the domain is the union of
+  // every visible KPI's readings + dated targets (always including today),
+  // snapped outward to whole quarters. Built from the project-filtered tree (not
+  // collapse state) so expanding/collapsing rows never reflows the axis.
+  const axis = useMemo(() => {
+    const today = data?.today ?? new Date().toISOString().slice(0, 10);
+    const dates: string[] = [];
+    const walk = (nodes: TimelineNodeDto[]) => {
+      for (const node of nodes) {
+        dates.push(...axisDatesOf(node));
+        walk(node.children);
+      }
+    };
+    walk(filteredRoots);
+    return buildAxis(dates, today);
+  }, [data, filteredRoots]);
 
   const flat = useMemo(() => {
     if (!data) return [];
@@ -162,9 +181,24 @@ export function Timeline({
         if (hasChildren && !collapsed.has(node.id)) walk(node.children);
       }
     };
-    walk(data.roots);
+    walk(filteredRoots);
     return rows;
-  }, [data, collapsed]);
+  }, [data, filteredRoots, collapsed]);
+
+  // Full flattened KPI list (ignores `collapsed`) for the "+ Add KPI" parent
+  // picker — every existing KPI is a valid parent, not just the visible ones.
+  const kpiOptions = useMemo(() => {
+    if (!data) return [];
+    const options: { kpiId: string; name: string; depth: number }[] = [];
+    const walk = (nodes: TimelineNodeDto[]) => {
+      for (const node of nodes) {
+        options.push({ kpiId: node.kpiId, name: node.name, depth: node.depth });
+        walk(node.children);
+      }
+    };
+    walk(data.roots);
+    return options;
+  }, [data]);
 
   const toggleCollapse = (id: string) =>
     setCollapsed((s) => {
@@ -180,11 +214,6 @@ export function Timeline({
     setEditing(null);
   };
 
-  const submitCreate = (input: CreateKpiInput) => {
-    createKpi(input);
-    setCreating(null);
-  };
-
   const submitTarget = (input: AddTargetInput) => {
     addTarget(input);
     setAddingTarget(null);
@@ -193,23 +222,26 @@ export function Timeline({
   if (error) return <div className="p-6 text-danger">Failed to load timeline: {error}</div>;
   if (pending || !data) return <div className="p-6 text-text-subtle">Loading timeline…</div>;
 
+  // Only show the right-pinned Undated lane when at least one KPI actually has
+  // undated (pending) targets — otherwise it's just dead space.
+  const hasUndated = flat.some(({ node }) => node.undated.length > 0);
+
   return (
     <div className="p-6 text-text">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="max-w-2xl text-sm text-text-subtle">
-            The KPI tree as a nested plan. Each KPI shows recorded values as a sparkline; diamonds
-            mark targets. Click an empty spot on a past date to record a value, click a future date
-            to add a target, or click a recorded value to edit or delete it. Scroll horizontally to
-            pan across quarters.
-          </p>
+      <div className="flex items-start justify-end gap-4">
+        <div className="mt-1 flex flex-none items-center gap-2">
+          <ProjectFilterControl
+            projects={availableProjects}
+            selected={selectedProjects}
+            onChange={setSelectedProjects}
+          />
+          <button
+            className="flex-none rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
+            onClick={() => setCreating({ presetParent: null })}
+          >
+            + Add KPI
+          </button>
         </div>
-        <button
-          className="mt-1 flex-none rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
-          onClick={() => setCreating({ parentKpiId: null })}
-        >
-          + Add KPI
-        </button>
       </div>
 
       {actionError && (
@@ -233,8 +265,24 @@ export function Timeline({
             </div>
             {flat.length === 0 ? (
               <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
-                No KPIs yet — use <strong className="text-text">+ Add KPI</strong> to create your
-                first one.
+                {data.roots.length === 0 ? (
+                  <>
+                    No KPIs yet — use <strong className="text-text">+ Add KPI</strong> to create
+                    your first one.
+                  </>
+                ) : (
+                  <>
+                    No KPIs match the selected project filter — try{' '}
+                    <button
+                      type="button"
+                      className="font-medium text-brand underline"
+                      onClick={() => setSelectedProjects(null)}
+                    >
+                      clearing it
+                    </button>
+                    .
+                  </>
+                )}
               </div>
             ) : (
               flat.map(({ node, hasChildren }) => (
@@ -246,7 +294,9 @@ export function Timeline({
                   onToggleCollapse={() => toggleCollapse(node.id)}
                   onRecord={() => setAdding({ node, date: data.today })}
                   onAddTarget={() => setAddingTarget({ node, date: data.today })}
-                  onAddChild={() => setCreating({ parentKpiId: node.kpiId, parentName: node.name })}
+                  onAddChild={() =>
+                    setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
+                  }
                   onOpenIssue={onOpenIssue}
                   siteUrl={siteUrl}
                 />
@@ -289,12 +339,33 @@ export function Timeline({
               ))}
             </div>
           </div>
+
+          {/* Right-pinned "Undated" lane — pending targets that can't sit on the
+              dated axis. Deliberately OUTSIDE the scroll container (Q10).
+              Hidden entirely when no KPI has an undated target. */}
+          {hasUndated && (
+            <div className="flex-none border-l border-border" style={{ width: UNDATED_W }}>
+              <div
+                className="flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                style={{ height: HEADER_H }}
+              >
+                Undated
+              </div>
+              {flat.map(({ node }) => (
+                <UndatedLane
+                  key={node.id}
+                  node={node}
+                  onOpenProjection={(target) => setProjecting({ node, target })}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
       <p className="mt-3 text-xs text-text-subtle">
-        Diamonds mark targets · the red line is today · green/red = hit/missed · hollow purple =
-        upcoming · click a recorded value to edit or delete it.
+        Target markers show the source issue's icon · the red line is today · green = hit, red =
+        missed, gray = upcoming · click a recorded value to edit or delete it.
       </p>
 
       {adding && (
@@ -319,11 +390,13 @@ export function Timeline({
 
       {creating && (
         <CreateKpiModal
-          parentName={creating.parentName}
+          presetParent={creating.presetParent}
+          kpiOptions={kpiOptions}
           onCancel={() => setCreating(null)}
-          onCreate={({ name, unit, direction }) =>
-            submitCreate({ name, unit, direction, parentKpiId: creating.parentKpiId })
-          }
+          onCreate={(input) => {
+            createKpi(input);
+            setCreating(null);
+          }}
         />
       )}
 
@@ -347,29 +420,108 @@ export function Timeline({
           }
         />
       )}
+
+      {projecting && (
+        <ProjectionModal
+          node={projecting.node}
+          target={projecting.target}
+          siteUrl={siteUrl}
+          onClose={() => setProjecting(null)}
+          onOpenIssueNewTab={onOpenIssueNewTab}
+        />
+      )}
     </div>
   );
 }
 
-interface Axis {
-  quarters: Array<{ startMs: number; label: string }>;
-  domainStart: number;
-  domainEnd: number;
-  plotWidth: number;
-  xOf: (iso: string) => number;
-  todayMs: number;
-}
+/**
+ * Multi-select popover for the project filter — contributing issues can live
+ * in any Jira project, so this lists every project key found in the current
+ * tree (`availableProjects`) and lets the user narrow the timeline to a
+ * subset. "All" (nothing selected) leaves the tree unchanged.
+ */
+function ProjectFilterControl({
+  projects,
+  selected,
+  onChange,
+}: {
+  projects: string[];
+  selected: Set<string> | null;
+  onChange: (next: Set<string> | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
 
-function domainFor(node: TimelineNodeDto): { min: number; max: number } | null {
-  const vals = node.readings.map((r) => r.value).concat(node.targets.map((t) => t.value));
-  if (!vals.length) return null;
-  let min = Math.min(...vals);
-  let max = Math.max(...vals);
-  if (min === max) {
-    min -= 1;
-    max += 1;
-  }
-  return { min, max };
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  if (projects.length === 0) return null;
+
+  // List the selected project keys directly (rather than just a count) so the
+  // active filter is legible at a glance; past a few selections, truncate to
+  // keep the button from growing unbounded.
+  const selectedKeys = projects.filter((key) => selected?.has(key));
+  const label =
+    selectedKeys.length === 0
+      ? 'Project: All'
+      : selectedKeys.length <= 3
+        ? `Project: ${selectedKeys.join(', ')}`
+        : `Project: ${selectedKeys.slice(0, 3).join(', ')} +${selectedKeys.length - 3} more`;
+
+  const toggle = (key: string) => {
+    const next = new Set(selected ?? []);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onChange(next.size === 0 ? null : next);
+  };
+
+  return (
+    <div className="relative flex-none" ref={rootRef}>
+      <button
+        type="button"
+        className="max-w-[220px] truncate rounded border border-border bg-surface px-3 py-1.5 text-sm font-medium text-text hover:bg-surface-sunken"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {label}
+      </button>
+      {open && (
+        <ul
+          className="absolute right-0 z-30 mt-1 max-h-64 w-48 overflow-auto rounded border border-border bg-surface py-1 shadow-lg"
+          role="listbox"
+          aria-label="Filter by Jira project"
+        >
+          <li>
+            <button
+              type="button"
+              className="block w-full px-2 py-1.5 text-left text-sm hover:bg-surface-sunken"
+              onClick={() => onChange(null)}
+            >
+              All
+            </button>
+          </li>
+          {projects.map((key) => (
+            <li key={key}>
+              <label className="flex items-center gap-2 px-2 py-1.5 text-sm hover:bg-surface-sunken">
+                <input
+                  type="checkbox"
+                  checked={selected?.has(key) ?? false}
+                  onChange={() => toggle(key)}
+                />
+                {key}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function TimelineRowLabel({
@@ -395,23 +547,31 @@ function TimelineRowLabel({
 }) {
   return (
     <div
-      className="group flex items-center gap-2 border-b border-r border-border bg-surface px-3 last:border-b-0"
+      className="group flex flex-col justify-center gap-1 border-b border-r border-border bg-surface px-3 py-1.5 last:border-b-0"
       style={{ height: ROW_H }}
     >
-      <button
-        className={`grid h-4 w-4 place-items-center text-[10px] text-text-subtle ${
-          hasChildren ? '' : 'invisible'
-        }`}
+      <div className="flex items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP }}>
+        <button
+          className={`grid h-4 w-4 flex-none place-items-center text-text-subtle ${
+            hasChildren ? '' : 'invisible'
+          }`}
           onClick={onToggleCollapse}
-          aria-label={collapsed ? 'expand' : 'collapse'}
+          aria-label={hasChildren ? (collapsed ? 'Expand children' : 'Collapse children') : undefined}
+          aria-expanded={hasChildren ? !collapsed : undefined}
+          aria-hidden={!hasChildren}
+          disabled={!hasChildren}
         >
-          {collapsed ? '▶' : '▼'}
+          <svg fill="none" viewBox="0 0 16 16" role="presentation" className="h-4 w-4">
+            <path
+              fill="currentColor"
+              d={collapsed ? 'm6.03 1.47 6 6a.75.75 0 0 1 .052 1.004l-.052.056-6 6-1.06-1.06L10.44 8 4.97 2.53z' : 'm14.53 6.03-6 6a.75.75 0 0 1-1.004.052l-.056-.052-6-6 1.06-1.06L8 10.44l5.47-5.47z'}
+            />
+          </svg>
         </button>
         {node.issueKey ? (
           <a
             href={siteUrl ? `${siteUrl}/browse/${node.issueKey}` : `/browse/${node.issueKey}`}
             className="truncate text-sm font-semibold text-brand hover:underline"
-            style={{ paddingLeft: node.depth * 12 }}
             title={`Open ${node.name} (${node.issueKey}) in Jira`}
             onClick={(e) => {
               e.preventDefault();
@@ -422,10 +582,10 @@ function TimelineRowLabel({
             {node.name}
           </a>
         ) : (
-          <span className="truncate text-sm font-semibold" style={{ paddingLeft: node.depth * 12 }}>
-            {node.name}
-          </span>
+          <span className="truncate text-sm font-semibold">{node.name}</span>
         )}
+      </div>
+      <div className="flex items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP + 24 }}>
         <span className="flex-none text-xs text-text-subtle">{node.unit}</span>
         {node.direction && (
           <span className={node.direction === 'increase' ? 'text-[11px] text-success' : 'text-[11px] text-danger'}>
@@ -456,6 +616,7 @@ function TimelineRowLabel({
         >
           <span className="text-[11px] leading-none">◇</span>
         </button>
+      </div>
     </div>
   );
 }
@@ -479,84 +640,28 @@ function TimelineRowTrack({
   onOpenIssueNewTab: (issueKey: string) => void | Promise<void>;
   siteUrl: string;
 }) {
-  const dom = domainFor(node);
   const plotH = ROW_H;
-  // value → y (px within plot), inverted; padded to 20%..80% of plotH
-  const yOf = (v: number): number => {
-    if (!dom) return plotH / 2;
-    const frac = (v - dom.min) / (dom.max - dom.min);
-    return plotH * 0.2 + (1 - frac) * plotH * 0.6;
-  };
+  // Timeline band scale: squeeze the value domain into 20–80% of the short row,
+  // no ticks/labels (the KPI View uses `niceScale` instead — see @ui/plot).
+  const yOf = bandScale(node, plotH);
+  // Recency-weighted forward projection of the recorded trend (null with < 2
+  // readings — nothing to draw). Shared with the KPI View via `projectSeries`.
+  const projection = projectSeries(node.readings);
 
   const todayX = axis.xOf(today);
 
   const [hover, setHover] = useState<HoverState | null>(null);
 
   // Hovering anywhere on the row track reports the value at the cursor's date —
-  // the measured reading when close to its dot, otherwise a linear
-  // interpolation between readings (mirrors the mock's crosshair + tooltip).
+  // the measured reading when close to its dot, an interpolation in the past, or
+  // the projected value past the latest reading (shared via `computeHover`).
   const onTrackMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    // Target diamonds keep their own native tooltip — don't stack ours on top.
-    if ((e.target as HTMLElement).closest('[data-diamond]')) {
-      setHover(null);
-      return;
-    }
-    const rect = e.currentTarget.getBoundingClientRect();
-    const rawX = e.clientX - rect.left;
-    const x = Math.max(0, Math.min(rawX, axis.plotWidth));
-    const t = axis.domainStart + (x / axis.plotWidth) * (axis.domainEnd - axis.domainStart);
-    const dateISO = new Date(t).toISOString().slice(0, 10);
-
-    let primary: string;
-    let kindLabel: string | null;
-    let sub: string | null;
-    if (node.readings.length === 0) {
-      primary = 'No values recorded yet';
-      kindLabel = null;
-      sub = null;
-    } else {
-      // Snap to a measured reading when the cursor is near its dot.
-      let snap: TimelineReadingDto | null = null;
-      let best = 8;
-      for (const r of node.readings) {
-        const d = Math.abs(axis.xOf(r.date) - rawX);
-        if (d < best) {
-          best = d;
-          snap = r;
-        }
-      }
-      if (snap) {
-        primary = `${fmtVal(snap.value)} ${node.unit}`;
-        kindLabel = 'measured';
-        sub = snap.date;
-      } else {
-        const det = valueDetailAt(node.readings, t);
-        if (!det || det.kind === 'before') {
-          primary = '—';
-          kindLabel = 'no reading yet';
-          sub = dateISO;
-        } else {
-          primary = `~ ${fmtVal(det.value)} ${node.unit}`;
-          kindLabel = det.kind === 'after' ? 'latest' : 'interpolated';
-          sub = dateISO;
-        }
-      }
-    }
-    setHover({
-      x,
-      clientX: e.clientX,
-      clientY: e.clientY,
-      flipX: e.clientX > window.innerWidth - 220,
-      dateISO,
-      primary,
-      kindLabel,
-      sub,
-    });
+    setHover(computeHover(node, axis, e, projection));
   };
 
   // Clicking the track adds a value: snap to a nearby recorded reading (edit /
   // delete it) or, on an empty past date, open the record modal pre-filled with
-  // that date. Clicks on target diamonds and reading dots are handled by those
+  // that date. Clicks on target markers and reading dots are handled by those
   // elements; a click that reaches the track is on open space.
   const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('[data-diamond],[data-reading]')) return;
@@ -566,7 +671,7 @@ function TimelineRowTrack({
     const t = axis.domainStart + (x / axis.plotWidth) * (axis.domainEnd - axis.domainStart);
     const dateISO = new Date(t).toISOString().slice(0, 10);
     // Near an existing target? Leave it to the diamond's own tooltip.
-    if (node.targets.some((tg) => Math.abs(axis.xOf(tg.date) - rawX) < 8)) return;
+    if (node.targets.some((tg) => tg.date !== null && Math.abs(axis.xOf(tg.date) - rawX) < 8)) return;
     // Past/today opens the record-a-value modal; a future date opens the
     // add-a-target modal — both pre-filled with the clicked date.
     if (dateISO <= today) onAddValue(dateISO);
@@ -574,46 +679,61 @@ function TimelineRowTrack({
   };
 
   return (
-    <div className="group border-b border-border last:border-b-0">
-      {/* Track cell */}
-      <div
-        className="relative cursor-pointer"
-        style={{ width: axis.plotWidth + PAD_R, height: ROW_H }}
-        onClick={onTrackClick}
-        onMouseMove={onTrackMove}
-        onMouseLeave={() => setHover(null)}
-      >
-        {/* quarter gridlines */}
-        {axis.quarters.map((q) => (
-          <div
-            key={q.startMs}
-            className="absolute top-0 bottom-0 w-px bg-border"
-            style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
-          />
-        ))}
-        {/* today line */}
+    // The track cell carries BOTH the fixed ROW_H and the bottom border so the
+    // border-box height absorbs the 1px border — matching the label / undated
+    // cells exactly (which do the same). Keeping the border on a height-less
+    // wrapper instead would add 1px per row, drifting the plot gridlines out of
+    // step with the label column.
+    <div
+      className="group relative cursor-pointer border-b border-border last:border-b-0"
+      style={{ width: axis.plotWidth + PAD_R, height: ROW_H }}
+      onClick={onTrackClick}
+      onMouseMove={onTrackMove}
+      onMouseLeave={() => setHover(null)}
+    >
+      {/* progressive-load shimmer: relative/rolled-up targets still resolving (FR-20/25) */}
+      {node.resolving && (
         <div
-          className="absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80"
-          style={{ left: todayX }}
+          className="absolute inset-2 animate-pulse rounded bg-surface-sunken"
+          aria-label="Resolving targets…"
         />
+      )}
+      {/* quarter gridlines */}
+      {axis.quarters.map((q) => (
+        <div
+          key={q.startMs}
+          className="absolute top-0 bottom-0 w-px bg-border"
+          style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
+        />
+      ))}
+      {/* today line */}
+      <div
+        className="absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80"
+        style={{ left: todayX }}
+      />
 
-        {/* sparkline */}
-        {node.readings.length === 0 ? (
-          <span className="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">
-            No values yet — click a past date to add
-          </span>
-        ) : (
-          <Sparkline readings={node.readings} axis={axis} yOf={yOf} plotH={plotH} />
-        )}
+      {/* sparkline */}
+      {node.readings.length === 0 ? (
+        <span className="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">
+          No values yet — click a past date to add
+        </span>
+      ) : (
+        <Sparkline readings={node.readings} axis={axis} yOf={yOf} plotH={plotH} />
+      )}
 
-        {/* clickable reading dots — click to edit or delete the value */}
-        {node.readings.map((r, i) => (
-          <ReadingDot key={i} reading={r} node={node} axis={axis} y={yOf(r.value)} onEdit={onEditReading} />
-        ))}
+      {/* dashed recency-weighted projection of the recorded trend (≥ 2 readings) */}
+      {projection && <ProjectionLine projection={projection} axis={axis} yOf={yOf} plotH={plotH} />}
 
-        {/* target diamonds */}
-        {node.targets.map((t, i) => (
-          <Diamond
+      {/* clickable reading dots — click to edit or delete the value */}
+      {node.readings.map((r, i) => (
+        <ReadingDot key={i} reading={r} node={node} axis={axis} y={yOf(r.value)} onEdit={onEditReading} />
+      ))}
+
+      {/* target markers (dated only; undated go to the Undated lane) */}
+      {node.targets
+        .filter((t): t is TimelineTargetDto & { date: string } => t.date !== null)
+        .map((t, i) => (
+          <TargetMarker
             key={i}
             target={t}
             node={node}
@@ -624,198 +744,40 @@ function TimelineRowTrack({
           />
         ))}
 
-        {/* hover: crosshair follows the cursor; a floating tooltip reports the
-            value (measured / interpolated) at that date. */}
-        {hover && (
-          <div
-            className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-brand opacity-60"
-            style={{ left: hover.x }}
-          />
-        )}
-      </div>
-
-      {hover && (
-        <div
-          className="pointer-events-none fixed z-50 whitespace-nowrap rounded border border-border bg-surface px-2 py-1 text-[11px] text-text shadow-md"
-          style={{
-            left: hover.flipX ? undefined : hover.clientX + 14,
-            right: hover.flipX ? window.innerWidth - hover.clientX + 14 : undefined,
-            top: hover.clientY + 14,
-          }}
-          role="tooltip"
-        >
-          <span className="font-semibold tabular-nums">{hover.primary}</span>
-          {hover.kindLabel && <span className="text-text-subtle"> · {hover.kindLabel}</span>}
-          {hover.sub && <span className="text-text-subtle"> · {hover.sub}</span>}
-        </div>
-      )}
+      {/* hover: crosshair follows the cursor; a floating tooltip reports the
+          value (measured / interpolated) at that date. */}
+      {hover && <PlotCrosshair x={hover.x} />}
+      {hover && <PlotTooltip hover={hover} />}
     </div>
   );
 }
 
-function Sparkline({
-  readings,
-  axis,
-  yOf,
-  plotH,
+/** Right-pinned lane cell: chips for a KPI's pending (undated) targets (FR-24). */
+function UndatedLane({
+  node,
+  onOpenProjection,
 }: {
-  readings: TimelineReadingDto[];
-  axis: Axis;
-  yOf: (v: number) => number;
-  plotH: number;
+  node: TimelineNodeDto;
+  onOpenProjection: (target: TimelineTargetDto) => void;
 }) {
-  const sorted = [...readings].sort((a, b) => a.date.localeCompare(b.date));
-  const points = sorted.map((r) => `${axis.xOf(r.date)},${yOf(r.value)}`).join(' ');
-  // Purely presentational and click-through: the row track handles hover so a
-  // tooltip shows the value anywhere across the row, not only on the dots.
   return (
-    <svg
-      className="pointer-events-none absolute left-0 top-0"
-      width={axis.plotWidth + PAD_R}
-      height={plotH}
+    <div
+      className="flex flex-wrap content-center items-center gap-1 border-b border-border px-2 last:border-b-0"
+      style={{ height: ROW_H }}
     >
-      <polyline points={points} fill="none" stroke="#22a06b" strokeWidth={1.5} />
-      {sorted.map((r, i) => (
-        <circle
+      {node.undated.map((t, i) => (
+        <button
           key={i}
-          cx={axis.xOf(r.date)}
-          cy={yOf(r.value)}
-          r={4}
-          fill="#22a06b"
-          stroke="#fff"
-          strokeWidth={2}
-        />
-      ))}
-    </svg>
-  );
-}
-
-/**
- * A recorded value on the track. Rendered as a transparent, accessible hit
- * target over the sparkline dot so clicking a value opens the edit/delete modal
- * (the dot itself is drawn by the Sparkline, which is click-through).
- */
-function ReadingDot({
-  reading,
-  node,
-  axis,
-  y,
-  onEdit,
-}: {
-  reading: TimelineReadingDto;
-  node: TimelineNodeDto;
-  axis: Axis;
-  y: number;
-  onEdit: (reading: TimelineReadingDto) => void;
-}) {
-  return (
-    <button
-      type="button"
-      data-reading
-      className="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full"
-      style={{ left: axis.xOf(reading.date), top: y }}
-      aria-label={`Edit value ${fmtVal(reading.value)} ${node.unit} on ${reading.date}`}
-      title={`${fmtVal(reading.value)} ${node.unit} · ${reading.date} — click to edit or delete`}
-      onClick={(e) => {
-        e.stopPropagation();
-        onEdit(reading);
-      }}
-    />
-  );
-}
-
-function Diamond({
-  target,
-  node,
-  axis,
-  y,
-  onOpenIssueNewTab,
-  siteUrl,
-}: {
-  target: TimelineTargetDto;
-  node: TimelineNodeDto;
-  axis: Axis;
-  y: number;
-  onOpenIssueNewTab: (issueKey: string) => void | Promise<void>;
-  siteUrl: string;
-}) {
-  const [tip, setTip] = useState<{ clientX: number; clientY: number; flipX: boolean } | null>(null);
-  const color =
-    target.status === 'hit'
-      ? 'bg-success'
-      : target.status === 'missed'
-        ? 'bg-danger'
-        : 'border border-brand bg-surface';
-  const statusLabel =
-    target.status === 'hit' ? 'Target hit' : target.status === 'missed' ? 'Target missed' : 'Upcoming';
-
-  const track = (e: React.MouseEvent) =>
-    setTip({ clientX: e.clientX, clientY: e.clientY, flipX: e.clientX > window.innerWidth - 240 });
-
-  const issueKey = target.source.issue;
-  const href = siteUrl ? `${siteUrl}/browse/${issueKey}` : `/browse/${issueKey}`;
-
-  return (
-    <>
-      {/* Larger transparent hit area centered on the diamond so the small target
-          is easy to hover; the rotated square is the visible marker. Clicking
-          it opens the work item that set the target in a NEW tab. No native
-          `title` — the custom tooltip below carries the same info, and a title
-          would render a second, overlapping browser tooltip. */}
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center"
-        style={{ left: axis.xOf(target.date), top: y }}
-        data-diamond
-        aria-label={`Target ${fmtVal(target.value)} ${node.unit} due ${target.date} — ${statusLabel}. Open ${target.source.type} ${issueKey} in Jira (new tab)`}
-        onMouseEnter={track}
-        onMouseMove={track}
-        onMouseLeave={() => setTip(null)}
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          void onOpenIssueNewTab(issueKey);
-        }}
-      >
-        <div className={`h-2.5 w-2.5 rotate-45 ${color}`} />
-      </a>
-      {tip && (
-        <div
-          className="pointer-events-none fixed z-50 max-w-[240px] whitespace-normal rounded border border-border bg-surface px-2 py-1 text-[11px] text-text shadow-md"
-          style={{
-            left: tip.flipX ? undefined : tip.clientX + 14,
-            right: tip.flipX ? window.innerWidth - tip.clientX + 14 : undefined,
-            top: tip.clientY + 14,
-          }}
-          role="tooltip"
+          type="button"
+          className="rounded border border-dashed border-text-subtle px-1.5 py-0.5 text-[11px] text-text-subtle hover:border-brand hover:text-brand"
+          title={`Projected ${t.provisional ? '≈ ' : ''}${fmtVal(t.value)} ${node.unit} · date TBD — click for details`}
+          onClick={() => onOpenProjection(t)}
         >
-          <div>
-            <span className="font-semibold tabular-nums">
-              Target {fmtVal(target.value)} {node.unit}
-            </span>
-            <span className="text-text-subtle"> · {statusLabel}</span>
-          </div>
-          <div className="text-text-subtle">Due {target.date}</div>
-          <div className="mt-0.5 flex items-center gap-1">
-            <span className="text-text-subtle">Set on</span>
-            {target.source.iconUrl && (
-              <img
-                src={target.source.iconUrl}
-                alt={target.source.type}
-                title={target.source.type}
-                width={14}
-                height={14}
-                className="h-3.5 w-3.5 flex-none"
-              />
-            )}
-            <span className="font-semibold">{target.source.title}</span>
-          </div>
-          <div className="mt-0.5 text-text-subtle">Click to open in Jira (new tab)</div>
-        </div>
-      )}
-    </>
+          {t.provisional ? '≈ ' : ''}
+          {fmtVal(t.value)}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -863,198 +825,30 @@ function ActionErrorBanner({
   );
 }
 
-function RecordModal({
-  node,
-  defaultDate,
-  today,
-  onCancel,
-  onRecord,
-}: {
-  node: TimelineNodeDto;
-  defaultDate: string;
-  today: string;
-  onCancel: () => void;
-  onRecord: (date: string, value: number) => void;
-}) {
-  const [date, setDate] = useState(defaultDate);
-  const [value, setValue] = useState('');
-  const isFutureDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && date > today;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
-
-  const submit = () => {
-    const num = Number(value.replace(/,/g, ''));
-    if (value.trim() === '' || Number.isNaN(num)) return;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
-    onRecord(date, num);
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(9,30,66,0.54)]"
-      onClick={onCancel}
-    >
-      <div
-        className="w-[380px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg bg-surface shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 pb-1 pt-4">
-          <h2 className="text-base font-semibold">Record a value</h2>
-          <p className="mt-1 text-xs text-text-subtle">
-            {node.name} · {node.unit}
-          </p>
-        </div>
-        <div className="flex flex-col gap-3 px-5 py-3">
-          <label className="text-xs text-text-subtle">
-            Date
-            <input
-              type="date"
-              className="mt-0.5 h-9 w-full rounded border border-border px-2 py-1.5 text-sm"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
-          </label>
-          {isFutureDate && (
-            <p role="alert" className="-mt-1 text-xs text-warning">
-              This date is in the future. You can still record it, but the value
-              hasn’t happened yet.
-            </p>
-          )}
-          <label className="text-xs text-text-subtle">
-            Value
-            <input
-              className="mt-0.5 w-full rounded border border-border px-2 py-1.5 text-sm"
-              value={value}
-              placeholder="e.g. 1,300,000"
-              autoFocus
-              onChange={(e) => setValue(e.target.value)}
-            />
-          </label>
-        </div>
-        <div className="flex justify-end gap-2 px-5 pb-4 pt-3">
-          <button className="rounded border border-border px-3 py-1.5 text-sm" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
-            onClick={submit}
-          >
-            Record
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Edit or delete a recorded value. Readings are last-write-wins per date
- * (storage-model.md), so saving overwrites the value at this date and deleting
- * tombstones it — both keep a changelog entry rather than mutating history.
- */
-function EditReadingModal({
-  node,
-  reading,
-  onCancel,
-  onSave,
-  onDelete,
-}: {
-  node: TimelineNodeDto;
-  reading: TimelineReadingDto;
-  onCancel: () => void;
-  onSave: (value: number) => void;
-  onDelete: () => void;
-}) {
-  const [value, setValue] = useState(String(reading.value));
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
-
-  const submit = () => {
-    const num = Number(value.replace(/,/g, ''));
-    if (value.trim() === '' || Number.isNaN(num)) return;
-    onSave(num);
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(9,30,66,0.54)]"
-      onClick={onCancel}
-    >
-      <div
-        className="w-[380px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg bg-surface shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 pb-1 pt-4">
-          <h2 className="text-base font-semibold">Edit value</h2>
-          <p className="mt-1 text-xs text-text-subtle">
-            {node.name} · {node.unit} · {reading.date}
-          </p>
-        </div>
-        <div className="flex flex-col gap-3 px-5 py-3">
-          <label className="text-xs text-text-subtle">
-            Value
-            <input
-              className="mt-0.5 w-full rounded border border-border px-2 py-1.5 text-sm"
-              value={value}
-              placeholder="e.g. 1,300,000"
-              autoFocus
-              aria-label="Value"
-              onChange={(e) => setValue(e.target.value)}
-            />
-          </label>
-        </div>
-        <div className="flex items-center justify-between px-5 pb-4 pt-3">
-          <button
-            className="rounded border border-danger px-3 py-1.5 text-sm font-medium text-danger hover:bg-surface-sunken"
-            onClick={onDelete}
-          >
-            Delete
-          </button>
-          <div className="flex gap-2">
-            <button className="rounded border border-border px-3 py-1.5 text-sm" onClick={onCancel}>
-              Cancel
-            </button>
-            <button
-              className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
-              onClick={submit}
-            >
-              Save
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+/** A KPI candidate for the "+ Add KPI" parent picker — every existing KPI. */
+interface KpiParentOption {
+  kpiId: string;
+  name: string;
+  depth: number;
 }
 
 function CreateKpiModal({
-  parentName,
+  presetParent,
+  kpiOptions,
   onCancel,
   onCreate,
 }: {
-  parentName?: string;
+  /** Fixed parent from the row-level "add child" (⤵) trigger — no picker shown. */
+  presetParent: { kpiId: string; name: string } | null;
+  /** Every existing KPI, for the optional parent picker (only used when `presetParent` is null). */
+  kpiOptions: KpiParentOption[];
   onCancel: () => void;
-  onCreate: (input: { name: string; unit: string; direction: KpiDirection | null }) => void;
+  onCreate: (input: CreateKpiInput) => void;
 }) {
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('');
   const [direction, setDirection] = useState<'increase' | 'decrease' | 'none'>('increase');
+  const [parent, setParent] = useState<KpiParentOption | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1070,6 +864,7 @@ function CreateKpiModal({
       name: name.trim(),
       unit: unit.trim(),
       direction: direction === 'none' ? null : direction,
+      parentKpiId: presetParent ? presetParent.kpiId : (parent?.kpiId ?? null),
     });
   };
 
@@ -1079,7 +874,7 @@ function CreateKpiModal({
       onClick={onCancel}
     >
       <div
-        className="w-[380px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg bg-surface shadow-xl"
+        className="w-[380px] max-w-[calc(100vw-32px)] rounded-lg bg-surface shadow-xl"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
@@ -1087,12 +882,12 @@ function CreateKpiModal({
         <div className="px-5 pb-1 pt-4">
           <h2 className="text-base font-semibold">New KPI</h2>
           <p className="mt-1 text-xs text-text-subtle">
-            {parentName ? (
+            {presetParent ? (
               <>
-                Nested under <strong className="text-text">{parentName}</strong>
+                Nested under <strong className="text-text">{presetParent.name}</strong>
               </>
             ) : (
-              'A new top-level KPI'
+              'A new top-level KPI, or choose a parent below'
             )}
           </p>
         </div>
@@ -1131,6 +926,12 @@ function CreateKpiModal({
               <option value="none">No direction</option>
             </select>
           </label>
+          {!presetParent && (
+            <label className="text-xs text-text-subtle">
+              Parent KPI <span className="text-text-subtle">(optional)</span>
+              <KpiParentCombobox options={kpiOptions} value={parent} onChange={setParent} />
+            </label>
+          )}
         </div>
         <div className="flex justify-end gap-2 px-5 pb-4 pt-3">
           <button className="rounded border border-border px-3 py-1.5 text-sm" onClick={onCancel}>
@@ -1145,6 +946,127 @@ function CreateKpiModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A type-ahead picker over the existing KPI tree for the optional "Parent KPI"
+ * field on "+ Add KPI" — synchronous/local-filtered (the whole tree is already
+ * loaded), unlike `IssueCombobox`'s async Jira search. Options are indented by
+ * `depth` so the hierarchy stays visible while picking.
+ */
+function KpiParentCombobox({
+  options,
+  value,
+  onChange,
+}: {
+  options: KpiParentOption[];
+  value: KpiParentOption | null;
+  onChange: (option: KpiParentOption | null) => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q === '' ? options : options.filter((o) => o.name.toLowerCase().includes(q));
+  }, [options, query]);
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  const choose = (option: KpiParentOption) => {
+    onChange(option);
+    setQuery('');
+    setOpen(false);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setOpen(true);
+      setActive((a) => Math.min(a + 1, matches.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((a) => Math.max(a - 1, 0));
+    } else if (e.key === 'Enter') {
+      if (open && matches[active]) {
+        e.preventDefault();
+        choose(matches[active]);
+      }
+    }
+  };
+
+  if (value) {
+    return (
+      <div className="mt-0.5 flex items-center gap-2 rounded border border-border px-2 py-1.5 text-sm">
+        <span className="truncate">{value.name}</span>
+        <button
+          type="button"
+          className="ml-auto flex-none rounded px-1 text-text-subtle hover:text-text"
+          aria-label="Clear parent KPI"
+          onClick={() => {
+            onChange(null);
+            setOpen(true);
+          }}
+        >
+          ✕
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative mt-0.5" ref={rootRef}>
+      <input
+        className="w-full rounded border border-border px-2 py-1.5 text-sm"
+        placeholder="Search KPIs…"
+        aria-label="Search for a parent KPI"
+        role="combobox"
+        aria-expanded={open}
+        aria-autocomplete="list"
+        value={query}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setActive(0);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+      />
+      {open && (
+        <ul
+          className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded border border-border bg-surface py-1 shadow-lg"
+          role="listbox"
+        >
+          {matches.length === 0 && (
+            <li className="px-2 py-1.5 text-xs text-text-subtle">No matching KPIs</li>
+          )}
+          {matches.map((option, i) => (
+            <li key={option.kpiId} role="option" aria-selected={i === active}>
+              <button
+                type="button"
+                className={`block w-full truncate px-2 py-1.5 text-left text-sm hover:bg-surface-sunken ${
+                  i === active ? 'bg-surface-sunken' : ''
+                }`}
+                style={{ paddingLeft: 8 + option.depth * 12 }}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => choose(option)}
+              >
+                {option.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -1426,17 +1348,4 @@ function IssueCombobox({
       )}
     </div>
   );
-}
-
-// ── axis helpers (px-domain quarter math) ───────────────────────────────────
-function addQuarters(quarterStart: number, n: number): number {
-  const d = new Date(quarterStart);
-  const totalQ = d.getUTCFullYear() * 4 + Math.floor(d.getUTCMonth() / 3) + n;
-  const year = Math.floor(totalQ / 4);
-  const q = ((totalQ % 4) + 4) % 4;
-  return Date.UTC(year, q * 3, 1);
-}
-function quarterLabel(quarterStart: number): string {
-  const d = new Date(quarterStart);
-  return `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}`;
 }

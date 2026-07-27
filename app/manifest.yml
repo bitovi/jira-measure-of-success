@@ -63,6 +63,13 @@ permissions:
     # provision/associate the `KPI` issue type + scheme.
     - manage:jira-project
     - manage:jira-configuration
+    # Standard issue types (Epic, Story, ...) expose their icon as a static
+    # site asset (no scope needed), but CUSTOM issue types (Initiative,
+    # Outcome, KPI, ...) serve theirs via `GET /rest/api/2/universal_avatar/...`,
+    # which Forge gates behind this scope — without it `fetchIconDataUrl`
+    # silently gets a non-OK response and the timeline falls back to the plain
+    # diamond marker for every custom issue type.
+    - read:avatar:jira
   # The timeline tooltip renders the contributing issue's TYPE icon, served from
   # the Jira site (issuetype.iconUrl / issue-picker `img`). Custom UI must be
   # allowed to load those images.

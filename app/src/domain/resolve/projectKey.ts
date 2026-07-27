@@ -13,3 +13,13 @@ export function normalizeProjectKey(raw: string): string {
 export function isValidProjectKey(key: string): boolean {
   return PROJECT_KEY_RE.test(key);
 }
+
+/**
+ * Derive a contributing issue's project key from its issue key. Jira issue
+ * keys are always `{PROJECTKEY}-{number}`, so this needs no extra Jira REST
+ * field — used by the Timeline's project filter (contributing issues can live
+ * in any Jira project, unlike the single dedicated KPI space project above).
+ */
+export function projectKeyOfIssueKey(issueKey: string): string {
+  return issueKey.split('-')[0] ?? issueKey;
+}

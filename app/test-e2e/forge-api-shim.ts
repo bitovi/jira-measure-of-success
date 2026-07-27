@@ -74,3 +74,13 @@ export function route(strings: TemplateStringsArray, ...values: unknown[]): stri
     '',
   );
 }
+
+/**
+ * Mirror of `@forge/api`'s `routeFromAbsolute` — strips an absolute URL down
+ * to `pathname + search` (same as the real implementation), so this shim can
+ * exercise `fetchIconDataUrl`/`inlineIssueTypeIcons` exactly as Forge would.
+ */
+export function routeFromAbsolute(absolutePath: string): string {
+  const u = new URL(absolutePath);
+  return `${u.pathname}${u.search}`;
+}

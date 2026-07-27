@@ -18,6 +18,13 @@ export type RollupMethod = z.infer<typeof RollupMethod>;
 export const RollupConfig = z.object({
   /** issueTypeName -> method */
   dueDateRollup: z.record(z.string(), RollupMethod),
+  /**
+   * Optional rollup DEPTH CAP (Feature 03, FR-19): how many hierarchy levels
+   * below the queried issue due-date rollup may descend. `0` = own date only;
+   * `1` = immediate children only; unset/null = no cap (correct but potentially
+   * slow on large sites). Bounds fan-out cost per requirements §5.7.
+   */
+  depthCap: z.number().int().nonnegative().nullable().optional(),
 });
 export type RollupConfig = z.infer<typeof RollupConfig>;
 

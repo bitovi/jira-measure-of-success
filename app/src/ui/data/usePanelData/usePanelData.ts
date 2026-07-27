@@ -20,6 +20,12 @@ export interface PanelController {
   busy: boolean;
   save(assignment: Assignment): void;
   remove(kpiId: string): void;
+  /**
+   * Record (or, with value=null, delete) a reading on a KPI — used by the KPI
+   * View (Feature 04) when this issue IS a KPI. Refreshes the panel afterwards
+   * so `data.kpiView` re-renders with the new series.
+   */
+  record(kpiId: string, date: string, value: number | null): void;
 }
 
 export type UsePanel = (issueId: string) => PanelController;
@@ -50,6 +56,18 @@ export const usePanelData: UsePanel = (issueId) => {
     }
   };
 
+  // Recording a reading returns TimelineData (KPI-global), so ignore its result
+  // and re-fetch the panel to refresh `kpiView` with the new series.
+  const record = async (kpiId: string, date: string, value: number | null) => {
+    setBusy(true);
+    try {
+      await call('recordValue', { kpiId, date, value });
+      setData(await call<PanelData>('getPanelData', { issueId }));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return {
     data,
     pending: data === null && error === null,
@@ -57,5 +75,6 @@ export const usePanelData: UsePanel = (issueId) => {
     busy,
     save: (assignment) => void mutate('saveAssignment', { issueId, assignment }),
     remove: (kpiId) => void mutate('removeAssignment', { issueId, kpiId }),
+    record: (kpiId, date, value) => void record(kpiId, date, value),
   };
 };

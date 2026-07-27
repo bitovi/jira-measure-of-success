@@ -6,6 +6,7 @@ import {
   normalizeProjectKey,
   readingsFromChangelog,
   resolveRelativeTargetDate,
+  resolvePanelTarget,
   targetStatus,
   type AddTargetInput,
   type CatalogEntryDto,
@@ -79,8 +80,21 @@ function findIssue(id: string): FixtureIssue | undefined {
   return issues.find((i) => i.id === id) ?? issueById(id);
 }
 
+// Ordered depth-first over the KPI tree (not CATALOG's declaration order) so
+// the picker can indent options to show the parent/child relationship, same
+// hierarchy the Timeline nests by.
 function catalogDto(): CatalogEntryDto[] {
-  return CATALOG.map((k) => ({ id: k.id, name: k.name, unit: k.unit, direction: k.direction }));
+  const out: CatalogEntryDto[] = [];
+  const walk = (nodes: KpiTreeNode[], depth: number) => {
+    for (const n of nodes) {
+      const readings = readingsFor(n.kpiId);
+      const latest = readings.length ? readings[readings.length - 1].value : null;
+      out.push({ id: n.kpiId, name: n.name, unit: n.unit, direction: n.direction, currentValue: latest, depth });
+      if (n.children) walk(n.children, depth + 1);
+    }
+  };
+  walk(kpiTree, 0);
+  return out;
 }
 
 // ── Timing engine over the issue tree ───────────────────────────────────────
@@ -123,10 +137,64 @@ function resolveDate(assignment: Assignment, ctx: RelativeTargetContext) {
   return resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
 }
 
+/**
+ * The endpoint the baseline is measured at — the DUE date the timing anchors to
+ * (FR-4), before the offset. v1 only offers the `issueDueDate` anchor; other
+ * anchors fall back to the resolved target date so absolute/fixed targets still
+ * resolve a sensible baseline date.
+ */
+function baselineDueEndpoint(
+  assignment: Assignment,
+  ctx: RelativeTargetContext,
+  targetDate: string | null,
+): ResolvedEndpoint {
+  const due = assignment.timing.due;
+  if (due.mode === 'relative' && due.anchor === 'issueDueDate') return ctx.issue.due;
+  if (due.mode === 'relative' && due.anchor === 'parentDueDate') {
+    return ctx.parent?.due ?? { date: null, source: 'pending' };
+  }
+  return { date: targetDate, source: 'own' };
+}
+
 // ── Issue panel ─────────────────────────────────────────────────────────────
+
+/** Find a KPI tree node by its KPI id OR its Jira issue key (KPI-N). */
+function findKpiByRef(nodes: KpiTreeNode[], ref: string): KpiTreeNode | undefined {
+  for (const n of nodes) {
+    if (n.kpiId === ref || n.issueKey === ref) return n;
+    const found = n.children && findKpiByRef(n.children, ref);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 export function getPanelData(issueId: string): PanelData {
+  // Feature 04: when the panel is opened ON a KPI issue (its id/key names a KPI
+  // in the KPI space), return the single-KPI chart payload instead of the
+  // associate/target-editor rows. In the harness, open it via
+  // `?surface=issue&issueId=KPI-1` (or the KPI id, e.g. `revenue`).
+  const kpiNode = findKpiByRef(kpiTree, issueId);
+  if (kpiNode) {
+    timelineIdSeq = 1;
+    return {
+      issueKey: kpiNode.issueKey,
+      rows: [],
+      catalog: catalogDto(),
+      issueDueDate: null,
+      issueDueRolledUp: false,
+      kpiView: { node: toTimelineNode(kpiNode, 0), today: TODAY },
+    };
+  }
+
   const issue = findIssue(issueId);
-  if (!issue) return { issueKey: issueId, rows: [], catalog: catalogDto() };
+  if (!issue)
+    return {
+      issueKey: issueId,
+      rows: [],
+      catalog: catalogDto(),
+      issueDueDate: null,
+      issueDueRolledUp: false,
+    };
 
   const parent = issue.parentId ? findIssue(issue.parentId) : undefined;
   const grouped = groupByRelationship(issue.assignments, parent?.assignments ?? [], CATALOG);
@@ -142,17 +210,58 @@ export function getPanelData(issueId: string): PanelData {
     assignment?: Assignment,
   ) => {
     const def = CATALOG.find((k) => k.id === kpiId);
+    if (!assignment) {
+      rows.push({
+        kpiId,
+        name: def?.name ?? kpiId,
+        unit: def?.unit ?? '',
+        direction: def?.direction ?? null,
+        target: null,
+        targetType: null,
+        targetDate: null,
+        dueTiming: null,
+        start: null,
+        relationship,
+        resolvedValue: null,
+        displayState: null,
+        warning: null,
+        frozen: false,
+        dueDate: null,
+        dueDateRolledUp: false,
+        actual: null,
+      });
+      return;
+    }
+
+    const targetDate = resolveDate(assignment, ctx);
+    const dueEndpoint = baselineDueEndpoint(assignment, ctx, targetDate.date);
+    const resolved = resolvePanelTarget({
+      assignment,
+      dueDate: dueEndpoint.date,
+      targetDate: targetDate.date,
+      readings: readingsFor(kpiId),
+      direction: def?.direction ?? null,
+      closed: issue.closed ?? false,
+      today: TODAY,
+    });
     rows.push({
       kpiId,
       name: def?.name ?? kpiId,
       unit: def?.unit ?? '',
       direction: def?.direction ?? null,
-      target: assignment?.target ?? null,
-      targetType: assignment?.targetType ?? null,
-      targetDate: assignment ? resolveDate(assignment, ctx) : null,
-      dueTiming: assignment?.timing.due ?? null,
-      start: assignment?.timing.start ?? null,
+      target: assignment.target,
+      targetType: assignment.targetType,
+      targetDate,
+      dueTiming: assignment.timing.due,
+      start: assignment.timing.start,
       relationship,
+      resolvedValue: resolved.resolvedValue,
+      displayState: resolved.displayState,
+      warning: resolved.warning,
+      frozen: resolved.frozen,
+      dueDate: dueEndpoint.date,
+      dueDateRolledUp: dueEndpoint.source === 'children',
+      actual: resolved.actual,
     });
   };
 
@@ -160,7 +269,13 @@ export function getPanelData(issueId: string): PanelData {
   for (const r of grouped.onlyHere) pushRow(r.kpiId, 'onlyHere', r.assignment);
   for (const r of grouped.onParentNotTracked) pushRow(r.kpiId, 'onParentNotTracked');
 
-  return { issueKey: issue.key, rows, catalog: catalogDto() };
+  return {
+    issueKey: issue.key,
+    rows,
+    catalog: catalogDto(),
+    issueDueDate: ctx.issue.due.date,
+    issueDueRolledUp: ctx.issue.due.source === 'children',
+  };
 }
 
 export function saveAssignment(issueId: string, assignment: Assignment): PanelData {
@@ -224,6 +339,22 @@ export function createKpiSpace(rawKey: string): KpiSpaceStatus {
 let timelineIdSeq = 1;
 function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
   const readings = readingsFor(node.kpiId);
+  const dated: TimelineNodeDto['targets'] = [];
+  const undated: TimelineNodeDto['undated'] = [];
+  for (const t of node.targets) {
+    const src = { ...t.source, iconUrl: t.source.iconUrl ?? issueTypeIconUri(t.source.type) };
+    if (t.date === null) {
+      undated.push({ date: null, value: t.value, status: 'upcoming', provisional: t.provisional ?? false, source: src });
+    } else {
+      dated.push({
+        date: t.date,
+        value: t.value,
+        status: targetStatus({ date: t.date, value: t.value }, readings, node.direction, TODAY),
+        provisional: t.provisional ?? false,
+        source: src,
+      });
+    }
+  }
   return {
     id: `n${timelineIdSeq++}`,
     kpiId: node.kpiId,
@@ -232,12 +363,8 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
     unit: node.unit,
     direction: node.direction,
     depth,
-    targets: node.targets.map((t) => ({
-      date: t.date,
-      value: t.value,
-      status: targetStatus(t, readings, node.direction, TODAY),
-      source: { ...t.source, iconUrl: t.source.iconUrl ?? issueTypeIconUri(t.source.type) },
-    })),
+    targets: dated,
+    undated,
     readings: readings.map((r) => ({ date: r.date, value: r.value })),
     children: (node.children ?? []).map((c) => toTimelineNode(c, depth + 1)),
   };
@@ -361,7 +488,7 @@ export function addTarget(input: AddTargetInput): TimelineData {
           iconUrl: input.issueTypeIconUrl ?? issueTypeIconUri(input.issueType ?? 'Issue'),
         },
       },
-    ].sort((a, b) => a.date.localeCompare(b.date));
+    ].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
 
     const issue = findIssue(input.issueId);
     if (issue) {

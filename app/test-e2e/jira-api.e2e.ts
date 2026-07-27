@@ -7,6 +7,7 @@ import {
   fetchAssignments,
   fetchChildren,
   fetchHierarchyLevels,
+  fetchIconDataUrl,
   fetchIssueMeta,
   fetchKpiMeta,
   fetchKpiSpaceIssues,
@@ -239,6 +240,26 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
       mine!.assignments.some((a) => a.kpiId === ctx.rootKey && a.target === 100),
       'the discovered issue should carry the target we wrote',
     ).toBe(true);
+  });
+
+  // Regression coverage for a scope-gating bug: standard issue types (Epic,
+  // Story, ...) expose their icon as a static site asset, but CUSTOM issue
+  // types — including this app's own `KPI` type — serve theirs via
+  // `GET /rest/api/2/universal_avatar/...`, which Forge gates behind the
+  // `read:avatar:jira` scope. Without it this silently returns null (non-OK
+  // response) and the timeline falls back to a plain diamond marker for
+  // every custom-issue-type target instead of its tinted icon.
+  it('fetchIconDataUrl → proxies a CUSTOM issue type icon (needs read:avatar:jira)', async () => {
+    expect(ctx.rootKey, 'requires the writeAssignments round-trip to have run').toBeTruthy();
+    const contributions = await pollFor(
+      () => fetchTargetContributions(),
+      (c) => c.issues.some((i) => i.issueKey === ctx.rootKey),
+    );
+    const mine = contributions.issues.find((i) => i.issueKey === ctx.rootKey);
+    expect(mine?.issueTypeIconUrl, 'expected the KPI issue type to carry an iconUrl').toBeTruthy();
+    const dataUrl = await fetchIconDataUrl(mine!.issueTypeIconUrl!);
+    expect(dataUrl, `fetchIconDataUrl returned null for ${mine!.issueTypeIconUrl} — missing read:avatar:jira scope?`).toBeTruthy();
+    expect(dataUrl).toMatch(/^data:image\//);
   });
 
   it('fetchReadingChangelog → reaches the bulk changelog endpoint', async () => {

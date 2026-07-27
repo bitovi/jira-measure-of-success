@@ -1,0 +1,83 @@
+import { describe, it, expect } from 'vitest';
+import { resolveRelativeTargetValue } from './relativeTargetValue.js';
+import type { DatedValue } from './targetStatus.js';
+
+function r(date: string, value: number): DatedValue {
+  return { date, value };
+}
+
+describe('resolveRelativeTargetValue (FR-9…FR-11)', () => {
+  it('absolute → passthrough, always baselined', () => {
+    expect(
+      resolveRelativeTargetValue({ targetType: 'absolute', target: 1_500_000 }, {
+        dueDate: '2027-01-15',
+        readings: [],
+      }),
+    ).toEqual({
+      value: 1_500_000,
+      baseline: null,
+      baselineDate: null,
+      baselineFrom: null,
+      state: 'baselined',
+      provisional: false,
+    });
+  });
+
+  it('delta against a baselined (measured) value → baseline × (1 + percent) (§7-#1)', () => {
+    const readings = [r('2027-01-15', 1_000_000)];
+    const res = resolveRelativeTargetValue({ targetType: 'delta', target: 1 }, {
+      dueDate: '2027-01-15',
+      readings,
+    });
+    expect(res.state).toBe('baselined');
+    expect(res.provisional).toBe(false);
+    expect(res.baseline).toBe(1_000_000);
+    expect(res.value).toBeCloseTo(1_010_000, 6);
+  });
+
+  it('delta against a provisional (carried) baseline → marked provisional (§7-#2)', () => {
+    const readings = [r('2026-12-01', 1_326_000)];
+    const res = resolveRelativeTargetValue({ targetType: 'delta', target: 1 }, {
+      dueDate: '2027-01-15',
+      readings,
+    });
+    expect(res.state).toBe('provisional');
+    expect(res.provisional).toBe(true);
+    expect(res.baseline).toBe(1_326_000);
+    expect(res.baselineFrom).toBe('2026-12-01');
+    expect(res.value).toBeCloseTo(1_339_260, 6);
+  });
+
+  it('delta with negative percent (a "decrease" KPI legitimately targets a drop, FR-6)', () => {
+    const res = resolveRelativeTargetValue({ targetType: 'delta', target: -10 }, {
+      dueDate: '2027-01-15',
+      readings: [r('2027-01-15', 200)],
+    });
+    expect(res.value).toBeCloseTo(180, 6);
+  });
+
+  it('delta with zero readings → needsBaseline, no fabricated number (§7-#8, FR-9b)', () => {
+    const res = resolveRelativeTargetValue({ targetType: 'delta', target: 1 }, {
+      dueDate: '2027-01-15',
+      readings: [],
+    });
+    expect(res).toEqual({
+      value: null,
+      baseline: null,
+      baselineDate: '2027-01-15',
+      baselineFrom: null,
+      state: 'needsBaseline',
+      provisional: true,
+    });
+  });
+
+  it('delta with pending due date → provisional carry from latest reading (§7-#6)', () => {
+    const res = resolveRelativeTargetValue({ targetType: 'delta', target: 1 }, {
+      dueDate: null,
+      readings: [r('2026-12-01', 1_000_000)],
+    });
+    expect(res.state).toBe('provisional');
+    expect(res.baselineDate).toBeNull();
+    expect(res.value).toBeCloseTo(1_010_000, 6);
+  });
+});

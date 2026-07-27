@@ -29,11 +29,16 @@ const METHOD_ORDER: RollupMethod[] = [
 export function Settings({ useSettings = useSettingsData }: { useSettings?: UseSettings }) {
   const { levels, config, space, pending, error, save, saveSpaceKey, createSpace } = useSettings();
   const [methods, setMethods] = useState<Record<string, RollupMethod>>({});
+  const [depthCap, setDepthCap] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   useEffect(() => {
     if (levels && config) setMethods(resolveConfig(config, levels));
   }, [levels, config]);
+
+  useEffect(() => {
+    if (config) setDepthCap(config.depthCap ?? null);
+  }, [config]);
 
   const setMethod = (level: string, method: RollupMethod) => {
     setMethods((m) => ({ ...m, [level]: method }));
@@ -42,13 +47,14 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
 
   const resetDefaults = () => {
     if (levels) setMethods(resolveConfig({ dueDateRollup: {} }, levels));
+    setDepthCap(null);
     setSaveState('idle');
   };
 
   const doSave = async () => {
     setSaveState('saving');
     try {
-      const next: RollupConfig = { dueDateRollup: { ...methods } };
+      const next: RollupConfig = { dueDateRollup: { ...methods }, depthCap };
       await save(next);
       setSaveState('saved');
     } catch {
@@ -105,6 +111,33 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
                   </div>
                 );
               })}
+            </div>
+
+            {/* Rollup depth cap (Feature 03, FR-19) */}
+            <div className="mt-6 border-t border-border pt-4">
+              <label className="text-sm font-medium" htmlFor="rollup-depth-cap">
+                Rollup depth limit
+              </label>
+              <p className="mb-2 mt-0.5 text-sm text-text-subtle">
+                How many levels below an issue due-date rollup may descend. Lower is faster on large
+                hierarchies; unlimited is most accurate.{' '}
+                <span className="text-text">Recommended: cap on large sites.</span>
+              </p>
+              <select
+                id="rollup-depth-cap"
+                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm sm:w-72"
+                value={depthCap === null ? '' : String(depthCap)}
+                onChange={(e) => {
+                  setDepthCap(e.target.value === '' ? null : Number(e.target.value));
+                  setSaveState('idle');
+                }}
+              >
+                <option value="">No limit (roll up all levels)</option>
+                <option value="1">1 level deep</option>
+                <option value="2">2 levels deep</option>
+                <option value="3">3 levels deep</option>
+                <option value="4">4 levels deep</option>
+              </select>
             </div>
           </div>
           <footer className="flex items-center justify-end gap-3 border-t border-border px-5 py-3">

@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Issue panel — relative value + timing (mock)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: 'var(--ds-surface, #ffffff)',
+            'surface-sunken': 'var(--ds-surface-sunken, #f7f8f9)',
+            'surface-hover': 'var(--ds-surface-hover, #f1f2f4)',
+            border: 'var(--ds-border, #091e4224)',
+            text: 'var(--ds-text, #172b4d)',
+            'text-subtle': 'var(--ds-text-subtle, #626f86)',
+            brand: 'var(--ds-background-brand-bold, #1868db)',
+            'brand-subtle': 'var(--ds-background-brand, #e9f2ff)',
+            success: 'var(--ds-text-success, #216e4e)',
+            warning: 'var(--ds-text-warning, #a54800)',
+            danger: 'var(--ds-text-danger, #ae2e24)',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    /* Mirror the LIVE form's native controls (IssuePanel.tsx: label-wrapped
+       inputs/selects, border-border, rounded px-2 py-1 text-sm). */
+    .lbl { font-size:12px; color:#626f86; display:block; }
+    .inp, .sel {
+      margin-top:2px; width:100%; box-sizing:border-box;
+      border:1px solid var(--ds-border,#091e4224); border-radius:4px;
+      padding:4px 8px; font-size:14px; color:#172b4d; background:#fff;
+    }
+    .sel { -webkit-appearance:none; appearance:none; padding-right:24px;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%23626f86' d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+      background-repeat:no-repeat; background-position:right 6px center; }
+    .inp:focus, .sel:focus { outline:2px solid #1868db; outline-offset:-1px; }
+    .new-badge { background:#e9f2ff; color:#1868db; font-size:10px; font-weight:700;
+      border-radius:3px; padding:0 4px; margin-left:6px; vertical-align:middle; }
+    /* Jira field label (Atlassian Sans, 14px/500, #505258, sentence case) */
+    .field-label { font-size:14px; font-weight:500; color:rgb(80,82,88);
+      line-height:18.67px; word-break:break-word; }
+    /* Card action buttons (Edit/Remove): subtle gray, colored on hover */
+    .justify-end > button { color:var(--ds-text-subtle, #626f86); }
+    .justify-end > button:first-child:hover { color:var(--ds-background-brand-bold, #1868db); }
+    .justify-end > button:last-child:hover { color:var(--ds-text-danger, #ae2e24); }
+  </style>
+</head>
+<body class="bg-surface-sunken">
+  <div class="mx-auto max-w-4xl p-6">
+    <div class="mb-3 rounded bg-warning/10 px-2 py-1.5 text-xs font-semibold text-warning">
+      Mock v2 — extends the <b>real</b> IssuePanel form (native <code>&lt;label&gt;</code>-wrapped selects, shared
+      <code>TargetDateEditor</code>). <span class="new-badge">NEW</span> marks additions to what the code does today.
+    </div>
+
+    <!-- Issue header -->
+    <div class="mb-4 flex items-center gap-2 text-sm text-text-subtle">
+      <span class="rounded bg-brand px-1.5 py-0.5 text-[11px] font-bold text-white">I</span>
+      <a class="font-semibold text-brand hover:underline" href="#">INIT-48</a>
+      <span>· Launch multi-store support · Parent: OUT-12</span>
+    </div>
+
+    <div class="max-w-md rounded-lg border border-dashed border-border bg-surface p-3">
+      <div class="mb-2 text-sm font-medium text-text-subtle">Set a KPI target</div>
+      <div class="flex flex-col gap-2">
+
+        <!-- KPI (unchanged) -->
+        <label class="lbl">KPI
+          <select class="sel">
+            <option>Revenue</option>
+            <option>&nbsp;&nbsp;# of Orders</option>
+            <option>&nbsp;&nbsp;Number of Stores</option>
+            <option>— Define new… —</option>
+          </select>
+        </label>
+
+        <!-- Target type + Target value (type first so the value field's meaning is set before you type) -->
+        <div class="grid grid-cols-2 gap-2">
+          <label class="lbl">Target value type
+            <select class="sel" id="ttype">
+              <option value="absolute">Absolute value</option>
+              <option value="percent" selected>Percent change</option>
+            </select>
+          </label>
+          <label class="lbl">Target value
+            <div class="relative">
+              <input class="inp pr-6" value="+1" />
+              <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text-subtle" id="suffix">%</span>
+            </div>
+          </label>
+          <p class="col-span-2 text-[11px] text-text-subtle" id="baseline-note">
+            <span aria-hidden="true">↳</span> Current value: 1,326,000 USD → targeting <b class="text-text">1,339,000 USD</b>
+          </p>
+        </div>
+
+        <!-- Target date — the existing shared TargetDateEditor; only anchor = due date -->
+        <div class="grid grid-cols-2 gap-2">
+          <label class="lbl" id="target-date-type-label">Target date type
+            <select class="sel" id="target-date-type">
+              <option value="fixed">Fixed date</option>
+              <option value="relative" selected>Relative date</option>
+            </select>
+          </label>
+          <label class="lbl" id="target-date-label">Months after due date
+            <div class="relative">
+              <input class="inp pr-14" id="target-date" value="3" />
+              <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-sm text-text-subtle" id="target-date-suffix">months</span>
+            </div>
+          </label>
+          <p class="col-span-2 text-[11px] text-text-subtle" id="due-date-note">
+            <span aria-hidden="true">↳</span> Rolled up due date: 2027-01-15 → targeting <b class="text-text">2027-04-15</b>
+          </p>
+        </div>
+
+        <div class="flex gap-2">
+          <button class="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white">Set KPI target</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────────────────────────────────────────────────────
+         SAVED TARGET — state gallery. Two stacked rows mirroring the form
+         (Target value row + Target date row), each with a recap + resolved
+         ↳ note, a status pill, and an optional warning strip.
+         NOTE: to EDIT any of these, TrackedRow needs a target-type control
+         (only the Associate form has one today) — the feature must add it.
+    ──────────────────────────────────────────────────────────── -->
+    <div class="mt-6">
+      <div class="mb-2 flex items-center gap-2">
+        <h2 class="text-sm font-semibold text-text">Saved target — states</h2>
+        <span class="new-badge">NEW</span>
+        <span class="text-[11px] text-text-subtle">Same KPI (Number of Stores, +10%) shown in each state.</span>
+      </div>
+
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+
+        <!-- 1 · Projected (both dates future) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning">Projected</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> baseline (provisional from 2026-06-30) <b class="text-text">≈ 250</b> → targeting <b class="text-text">≈ 275</b></p>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">~2027-04-15</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> Rolled up due date 2027-01-15 · <span class="font-semibold text-brand">Upcoming</span></p>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+
+        <!-- 2 · Pending (no due date) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-surface-sunken px-1.5 py-0.5 text-[10px] font-semibold text-text-subtle">Provisional</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> baseline (provisional from 2026-06-30) <b class="text-text">≈ 250</b> → targeting <b class="text-text">≈ 275</b></p>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">pending</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> INIT-48 has no date yet · <span class="font-semibold text-text-subtle">Date TBD</span></p>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+
+        <!-- 3 · Measured baseline (due date passed, target upcoming) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-brand-subtle px-1.5 py-0.5 text-[10px] font-semibold text-brand">Baselined</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> baselined <b class="text-text">258</b> → targeting <b class="text-text">284</b></p>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">2026-09-01</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> Due date 2026-06-01 · <span class="font-semibold text-brand">Upcoming</span></p>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+
+        <!-- 4 · Stale baseline (due date passed, no reading since) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning">Needs measurement</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> baseline (provisional from 2026-04-30) <b class="text-text">≈ 250</b> → targeting <b class="text-text">≈ 275</b></p>
+            <div class="mt-1.5 rounded bg-warning/10 px-2 py-1 text-[11px] leading-snug text-warning">⚠ Due date passed with no measurement — baseline may be stale. Record a value.</div>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">2026-09-01</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> Due date 2026-06-01 · <span class="font-semibold text-brand">Upcoming</span></p>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+
+        <!-- 5 · Met (target passed, measured hit) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-success/10 px-1.5 py-0.5 text-[10px] font-semibold text-success">Met ✓</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> baselined <b class="text-text">250</b> → target <b class="text-text">275</b> · actual <b class="text-success">281</b></p>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">2026-04-15</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> Due date 2026-01-15 · <span class="font-semibold text-success">Met on 2026-04-20</span></p>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+
+        <!-- 6 · Missed (target passed, measured miss) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-danger/10 px-1.5 py-0.5 text-[10px] font-semibold text-danger">Missed ✗</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> baselined <b class="text-text">250</b> → target <b class="text-text">275</b> · actual <b class="text-danger">268</b></p>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">2026-04-15</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> Due date 2026-01-15 · <span class="font-semibold text-danger">Missed (short by 7)</span></p>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+
+        <!-- 7 · Result unknown (target passed, no reading since baseline) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning">Result unknown</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> baselined <b class="text-text">250</b> → target <b class="text-text">275</b> · actual <b class="text-text-subtle">—</b></p>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">2026-04-15</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> Due date 2026-01-15 · <span class="font-semibold text-warning">passed</span></p>
+            <div class="mt-1.5 rounded bg-warning/10 px-2 py-1 text-[11px] leading-snug text-warning">⚠ Target date passed with no measurement since the baseline — can't confirm if it was met. Record a value.</div>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+
+        <!-- 8 · No baseline (zero readings) -->
+        <div class="rounded border border-border bg-surface p-3">
+          <div class="mb-3 flex items-center gap-2">
+            <span class="font-medium text-text">Number of Stores</span>
+            <span class="text-xs text-text-subtle">count</span>
+            <span class="text-xs text-success">▲</span>
+            <span class="ml-auto rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning">Needs baseline</span>
+          </div>
+          <div class="mb-2.5">
+            <div class="field-label">Target value</div>
+            <div class="text-sm"><b class="font-mono text-text">+10%</b> <span class="text-text-subtle">Percent change</span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> <span class="font-semibold text-warning">needs a baseline reading</span> — no measurements yet</p>
+            <div class="mt-1.5 rounded bg-warning/10 px-2 py-1 text-[11px] leading-snug text-warning">⚠ A Percent change target needs at least one reading to establish the baseline. Record a value.</div>
+          </div>
+          <div class="border-t border-border pt-2.5">
+            <div class="field-label">Target date</div>
+            <div class="text-sm"><b class="text-text">3 months after due date</b> <span class="text-text-subtle">· <span class="font-mono">~2027-04-15</span></span></div>
+            <p class="mt-0.5 text-[12px] leading-snug text-text-subtle"><span aria-hidden="true">↳</span> Rolled up due date 2027-01-15 · <span class="font-semibold text-brand">Upcoming</span></p>
+          </div>
+          <div class="mt-2.5 flex justify-end gap-3">
+            <button class="text-xs font-medium text-brand">Edit</button>
+            <button class="text-xs font-medium text-danger">Remove</button>
+          </div>
+        </div>
+    </div>
+
+    <p class="mt-3 text-xs text-text-subtle">
+      Mock · specs/03-relative-dates-and-values · requirements.md FR-1…FR-13 · extends app/src/ui/surfaces/IssuePanel/IssuePanel.tsx
+    </p>
+  </div>
+
+  <script>
+    // Reflect target type and date type in the form.
+    var t = document.getElementById('ttype'), s = document.getElementById('suffix'),
+        baselineNote = document.getElementById('baseline-note'),
+        dateType = document.getElementById('target-date-type'), dateLabel = document.getElementById('target-date-label'),
+        dateInput = document.getElementById('target-date'), dateSuffix = document.getElementById('target-date-suffix'),
+        dueDateNote = document.getElementById('due-date-note');
+    t.addEventListener('change', function () {
+      var pct = t.value === 'percent';
+      s.textContent = pct ? '%' : '';
+      baselineNote.hidden = !pct;
+    });
+    dateType.addEventListener('change', function () {
+      var relative = dateType.value === 'relative';
+      dateLabel.firstChild.textContent = relative ? 'Months after due date' : 'Target date';
+      dateInput.value = '';
+      dateInput.type = relative ? 'number' : 'date';
+      dateInput.value = relative ? '3' : '2027-04-15';
+      dateInput.classList.toggle('pr-14', relative);
+      dateSuffix.hidden = !relative;
+      dueDateNote.hidden = !relative;
+    });
+  </script>
+</body>
+</html>

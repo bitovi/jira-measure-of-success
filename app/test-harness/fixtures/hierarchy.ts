@@ -84,6 +84,8 @@ export interface FixtureIssue {
   ownStart: string | null;
   ownDue: string | null;
   assignments: Assignment[];
+  /** resolved/closed status (Feature 03 freeze); defaults to false */
+  closed?: boolean;
 }
 
 export const ISSUES: FixtureIssue[] = [
@@ -209,8 +211,11 @@ export function issueTypeIconUri(type: string): string {
 // The timeline is organized by the KPI tree (nested KPIs), each KPI carrying
 // targets (set on source issues) and recorded readings.
 export interface TimelineTargetFixture {
-  date: string;
+  /** null = undated/pending (renders in the right-pinned Undated lane) */
+  date: string | null;
   value: number;
+  /** true = a provisional estimate (baseline not yet baselined) */
+  provisional?: boolean;
   source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 
@@ -279,6 +284,9 @@ export const KPI_TREE: KpiTreeNode[] = [
       { date: '2026-06-30', value: 1_300_000, source: { issue: 'OUT-12', type: 'Outcome', title: 'Grow Revenue' } },
       { date: '2026-09-30', value: 1_400_000, source: { issue: 'OUT-12', type: 'Outcome', title: 'Grow Revenue' } },
       { date: '2026-12-20', value: 1_500_000, source: { issue: 'OUT-12', type: 'Outcome', title: 'Grow Revenue' } },
+      // A provisional (not-yet-baselined) percent estimate, and an undated one.
+      { date: '2027-04-15', value: 1_339_000, provisional: true, source: { issue: 'INIT-48', type: 'Initiative', title: '+1% 3mo after due date' } },
+      { date: null, value: 1_255_000, provisional: true, source: { issue: 'INC-90', type: 'Increment', title: '+1% after a TBD due date' } },
     ],
     readings: reads([
       ['2026-01-03', 1_000_000], ['2026-02-04', 1_018_000], ['2026-03-04', 1_072_000],

@@ -22,6 +22,7 @@ const node = (over: Partial<TimelineNodeDto> & { id: string; kpiId: string; name
   direction: 'increase',
   depth: 0,
   targets: [],
+  undated: [],
   readings: [],
   children: [],
   ...over,
@@ -41,8 +42,8 @@ const POPULATED: TimelineData = {
         { date: '2026-07-06', value: 1_243_000 },
       ],
       targets: [
-        { date: '2026-06-30', value: 1_300_000, status: 'missed', source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
       ],
       children: [
         node({
@@ -54,7 +55,15 @@ const POPULATED: TimelineData = {
           depth: 1,
           readings: [],
           targets: [
-            { date: '2026-08-15', value: 11_500, status: 'upcoming', source: src('INIT-48', 'Initiative', 'Expand Orders') },
+            // No iconUrl here (unlike src()'s default) to cover the fallback
+            // diamond marker for sources without a resolvable issue-type icon.
+            {
+              date: '2026-08-15',
+              value: 11_500,
+              status: 'upcoming',
+              provisional: false,
+              source: { ...src('INIT-48', 'Initiative', 'Expand Orders'), iconUrl: null },
+            },
           ],
         }),
       ],
@@ -65,6 +74,27 @@ const POPULATED: TimelineData = {
 const NO_READINGS: TimelineData = {
   today: '2026-07-10',
   roots: [node({ id: 'n1', kpiId: 'opportunity', name: 'Opportunity Enablement', unit: 'future value', direction: null })],
+};
+
+/** A KPI with a provisional (estimate) marker and an undated projection chip. */
+const PROJECTIONS: TimelineData = {
+  today: '2026-07-10',
+  roots: [
+    node({
+      id: 'n1',
+      kpiId: 'revenue',
+      issueKey: 'KPI-1',
+      name: 'Revenue',
+      unit: 'USD',
+      readings: [{ date: '2026-06-01', value: 1_326_000 }],
+      targets: [
+        { date: '2026-09-30', value: 1_339_000, status: 'upcoming', provisional: true, source: src('INIT-48', 'Initiative', '+1% 3mo after due') },
+      ],
+      undated: [
+        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
+      ],
+    }),
+  ],
 };
 
 function stub(over: Partial<TimelineController>): UseTimeline {
@@ -98,6 +128,84 @@ export const Populated: Story = {
   },
 };
 
+/** Undated projections: an estimate chip in the right lane opens a projection modal. */
+export const UndatedProjections: Story = {
+  args: { useData: stub({ data: PROJECTIONS }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const chip = c.getByRole('button', { name: /1,255,000/ });
+    await expect(chip).toBeInTheDocument();
+    await userEvent.click(chip);
+    await expect(c.getByRole('dialog')).toBeInTheDocument();
+    await expect(c.getByText('Projected target')).toBeInTheDocument();
+    await expect(c.getByText(/Due date TBD/i)).toBeInTheDocument();
+  },
+};
+
+/** Interaction: the chevron hides and shows a KPI's child rows. */
+export const CollapseChildren: Story = {
+  args: { useData: stub({ data: POPULATED }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const toggle = c.getByRole('button', { name: 'Collapse children' });
+    await userEvent.click(toggle);
+    await expect(c.queryByText('# of Orders')).not.toBeInTheDocument();
+    await expect(toggle).toHaveAttribute('aria-label', 'Expand children');
+    await userEvent.click(toggle);
+    await expect(c.getByText('# of Orders')).toBeInTheDocument();
+  },
+};
+
+/**
+ * Interaction: the project filter narrows the tree to KPIs whose targets come
+ * from a selected Jira project (contributing issues can live in ANY project —
+ * `POPULATED` has Revenue's own target from OUT-12 and its child "# of Orders"
+ * from INIT-48). Subtree match: selecting "INIT" keeps BOTH rows (the child
+ * matches directly; Revenue is kept as its ancestor for tree context) even
+ * though Revenue's own target is from OUT — but that OUT-12 target marker is
+ * itself hidden on the Revenue row, since only matching-project targets are
+ * shown even on a kept/ancestor row. Selecting "OUT" instead drops
+ * "# of Orders" entirely (no match, no children of its own). The selection is
+ * also reflected in the URL (`?projects=...`) for shareability/refresh-safety.
+ */
+export const ProjectFilter: Story = {
+  args: { useData: stub({ data: POPULATED }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByRole('button', { name: 'Project: All' })).toBeInTheDocument();
+    await expect(c.getAllByRole('link', { name: /OUT-12/ }).length).toBeGreaterThan(0);
+
+    await userEvent.click(c.getByRole('button', { name: 'Project: All' }));
+    await userEvent.click(c.getByRole('checkbox', { name: 'INIT' }));
+    await expect(c.getByRole('button', { name: 'Project: INIT' })).toBeInTheDocument();
+    await expect(c.getByText('Revenue')).toBeInTheDocument();
+    await expect(c.getByText('# of Orders')).toBeInTheDocument();
+    // Revenue is kept only for tree context — its own OUT-12 target marker,
+    // which doesn't match the INIT selection, is hidden.
+    await expect(c.queryByRole('link', { name: /OUT-12/ })).not.toBeInTheDocument();
+    await expect(c.getAllByRole('link', { name: /INIT-48/ }).length).toBeGreaterThan(0);
+    await waitFor(() => expect(window.location.search).toContain('projects=INIT'));
+
+    // Uncheck INIT, check OUT: the leaf ("# of Orders", INIT-48) no longer
+    // matches and has no children of its own, so it's dropped; Revenue
+    // (OUT-12, its own match) stays, and its OUT-12 marker is visible again.
+    await userEvent.click(c.getByRole('checkbox', { name: 'INIT' }));
+    await userEvent.click(c.getByRole('checkbox', { name: 'OUT' }));
+    await expect(c.getByText('Revenue')).toBeInTheDocument();
+    await expect(c.queryByText('# of Orders')).not.toBeInTheDocument();
+    await expect(c.getAllByRole('link', { name: /OUT-12/ }).length).toBeGreaterThan(0);
+    await expect(c.queryByRole('link', { name: /INIT-48/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toContain('projects=OUT'));
+
+    // Clear the filter and reset the URL — this jsdom `window` is shared
+    // across every story test in this file, so leaving `?projects=` set here
+    // would leak into later tests.
+    await userEvent.click(c.getByRole('checkbox', { name: 'OUT' }));
+    await expect(c.getByRole('button', { name: 'Project: All' })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).not.toContain('projects'));
+  },
+};
+
 /** Interaction: the KPI name is a link that navigates to the KPI's Jira issue. */
 const openIssueSpy = fn();
 export const OpenIssue: Story = {
@@ -114,21 +222,21 @@ export const OpenIssue: Story = {
   },
 };
 
-/** Interaction: a target diamond deep-links to the work item that set it. */
+/** Interaction: a target marker deep-links to the work item that set it. */
 const openTargetSpy = fn();
 export const OpenTargetIssue: Story = {
   args: { useData: stub({ data: POPULATED }), onOpenIssueNewTab: openTargetSpy },
   play: async ({ canvasElement }) => {
     openTargetSpy.mockClear();
     const c = within(canvasElement);
-    const diamond = c.getByRole('link', {
+    const marker = c.getByRole('link', {
       name: /Target .* due 2026-06-30 .* Open Outcome OUT-12 in Jira \(new tab\)/i,
     });
     await waitFor(() =>
-      expect(diamond).toHaveAttribute('href', 'https://example.atlassian.net/browse/OUT-12'),
+      expect(marker).toHaveAttribute('href', 'https://example.atlassian.net/browse/OUT-12'),
     );
-    await expect(diamond).toHaveAttribute('target', '_blank');
-    await userEvent.click(diamond);
+    await expect(marker).toHaveAttribute('target', '_blank');
+    await userEvent.click(marker);
     await waitFor(() => expect(openTargetSpy).toHaveBeenCalledWith('OUT-12'));
   },
 };
@@ -258,6 +366,32 @@ export const AddChildKpi: Story = {
     await waitFor(() =>
       expect(createChildSpy).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Sub Metric', parentKpiId: 'revenue' }),
+      ),
+    );
+  },
+};
+
+/**
+ * Interaction: "+ Add KPI" also offers an optional parent picker (typing
+ * filters the existing KPI tree) — choosing one nests the new KPI under it,
+ * same as the row-level add-child flow but reachable from the header button.
+ */
+const createWithParentSpy = fn();
+export const AddKpiWithParent: Story = {
+  args: { useData: stub({ data: POPULATED, createKpi: createWithParentSpy }) },
+  play: async ({ canvasElement }) => {
+    createWithParentSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
+    const dialog = within(await c.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Repeat Orders');
+    await userEvent.click(dialog.getByLabelText('Search for a parent KPI'));
+    await userEvent.type(dialog.getByLabelText('Search for a parent KPI'), 'Orders');
+    await userEvent.click(await dialog.findByRole('button', { name: '# of Orders' }));
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    await waitFor(() =>
+      expect(createWithParentSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Repeat Orders', parentKpiId: 'orders' }),
       ),
     );
   },
