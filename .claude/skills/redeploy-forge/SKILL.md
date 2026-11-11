@@ -30,19 +30,18 @@ Ship local changes to the installed dev site (`bitovi-training.atlassian.net`, `
 
 Create a todo list from these steps; mark each in-progress then completed.
 
-### 1. Build the Custom UI bundles
-Forge serves the frontend from `static/<key>/build`; these are produced by the app's own Vite build, not by `forge deploy`. Rebuild whenever any `src/ui` code changed:
+### 1. Build + deploy
+Forge serves the frontend from `static/<key>/build`; these are produced by the app's own Vite build, not by `forge deploy`. Use the per-environment npm scripts — each rebuilds the Custom UI and deploys:
 ```bash
-npm run build:forge
+npm run deploy:dev        # development → titles get " (dev)"
+npm run deploy:staging    # staging     → titles get " (staging)"
+npm run deploy:prod       # production  → no suffix
 ```
+The scripts set the manifest variable `TITLE_SUFFIX`, which is appended to every module title and the KPI Reading field name so dev/staging installs on the same site are distinguishable (e.g. "KPIs (dev)" vs "KPIs (staging)" in the issue app menu). **Don't run bare `forge deploy`** — it falls back to an empty suffix and the environment's titles lose their label.
 
-### 2. Deploy
-```bash
-forge deploy --non-interactive
-```
-This runs `forge lint` first. Fix any manifest/code errors and rerun until it prints `✔ Deployed`.
+The deploy runs `forge lint` first. Fix any manifest/code errors and rerun until it prints `✔ Deployed`.
 
-### 3. Install / upgrade the site
+### 2. Install / upgrade the site
 If the deploy output says **"new scopes or egress URLs"** (i.e. you added a module, scope, permission, or custom field), you must upgrade the existing install:
 ```bash
 forge install --upgrade --non-interactive --site bitovi-training.atlassian.net --product Jira --environment development
@@ -52,10 +51,10 @@ If nothing about scopes/modules changed, this step is optional — the deploy al
 forge install list
 ```
 
-### 4. (Optional) Live tunnel
+### 3. (Optional) Live tunnel
 For live backend + logs while clicking through the surfaces in Jira:
 ```bash
-npm run tunnel        # = forge tunnel; long-running; Ctrl+C to stop → Jira reverts to the deployed version
+npm run tunnel        # = forge tunnel with the " (dev)" title suffix; long-running; Ctrl+C to stop → Jira reverts to the deployed version
 ```
 Run it via the **npm script** (or `forge tunnel` from inside `app/`) so it starts with the app dir as cwd. Backend/resolver edits are live and `console.log`s stream here. UI edits require re-running `npm run build:forge` (the tunnel serves the built static resources). The Node.js runtime tunnel does **not** require Docker.
 

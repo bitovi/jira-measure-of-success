@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI tree — relative targets, undated projections & progressive load (mock)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: 'var(--ds-surface, #ffffff)',
+            'surface-sunken': 'var(--ds-surface-sunken, #f7f8f9)',
+            'surface-hover': 'var(--ds-surface-hover, #f1f2f4)',
+            border: 'var(--ds-border, #091e4224)',
+            text: 'var(--ds-text, #172b4d)',
+            'text-subtle': 'var(--ds-text-subtle, #626f86)',
+            brand: 'var(--ds-background-brand-bold, #1868db)',
+            success: 'var(--ds-text-success, #216e4e)',
+            warning: 'var(--ds-text-warning, #a54800)',
+            danger: 'var(--ds-text-danger, #ae2e24)',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    @keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+    .shimmer { background: linear-gradient(90deg,#eceef0 25%,#f6f7f8 37%,#eceef0 63%); background-size:800px 100%; animation: shimmer 1.4s infinite linear; }
+  </style>
+</head>
+<body class="bg-surface-sunken">
+  <div class="mx-auto max-w-6xl p-6">
+    <div class="mb-3 inline-block rounded bg-warning/10 px-2 py-1 text-xs font-semibold text-warning">
+      Mock — KPI tree with relative targets. Adds: <b>estimated (hollow) markers</b>, a pinned <b>"Undated"</b> lane of
+      clickable projection chips, a <b>progressive loading</b> row, and the <b>projection modal</b>.
+    </div>
+
+    <h1 class="text-2xl font-bold text-text">KPI Timeline</h1>
+    <p class="mt-1 max-w-3xl text-sm text-text-subtle">
+      Solid markers are committed targets. <span class="font-semibold">Hollow markers (≈)</span> are estimates whose
+      baseline is projected. Targets with no release date yet appear as chips in the pinned <b>Undated</b> lane on the
+      right — click one to see the projection.
+    </p>
+
+    <div class="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
+      <div class="flex">
+
+        <!-- ── Left label column ─────────────────────────────── -->
+        <div class="flex-none border-r border-border" style="width: 240px">
+          <div class="flex items-center bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="height:33px">KPI</div>
+          <div class="flex flex-col justify-center border-b border-border px-3" style="height:60px">
+            <a class="truncate text-sm font-semibold text-brand hover:underline" href="#">Revenue</a>
+            <span class="text-xs text-text-subtle">USD · <span class="text-success">▲</span></span>
+          </div>
+          <div class="flex flex-col justify-center border-b border-border px-3" style="height:60px">
+            <a class="truncate pl-4 text-sm font-semibold text-brand hover:underline" href="#">Number of Stores</a>
+            <span class="pl-4 text-xs text-text-subtle">count · <span class="text-success">▲</span></span>
+          </div>
+          <div class="flex flex-col justify-center border-b border-border px-3" style="height:60px">
+            <a class="truncate pl-4 text-sm font-semibold text-brand hover:underline" href="#">Online Orders</a>
+            <span class="pl-4 text-xs text-text-subtle">count · <span class="text-success">▲</span></span>
+          </div>
+          <div class="flex flex-col justify-center px-3" style="height:60px">
+            <a class="truncate text-sm font-semibold text-brand hover:underline" href="#">Costs</a>
+            <span class="text-xs text-text-subtle">USD · <span class="text-danger">▼</span></span>
+          </div>
+        </div>
+
+        <!-- ── Scrollable dated timeline ─────────────────────── -->
+        <div class="min-w-0 flex-1 overflow-x-auto">
+          <div style="width: 900px">
+            <!-- axis header -->
+            <div class="relative border-b border-border bg-surface-sunken" style="height:33px">
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left:0px">Q3 2026</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left:180px">Q4 2026</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left:360px">Q1 2027</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left:540px">Q2 2027</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left:720px">Q3 2027</div>
+            </div>
+
+            <!-- Revenue: readings trend + committed marker + estimated (hollow) relative marker -->
+            <div class="border-b border-border">
+              <div class="relative" style="width:900px;height:60px">
+                <div class="absolute inset-y-0 w-px bg-border" style="left:180px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:360px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:540px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:720px"></div>
+                <div class="absolute inset-y-0 w-0 border-l border-dashed border-danger opacity-80" style="left:30px" title="Today"></div>
+                <!-- recorded trend + dashed projection continuation -->
+                <svg class="pointer-events-none absolute left-0 top-0" width="900" height="60">
+                  <polyline points="6,48 18,42 30,36" fill="none" stroke="#22a06b" stroke-width="1.5"></polyline>
+                  <polyline points="30,36 405,16" fill="none" stroke="#22a06b" stroke-width="1.5" stroke-dasharray="4 4" opacity="0.6"></polyline>
+                  <circle cx="6" cy="48" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="18" cy="42" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="30" cy="36" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                </svg>
+                <!-- committed target (solid diamond) -->
+                <a href="#" class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 place-items-center" title="Target 1,300,000 USD due 2026-11-30 — Upcoming (committed). Open ECOM-30" style="left:150px;top:24px">
+                  <div class="h-2.5 w-2.5 rotate-45 bg-text-subtle"></div>
+                </a>
+                <!-- estimated relative target (hollow diamond) at resolved date 2027-04-15 -->
+                <button class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 place-items-center" title="≈ 1,339,000 USD by 2027-04-15 — estimated (+1%, 3 mo after INIT-48 release; baseline projected). Click for details" style="left:405px;top:16px">
+                  <div class="h-2.5 w-2.5 rotate-45 border border-brand bg-surface"></div>
+                </button>
+              </div>
+            </div>
+
+            <!-- Number of Stores: no dated markers (its relative target is undated → chip in lane) -->
+            <div class="border-b border-border">
+              <div class="relative" style="width:900px;height:60px">
+                <div class="absolute inset-y-0 w-px bg-border" style="left:180px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:360px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:540px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:720px"></div>
+                <div class="absolute inset-y-0 w-0 border-l border-dashed border-danger opacity-80" style="left:30px"></div>
+                <svg class="pointer-events-none absolute left-0 top-0" width="900" height="60">
+                  <polyline points="6,44 30,34" fill="none" stroke="#22a06b" stroke-width="1.5"></polyline>
+                  <circle cx="6" cy="44" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="30" cy="34" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                </svg>
+                <span class="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">Target date TBD → see Undated lane →</span>
+              </div>
+            </div>
+
+            <!-- Online Orders: PROGRESSIVE LOADING (subtree still resolving) -->
+            <div class="border-b border-border">
+              <div class="relative" style="width:900px;height:60px">
+                <div class="absolute inset-y-0 w-px bg-border" style="left:180px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:360px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:540px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:720px"></div>
+                <div class="absolute inset-y-0 w-0 border-l border-dashed border-danger opacity-80" style="left:30px"></div>
+                <div class="shimmer absolute rounded" style="left:60px;top:26px;width:120px;height:8px"></div>
+                <span class="absolute left-48 top-1/2 -translate-y-1/2 text-[11px] italic text-text-subtle">Rolling up release date…</span>
+              </div>
+            </div>
+
+            <!-- Costs: empty -->
+            <div>
+              <div class="relative" style="width:900px;height:60px">
+                <div class="absolute inset-y-0 w-px bg-border" style="left:180px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:360px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:540px"></div>
+                <div class="absolute inset-y-0 w-px bg-border" style="left:720px"></div>
+                <div class="absolute inset-y-0 w-0 border-l border-dashed border-danger opacity-80" style="left:30px"></div>
+                <span class="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">No values yet</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Pinned "Undated" lane (outside horizontal scroll) ── -->
+        <div class="flex-none border-l border-border bg-surface-sunken/60" style="width:150px">
+          <div class="flex items-center px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="height:33px">Undated</div>
+          <!-- Revenue: none -->
+          <div class="border-b border-border" style="height:60px"></div>
+          <!-- Number of Stores: one undated chip -->
+          <div class="flex items-center border-b border-border px-3" style="height:60px">
+            <button onclick="document.getElementById('proj-modal').classList.remove('hidden')"
+              class="flex items-center gap-1 rounded-full border border-brand/40 bg-surface px-2 py-1 text-xs font-semibold text-brand hover:bg-brand/5"
+              title="+10%, 6 mo after INIT-48 releases — release date TBD. Click for the projection">
+              <span class="text-text-subtle">≈</span> 275
+            </button>
+          </div>
+          <!-- Online Orders: loading -->
+          <div class="flex items-center border-b border-border px-3" style="height:60px">
+            <div class="shimmer h-6 w-16 rounded-full"></div>
+          </div>
+          <!-- Costs: none -->
+          <div style="height:60px"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <p class="mt-2 text-xs text-text-subtle">
+      Red line = today · solid diamond = committed target · hollow diamond = estimated (projected baseline) · dashed
+      sparkline = projected trend · chips in the Undated lane = targets whose release date isn't set yet.
+    </p>
+  </div>
+
+  <!-- ── Projection modal (shown; toggled by the chip) ─────────── -->
+  <div id="proj-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+    <div class="w-full max-w-md rounded-lg border border-border bg-surface shadow-xl">
+      <div class="flex items-start gap-2 border-b border-border px-4 py-3">
+        <div>
+          <div class="text-sm font-semibold text-text">Number of Stores — projected target</div>
+          <div class="text-xs text-text-subtle">+10%, 6 months after INIT-48 releases</div>
+        </div>
+        <button onclick="document.getElementById('proj-modal').classList.add('hidden')" class="ml-auto rounded p-1 text-text-subtle hover:bg-surface-hover" aria-label="Close">✕</button>
+      </div>
+      <div class="px-4 py-3">
+        <div class="mb-3 inline-flex items-center gap-1 rounded bg-text-subtle/10 px-2 py-0.5 text-[11px] font-semibold text-text-subtle">
+          Date TBD · INIT-48 has no release date yet
+        </div>
+
+        <dl class="space-y-2 text-sm">
+          <div class="flex justify-between">
+            <dt class="text-text-subtle">Projected baseline (at release)</dt>
+            <dd class="font-semibold text-text">≈ 250</dd>
+          </div>
+          <div class="flex justify-between">
+            <dt class="text-text-subtle">Delta</dt>
+            <dd class="font-semibold text-text">+10%</dd>
+          </div>
+          <div class="flex justify-between border-t border-border pt-2">
+            <dt class="text-text-subtle">Estimated target</dt>
+            <dd class="text-base font-semibold text-text">≈ 275</dd>
+          </div>
+        </dl>
+
+        <p class="mt-3 rounded-md bg-surface-sunken px-2 py-1.5 text-[12px] text-text-subtle">
+          Provisional — assumes shipped today. Baseline = last recorded value (250) projected 6 months forward from the
+          trend of the last 2 readings. Firms up once INIT-48 (or its children) get dates.
+        </p>
+        <a href="#" class="mt-3 inline-block text-xs font-semibold text-brand hover:underline">Open INIT-48 in Jira →</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

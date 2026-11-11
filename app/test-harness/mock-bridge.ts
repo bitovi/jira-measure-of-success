@@ -1,14 +1,19 @@
 import {
   getPanelData,
+  getPanelList,
+  getPanelValues,
   saveAssignment,
   removeAssignment,
   getHierarchyLevels,
   getRollupConfig,
+  getDateFields,
   saveRollupConfig,
   getKpiSpace,
   saveKpiSpaceKey,
   createKpiSpace,
   getTimelineData,
+  getTimelineSkeleton,
+  getTimelineTargets,
   recordValue,
   createKpi,
   searchIssues,
@@ -27,17 +32,38 @@ type Handler = (payload: any) => unknown;
 const resolvers: Record<string, Handler> = {
   // Issue panel
   getPanelData: (p) => getPanelData(p?.issueId ?? '10048'),
+  getPanelList: (p) => getPanelList(p?.issueId ?? '10048'),
+  // `?valuesDelayMs=3000` slows Phase 2 so the progressive load is visible in
+  // the harness (estimates shimmer first); `?valuesFail=1` makes it reject.
+  getPanelValues: async (p) => {
+    const params = new URLSearchParams(globalThis.location?.search ?? '');
+    const delay = Number(params.get('valuesDelayMs') ?? 0);
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (params.get('valuesFail') === '1') throw new Error('Simulated Phase 2 failure');
+    return getPanelValues(p?.issueId ?? '10048');
+  },
   saveAssignment: (p) => saveAssignment(p?.issueId, p?.assignment),
   removeAssignment: (p) => removeAssignment(p?.issueId, p?.kpiId),
   // Settings
   getHierarchyLevels: () => getHierarchyLevels(),
   getRollupConfig: () => getRollupConfig(),
+  getDateFields: () => getDateFields(),
   saveRollupConfig: (p) => saveRollupConfig(p?.config),
   getKpiSpace: () => getKpiSpace(),
   saveKpiSpaceKey: (p) => saveKpiSpaceKey(p?.key),
   createKpiSpace: (p) => createKpiSpace(p?.key),
   // Timeline
   getTimelineData: () => getTimelineData(),
+  getTimelineSkeleton: () => getTimelineSkeleton(),
+  // `?targetsDelayMs=3000` slows Phase 2 so the progressive load is visible in
+  // the harness (rows shimmer first); `?targetsFail=1` makes it reject.
+  getTimelineTargets: async () => {
+    const params = new URLSearchParams(globalThis.location?.search ?? '');
+    const delay = Number(params.get('targetsDelayMs') ?? 0);
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (params.get('targetsFail') === '1') throw new Error('Simulated Phase 2 failure');
+    return getTimelineTargets();
+  },
   recordValue: (p) => recordValue(p?.kpiId, p?.date, p?.value),
   createKpi: (p) => createKpi(p),
   searchIssues: (p) => searchIssues(p?.query ?? ''),

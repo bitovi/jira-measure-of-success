@@ -17,6 +17,7 @@ export default defineConfig({
       '@domain': resolve('./src/domain'),
       '@backend': resolve('./src/backend'),
       '@ui': resolve('./src/ui'),
+      '@atlaskit/feature-gate-js-client/feature-gates': resolve('./src/ui/stubs/featureGates.ts'),
       '@harness': resolve('./test-harness'),
       ...(useMockBridge
         ? { '@forge/bridge': resolve('./test-harness/mock-bridge.ts') }

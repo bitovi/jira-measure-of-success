@@ -1,12 +1,19 @@
-import api, { route } from '@forge/api';
+import { assumeTrustedRoute, route, routeFromAbsolute } from '@forge/api';
+import { asApp, asUser } from './requestLog';
 import {
   AssignmentProperty,
   KpiMetaProperty,
   KPI_META_PROPERTY_KEY,
   KPI_PARENT_LINK_TYPE,
+  dateFieldSelection,
   encodeReadingValue,
   parentFromIssueLinks,
+  readOwnDates,
+  FALLBACK_DATE_FIELD_DEFAULTS,
   type Assignment,
+  type DateFieldCatalog,
+  type DateFieldOption,
+  type DateFieldSelection,
   type CreateKpiInput,
   type IssueLinkRef,
   type IssuePickerItem,
@@ -21,6 +28,19 @@ import {
  */
 const ASSIGNMENT_PROPERTY_KEY = 'kpi-assignments';
 const MAX_DEPTH = 10;
+/**
+ * Batch size for `id in (...)` / `parent in (...)` JQL clauses — matches
+ * bitovi/jira-timeline-report's own convention (`fetchChildrenResponses`,
+ * "batches of 40"). Keeps JQL/URL length well under Jira's limits while
+ * turning what would be N single-issue REST calls into a handful of bulk ones.
+ */
+const BATCH_SIZE = 40;
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
 
 interface IssueParentInfo {
   parentId: string | null;
@@ -28,41 +48,87 @@ interface IssueParentInfo {
   issueTypeName: string;
   ownStart: string | null;
   ownDueDate: string | null;
+  /** true when the issue's status category is "done" (Feature 03 freeze) */
+  closed: boolean;
 }
 
-export async function fetchIssueMeta(issueId: string): Promise<IssueParentInfo> {
-  const res = await api
-    .asUser()
-    .requestJira(route`/rest/api/3/issue/${issueId}?fields=parent,issuetype,duedate,customfield_10015`);
-  const data = (await res.json()) as {
-    key: string;
-    fields: {
-      parent?: { id: string };
-      issuetype?: { name: string };
-      duedate?: string | null;
-      /** Jira Cloud's default "Start date" field */
-      customfield_10015?: string | null;
-    };
-  };
+/** Start date / Due date — what callers that don't pass a selection read. */
+const DEFAULT_DATE_SELECTION = dateFieldSelection(null);
+
+/** Raw issue fields as returned by Jira, including the selected date fields. */
+type RawMetaFields = {
+  parent?: { id: string };
+  issuetype?: { name: string };
+  status?: { statusCategory?: { key?: string } };
+  [field: string]: unknown;
+};
+
+function metaFieldList(selection: DateFieldSelection): string {
+  return [...new Set(['parent', 'issuetype', 'status', ...selection.fieldIds])].join(',');
+}
+
+function toIssueMeta(key: string, fields: RawMetaFields | undefined, selection: DateFieldSelection): IssueParentInfo {
+  const issueTypeName = fields?.issuetype?.name ?? 'Unknown';
+  const { ownStart, ownDue } = readOwnDates(fields, issueTypeName, selection);
   return {
-    parentId: data.fields.parent?.id ?? null,
-    issueKey: data.key,
-    issueTypeName: data.fields.issuetype?.name ?? 'Unknown',
-    ownStart: data.fields.customfield_10015 ?? null,
-    ownDueDate: data.fields.duedate ?? null,
+    parentId: fields?.parent?.id ?? null,
+    issueKey: key,
+    issueTypeName,
+    ownStart,
+    ownDueDate: ownDue,
+    closed: fields?.status?.statusCategory?.key === 'done',
   };
 }
 
+/**
+ * One issue's parent/type/status and own start/due — the dates read from the
+ * fields `selection` picks for its issue type (default Start date / Due date).
+ */
+export async function fetchIssueMeta(
+  issueId: string,
+  selection: DateFieldSelection = DEFAULT_DATE_SELECTION,
+): Promise<IssueParentInfo> {
+  const fieldList = metaFieldList(selection);
+  const res = await asUser().requestJira(route`/rest/api/3/issue/${issueId}?fields=${fieldList}`);
+  const data = (await res.json()) as { key: string; fields: RawMetaFields };
+  return toIssueMeta(data.key, data.fields, selection);
+}
+
+/**
+ * `fetchIssueMeta` plus the issue's own targets: the `kpi-assignments` property
+ * comes back inside the same GET (`properties=`), so no separate property request.
+ */
+export async function fetchIssueWithAssignments(
+  issueId: string,
+  selection: DateFieldSelection = DEFAULT_DATE_SELECTION,
+): Promise<IssueParentInfo & { assignments: Assignment[] }> {
+  const fieldList = metaFieldList(selection);
+  const res = await asUser().requestJira(
+    route`/rest/api/3/issue/${issueId}?fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}`,
+  );
+  if (!res.ok) throw new Error(`Failed to load issue ${issueId} (${res.status})`);
+  const data = (await res.json()) as { key: string; fields: RawMetaFields; properties?: Record<string, unknown> };
+  return {
+    ...toIssueMeta(data.key, data.fields, selection),
+    assignments: parseAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
+  };
+}
+
+/** Assignments from a raw `kpi-assignments` property value; [] when absent or invalid. */
+function parseAssignments(value: unknown): Assignment[] {
+  const parsed = AssignmentProperty.safeParse(value);
+  return parsed.success ? parsed.data.assignments : [];
+}
+
+/** One issue's assignments. For single-issue paths; bulk loads read the property in the search instead. */
 export async function fetchAssignments(issueId: string): Promise<Assignment[]> {
-  const res = await api
-    .asUser()
+  const res = await asUser()
     .requestJira(
       route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`,
     );
   if (res.status === 404) return [];
   const body = (await res.json()) as { value?: unknown };
-  const parsed = AssignmentProperty.safeParse(body.value);
-  return parsed.success ? parsed.data.assignments : [];
+  return parseAssignments(body.value);
 }
 
 /** Persist the full assignment list for an issue (batched single write). */
@@ -75,8 +141,7 @@ export async function writeAssignments(issueId: string, assignments: Assignment[
     assignments,
     kpiIds: [...new Set(assignments.map((a) => a.kpiId))],
   });
-  await api
-    .asUser()
+  await asUser()
     .requestJira(route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -91,8 +156,7 @@ export async function writeAssignments(issueId: string, assignments: Assignment[
  * de-duplicated by key. The endpoint omits issue type, so `issueType` is null.
  */
 export async function searchIssuePicker(query: string): Promise<IssuePickerItem[]> {
-  const res = await api
-    .asUser()
+  const res = await asUser()
     .requestJira(route`/rest/api/3/issue/picker?query=${query}`);
   if (!res.ok) return [];
   const data = (await res.json()) as {
@@ -126,21 +190,90 @@ export async function searchIssuePicker(query: string): Promise<IssuePickerItem[
  * The field id is assigned when the KPI space is provisioned (Phase 5).
  */
 /**
- * The app-owned "KPI Reading" custom field (manifest `jira:customField` key
- * `kpi-reading`). Its numeric `customfield_NNNNN` id is assigned at install per
- * site, so resolve it once by matching the app field key/name, then cache it.
+ * Field ids this app needs from `GET /rest/api/3/field` — ONE request serves
+ * both (spec 06 P7), cached per runtime since the numeric `customfield_*` ids
+ * vary per site and are stable once assigned:
+ *  - the app-owned "KPI Reading" custom field (manifest `jira:customField` key
+ *    `kpi-reading`), matched by app field key/name;
+ *  - the native LexoRank "Rank" field (`com.pyxis.greenhopper.jira:gh-lexo-rank`)
+ *    used to order sibling KPIs like a backlog drag would.
+ * The in-flight promise is cached so concurrent callers share the single call.
  */
-let readingFieldIdCache: string | null = null;
+interface FieldIds {
+  reading: string | null;
+  rank: string | null;
+}
+
+type RawField = { id: string; key?: string; name?: string; schema?: { type?: string; custom?: string } };
+
+/** Per-user "Last viewed" isn't a planning date — keep it out of the pickers. */
+const HIDDEN_DATE_FIELDS = new Set(['lastViewed']);
+
+function dateFieldsFrom(fields: RawField[]): DateFieldOption[] {
+  return fields
+    .filter((f) => (f.schema?.type === 'date' || f.schema?.type === 'datetime') && !HIDDEN_DATE_FIELDS.has(f.id))
+    .map((f) => ({ id: f.id, name: f.name ?? f.id }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+let fieldIdsPromise: Promise<FieldIds> | null = null;
+
+async function loadFieldIds(): Promise<FieldIds> {
+  const res = await asApp().requestJira(route`/rest/api/3/field`);
+  if (!res.ok) throw new Error(`Failed to list Jira fields (${res.status})`);
+  const fields = (await res.json()) as RawField[];
+  return {
+    reading:
+      fields.find((f) => (f.key ?? '').includes('kpi-reading') || f.name === 'KPI Reading')?.id ?? null,
+    rank: fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-lexo-rank')?.id ?? null,
+  };
+}
+
+function getFieldIds(): Promise<FieldIds> {
+  if (!fieldIdsPromise) {
+    const pending = loadFieldIds().then(
+      (ids) => {
+        // Not installed yet (app not deployed) → look again next time.
+        if (!ids.reading && fieldIdsPromise === pending) fieldIdsPromise = null;
+        return ids;
+      },
+      (err: unknown) => {
+        if (fieldIdsPromise === pending) fieldIdsPromise = null;
+        throw err;
+      },
+    );
+    fieldIdsPromise = pending;
+  }
+  return fieldIdsPromise;
+}
+
+/**
+ * Every date/datetime field on the site plus the default start/due fields, for
+ * the Settings date-field pickers. Uncached so newly created fields show up.
+ *
+ * The defaults are the same fixed ids the rollup reads when a level has no
+ * choice (`FALLBACK_DATE_FIELD_DEFAULTS`), so the form and the backend agree. On
+ * the rare site whose "Start date" isn't `customfield_10015` the picker shows it
+ * as "not found" and the admin picks the real field.
+ */
+export async function fetchDateFieldCatalog(): Promise<DateFieldCatalog> {
+  const res = await asApp().requestJira(route`/rest/api/3/field`);
+  if (!res.ok) throw new Error(`Failed to list Jira fields (${res.status})`);
+  const fields = (await res.json()) as RawField[];
+  return { fields: dateFieldsFrom(fields), defaults: FALLBACK_DATE_FIELD_DEFAULTS };
+}
+
+/** Start the shared `/field` lookup early so later steps find it already resolved. */
+export async function warmFieldIds(): Promise<void> {
+  await getFieldIds().catch(() => undefined);
+}
+
 async function getReadingFieldId(): Promise<string> {
-  if (readingFieldIdCache) return readingFieldIdCache;
-  const res = await api.asApp().requestJira(route`/rest/api/3/field`);
-  const fields = (await res.json()) as Array<{ id: string; key?: string; name?: string }>;
-  const match = fields.find((f) => (f.key ?? '').includes('kpi-reading') || f.name === 'KPI Reading');
-  if (!match) {
+  const { reading } = await getFieldIds();
+  if (!reading) {
     throw new Error('KPI Reading field not found — deploy the app so its custom field is installed.');
   }
-  readingFieldIdCache = match.id;
-  return match.id;
+  return reading;
 }
 
 /** Record a reading on a KPI issue (value=null = tombstone/delete) by writing the encoded payload. */
@@ -155,7 +288,7 @@ export async function writeReading(kpiIssueId: string, date: string, value: numb
   // That API requires the NUMERIC issue id. The resolver may hand us either a
   // key (e.g. KPI-1) or a numeric id, so resolve it via a GET (which accepts
   // both) and read the numeric `.id` back.
-  const idRes = await api.asApp().requestJira(route`/rest/api/3/issue/${kpiIssueId}?fields=`);
+  const idRes = await asApp().requestJira(route`/rest/api/3/issue/${kpiIssueId}?fields=`);
   if (!idRes.ok) {
     const body = await idRes.text().catch(() => '');
     throw new Error(`Failed to resolve KPI issue id for "${kpiIssueId}" (${idRes.status}): ${body}`);
@@ -164,8 +297,7 @@ export async function writeReading(kpiIssueId: string, date: string, value: numb
   // App custom field value API. `generateChangelog=true` is REQUIRED: readings
   // are reconstructed from this field's changelog (Option B), so every write must
   // emit a changelog entry. Success is 204 No Content.
-  const res = await api
-    .asApp()
+  const res = await asApp()
     .requestJira(route`/rest/api/3/app/field/${fieldId}/value?generateChangelog=true`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -193,7 +325,7 @@ export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<
   // Read asApp to match writeReading: the app-managed read-only reading field's
   // values/changelog are generally NOT visible to asUser, so an asUser read
   // comes back empty even after a successful write.
-  const res = await api.asApp().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
+  const res = await asApp().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -237,14 +369,142 @@ export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<
   return byIssue;
 }
 
+/**
+ * Normalize an issue-type/avatar icon URL to a `Route` `requestJira` can call.
+ *
+ * For built-in issue types (Epic, Story, ...) Jira returns a plain site-
+ * relative-looking absolute URL, so `routeFromAbsolute` (strip the domain,
+ * keep pathname+search) is all that's needed. But for CUSTOM issue types
+ * (Initiative, Outcome, KPI, ...) the search API instead returns the icon URL
+ * already in Atlassian's API-gateway absolute form —
+ * `https://api.atlassian.com/ex/jira/{cloudId}/rest/api/2/universal_avatar/...`
+ * — because that's the same gateway host `asUser().requestJira()` used to make
+ * the search call in the first place. `routeFromAbsolute` only strips the
+ * domain, so the `/ex/jira/{cloudId}` segment would stay in the "path" handed
+ * to `requestJira`, which prefixes its own gateway routing onto it — the
+ * resulting double-prefixed request fails outright (`NEEDS_AUTHENTICATION_ERR`)
+ * before it ever reaches the real endpoint. Strip anything before `/rest/` so
+ * `requestJira` always gets a plain site-relative REST path.
+ */
+function toJiraRoute(absoluteUrl: string) {
+  const { pathname, search } = new URL(absoluteUrl);
+  const restIndex = pathname.indexOf('/rest/');
+  if (restIndex <= 0) return routeFromAbsolute(absoluteUrl);
+  return assumeTrustedRoute(`${pathname.slice(restIndex)}${search}`);
+}
+
+/**
+ * Proxy an issue-type icon into a same-origin `data:` URL.
+ *
+ * The Custom UI iframe runs on a different origin from Atlassian's icon hosts
+ * (`api.atlassian.com`, the site CDN). A plain <img> would display, but the
+ * timeline tints its target markers with CSS `mask-image`, which requires a
+ * CORS-clean image — and those hosts send no `Access-Control-Allow-Origin`, so
+ * the mask fails silently and the marker renders blank (intermittently, thanks
+ * to cache poisoning). Fetching the bytes server-side (no browser CORS) and
+ * inlining them as a `data:` URL makes the tinted marker reliable.
+ *
+ * Best-effort: returns null on any failure so the UI falls back to a diamond.
+ */
+export async function fetchIconDataUrl(iconUrl: string): Promise<string | null> {
+  try {
+    const res = await asUser().requestJira(toJiraRoute(iconUrl));
+    if (!res.ok) return null;
+    const contentType = res.headers.get('content-type') ?? 'image/png';
+    const base64 = Buffer.from(await res.arrayBuffer()).toString('base64');
+    return `data:${contentType};base64,${base64}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a batch of issue-type icon URLs to same-origin `data:` URLs, deduped
+ * (issue types repeat heavily across contributing issues, so many targets share
+ * one icon). Already-inlined `data:` URLs and nulls are skipped. Failures are
+ * omitted so the caller keeps the original URL (UI then shows the diamond).
+ */
+export async function inlineIssueTypeIcons(
+  urls: ReadonlyArray<string | null>,
+): Promise<Map<string, string>> {
+  const unique = [...new Set(urls.filter((u): u is string => !!u && !u.startsWith('data:')))];
+  const resolved = await Promise.all(unique.map(async (u) => [u, await fetchIconDataUrl(u)] as const));
+  const map = new Map<string, string>();
+  for (const [u, data] of resolved) if (data) map.set(u, data);
+  return map;
+}
+
 /** Direct children of an issue via JQL `parent = X`. */
 export async function fetchChildren(issueId: string): Promise<string[]> {
-  const res = await api
-    .asUser()
+  const res = await asUser()
     .requestJira(route`/rest/api/3/search/jql?jql=parent=${issueId}&fields=id&maxResults=100`);
   if (!res.ok) return [];
   const data = (await res.json()) as { issues?: Array<{ id: string }> };
   return (data.issues ?? []).map((i) => i.id);
+}
+
+/**
+ * Bulk-fetch issue meta (parent id, type, dates, status) for MANY issues at
+ * once via `id in (...)` JQL, chunked at BATCH_SIZE — the same batching
+ * bitovi/jira-timeline-report uses instead of one `fetchIssueMeta` GET per
+ * issue. Unresolvable/deleted ids are simply absent from the returned map.
+ */
+export async function fetchIssuesByIds(
+  issueIds: string[],
+  selection: DateFieldSelection = DEFAULT_DATE_SELECTION,
+): Promise<Map<string, IssueParentInfo>> {
+  const out = new Map<string, IssueParentInfo>();
+  const unique = [...new Set(issueIds)];
+  if (unique.length === 0) return out;
+  const fieldList = metaFieldList(selection);
+  await Promise.all(
+    chunkArray(unique, BATCH_SIZE).map(async (batch) => {
+      const jql = `id in (${batch.join(',')})`;
+      const res = await asUser()
+        .requestJira(route`/rest/api/3/search/jql?jql=${jql}&fields=${fieldList}&maxResults=100`);
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        issues?: Array<{ id: string; key: string; fields?: RawMetaFields }>;
+      };
+      for (const issue of data.issues ?? []) {
+        out.set(String(issue.id), toIssueMeta(issue.key, issue.fields, selection));
+      }
+    }),
+  );
+  return out;
+}
+
+/**
+ * Bulk-fetch direct children for MANY parent issues in one batched call per
+ * BATCH_SIZE parents (`parent in (...)` JQL) instead of one `fetchChildren`
+ * JQL `parent = X` search PER parent — the exact level-batching pattern
+ * bitovi/jira-timeline-report uses to descend a hierarchy one level at a time.
+ * Children are grouped by `fields.parent.id` client-side, since a single
+ * `in (...)` response doesn't otherwise indicate which clause matched.
+ */
+export async function fetchChildrenForIds(parentIds: string[]): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  const unique = [...new Set(parentIds)];
+  if (unique.length === 0) return out;
+  await Promise.all(
+    chunkArray(unique, BATCH_SIZE).map(async (batch) => {
+      const jql = `parent in (${batch.join(',')})`;
+      const res = await asUser()
+        .requestJira(route`/rest/api/3/search/jql?jql=${jql}&fields=id,parent&maxResults=1000`);
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        issues?: Array<{ id: string; fields?: { parent?: { id: string } } }>;
+      };
+      for (const issue of data.issues ?? []) {
+        const parentId = issue.fields?.parent?.id;
+        if (!parentId) continue;
+        const list = out.get(parentId) ?? [];
+        list.push(String(issue.id));
+        out.set(parentId, list);
+      }
+    }),
+  );
+  return out;
 }
 
 export interface KpiSpaceIssue {
@@ -254,32 +514,24 @@ export interface KpiSpaceIssue {
   parentId: string | null;
   /** Native LexoRank value for sibling ordering (null if the field is absent). */
   rank: string | null;
+  /** unit/direction from the `kpi-meta` property, included in the search (null if unset/invalid) */
+  meta: KpiMetaProperty | null;
 }
 
-/**
- * The site's native LexoRank "Rank" field id (`com.pyxis.greenhopper.jira:
- * gh-lexo-rank`) — resolved once per runtime, since the numeric `customfield_*`
- * id varies per site. Used to order sibling KPIs the same way a backlog drag
- * would. Returns null (best-effort) if the field can't be found.
- */
-let rankFieldIdCache: string | null | undefined;
+/** Best-effort: null if the Rank field can't be found (siblings keep creation order). */
 async function getRankFieldId(): Promise<string | null> {
-  if (rankFieldIdCache !== undefined) return rankFieldIdCache;
-  const res = await api.asApp().requestJira(route`/rest/api/3/field`);
-  if (!res.ok) {
-    rankFieldIdCache = null;
+  try {
+    return (await getFieldIds()).rank;
+  } catch {
     return null;
   }
-  const fields = (await res.json()) as Array<{ id: string; schema?: { custom?: string } }>;
-  const match = fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-lexo-rank');
-  rankFieldIdCache = match?.id ?? null;
-  return rankFieldIdCache;
 }
 
 /**
  * Enumerate every KPI issue in the KPI space (JQL `project = <key>`), reading the
- * summary (KPI name), issue links (for parent nesting) and native rank (for
- * sibling ordering). Paginated to cover large spaces.
+ * summary (KPI name), issue links (for parent nesting), native rank (for
+ * sibling ordering) and the `kpi-meta` property (unit/direction — included in
+ * the search so no per-KPI property GET is needed). Paginated to cover large spaces.
  *
  * The KPI tree is expressed with built-in `Parent` issue links rather than the
  * native `parent` field (a standard issue can't be the native parent of another
@@ -296,16 +548,16 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
     name: string;
     links: IssueLinkRef[];
     rank: string | null;
+    meta: KpiMetaProperty | null;
   };
   const raw: RawIssue[] = [];
   let nextPageToken: string | undefined;
   for (let page = 0; page < 50; page += 1) {
-    const res = await api
-      .asApp()
+    const res = await asApp()
       .requestJira(
         nextPageToken
-          ? route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&maxResults=100&nextPageToken=${nextPageToken}`
-          : route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&maxResults=100`,
+          ? route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
+          : route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100`,
       );
     if (!res.ok) break;
     const data = (await res.json()) as {
@@ -315,6 +567,7 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
         id: string;
         key: string;
         fields?: { summary?: string; issuelinks?: IssueLinkRef[]; [field: string]: unknown };
+        properties?: Record<string, unknown>;
       }>;
     };
     const batch = data.issues ?? [];
@@ -325,6 +578,7 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
         name: i.fields?.summary ?? i.key,
         links: i.fields?.issuelinks ?? [],
         rank: rankFieldId ? ((i.fields?.[rankFieldId] as string | undefined) ?? null) : null,
+        meta: parseKpiMeta(i.properties?.[KPI_META_PROPERTY_KEY]),
       });
     }
     if (data.isLast || !data.nextPageToken || batch.length === 0) break;
@@ -340,7 +594,13 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
     name: r.name,
     parentId: parentFromIssueLinks(r.links, idSet),
     rank: r.rank,
+    meta: r.meta,
   }));
+}
+
+function parseKpiMeta(value: unknown): KpiMetaProperty | null {
+  const parsed = KpiMetaProperty.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 /** One contributing issue's KPI targets, plus the fields needed to place them. */
@@ -369,8 +629,13 @@ const ASSIGNMENT_INDEX_JQL = 'issue.property[kpi-assignments].kpiIds IS NOT EMPT
 /**
  * Discover every issue that has authored a KPI target — in ONE JQL query against
  * the denormalized `kpiIds` search index (`issue.property[kpi-assignments].kpiIds
- * IS NOT EMPTY`), then read each issue's assignments and let the caller group
- * them by KPI in memory. This deliberately avoids a per-KPI query fan-out.
+ * IS NOT EMPTY`), and let the caller group the assignments by KPI in memory.
+ * This deliberately avoids a per-KPI query fan-out.
+ *
+ * The search asks Jira to include each issue's `kpi-assignments` property in the
+ * results (`properties=`), so the targets arrive WITH the issues — no per-issue
+ * property request (spec 06 P1). Pages may hold fewer than 100 issues when
+ * properties are included, so paging follows `nextPageToken` until `isLast`.
  *
  * Caveat: only finds issues SAVED AFTER the `kpiIds` index was populated
  * (writeAssignments) — assignments written before that must be re-saved or
@@ -390,16 +655,16 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
     title: string;
     ownDue: string | null;
     parentId: string | null;
+    assignments: Assignment[];
   }
   const raw: Raw[] = [];
   let nextPageToken: string | undefined;
   for (let page = 0; page < 50; page += 1) {
-    const res = await api
-      .asUser()
+    const res = await asUser()
       .requestJira(
         nextPageToken
-          ? route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&maxResults=100&nextPageToken=${nextPageToken}`
-          : route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&maxResults=100`,
+          ? route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
+          : route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}&maxResults=100`,
       );
     if (!res.ok) break;
     const data = (await res.json()) as {
@@ -414,6 +679,7 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
           issuetype?: { name?: string; iconUrl?: string };
           parent?: { id?: string | number };
         };
+        properties?: Record<string, unknown>;
       }>;
     };
     const batch = data.issues ?? [];
@@ -426,15 +692,14 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
         title: i.fields?.summary ?? i.key,
         ownDue: i.fields?.duedate ?? null,
         parentId: i.fields?.parent?.id != null ? String(i.fields.parent.id) : null,
+        assignments: parseAssignments(i.properties?.[ASSIGNMENT_PROPERTY_KEY]),
       });
     }
     if (data.isLast || !data.nextPageToken || batch.length === 0) break;
     nextPageToken = data.nextPageToken;
   }
 
-  // Read each contributing issue's assignments (the `kpi-assignments` property).
-  const assignmentsByIssue = await Promise.all(raw.map((r) => fetchAssignments(r.id)));
-  const issues: IssueTargetContributions[] = raw.map((r, idx) => ({
+  const issues: IssueTargetContributions[] = raw.map((r) => ({
     issueId: r.id,
     issueKey: r.key,
     issueTypeName: r.issueTypeName,
@@ -442,7 +707,7 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
     title: r.title,
     ownDue: r.ownDue,
     parentId: r.parentId,
-    assignments: assignmentsByIssue[idx],
+    assignments: r.assignments,
   }));
 
   // Resolve each distinct parent's OWN due (for `parentDueDate` anchors),
@@ -455,41 +720,76 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
     if (known) parentById.set(pid, known);
     else toFetch.push(pid);
   }
-  const fetched = await Promise.all(
-    toFetch.map(async (pid) => {
-      const meta = await fetchIssueMeta(pid);
-      return [pid, { key: meta.issueKey, due: meta.ownDueDate }] as const;
-    }),
-  );
-  for (const [pid, info] of fetched) parentById.set(pid, info);
+  const fetched = await fetchIssuesByIds(toFetch);
+  for (const pid of toFetch) {
+    const meta = fetched.get(pid);
+    if (meta) parentById.set(pid, { key: meta.issueKey, due: meta.ownDueDate });
+  }
 
   return { issues, parentById };
 }
 
 
 /**
- * Build the timing-node map for the subtree rooted at `issueId` (its own dates
- * plus all descendants), so `effectiveTiming` can roll up its due date.
- * Bounded by MAX_DEPTH; visited-guarded against cycles.
+ * Build the timing-node map for the subtrees rooted at `rootIds` (each root's
+ * own dates plus all its descendants), so `effectiveTiming` can roll up due
+ * dates for each root from the SAME shared map. Descends level-by-level,
+ * batch-fetching every node still in the frontier via `fetchIssuesByIds` /
+ * `fetchChildrenForIds` (BATCH_SIZE ids per call) instead of one call per
+ * node — the level-batching pattern bitovi/jira-timeline-report uses.
+ *
+ * Multiple roots share ONE traversal: a node reachable from more than one
+ * root (e.g. a common ancestor) is fetched once, whichever root reaches it
+ * first — safe because `TimingNode` carries no depth/root info, and
+ * `effectiveTiming(rootId, nodes, ...)` recurses structurally via `childIds`,
+ * not via how the map was populated. `depth` below is purely a traversal
+ * safety cap (MAX_DEPTH), not per-root bookkeeping.
  */
-export async function fetchSubtreeTimingNodes(issueId: string): Promise<Map<string, TimingNode>> {
+export async function fetchSubtreeTimingNodesForRoots(
+  rootIds: string[],
+  selection: DateFieldSelection = DEFAULT_DATE_SELECTION,
+): Promise<Map<string, TimingNode>> {
   const nodes = new Map<string, TimingNode>();
-  const queue: Array<{ id: string; depth: number }> = [{ id: issueId, depth: 0 }];
-  while (queue.length) {
-    const { id, depth } = queue.shift()!;
-    if (nodes.has(id) || depth > MAX_DEPTH) continue;
-    const [meta, childIds] = await Promise.all([fetchIssueMeta(id), fetchChildren(id)]);
-    nodes.set(id, {
-      id,
-      issueKey: meta.issueKey,
-      issueTypeName: meta.issueTypeName,
-      ownStart: meta.ownStart,
-      ownDue: meta.ownDueDate,
-      childIds,
-    });
-    for (const childId of childIds) queue.push({ id: childId, depth: depth + 1 });
+  let frontier = [...new Set(rootIds)];
+  let depth = 0;
+  while (frontier.length > 0 && depth <= MAX_DEPTH) {
+    const unvisited = frontier.filter((id) => !nodes.has(id));
+    if (unvisited.length === 0) break;
+    const [metaById, childrenById] = await Promise.all([
+      fetchIssuesByIds(unvisited, selection),
+      fetchChildrenForIds(unvisited),
+    ]);
+    const nextFrontier: string[] = [];
+    for (const id of unvisited) {
+      const meta = metaById.get(id);
+      if (!meta) continue; // unresolvable/deleted issue — skip, same as the old per-node guard
+      const childIds = childrenById.get(id) ?? [];
+      nodes.set(id, {
+        id,
+        issueKey: meta.issueKey,
+        issueTypeName: meta.issueTypeName,
+        ownStart: meta.ownStart,
+        ownDue: meta.ownDueDate,
+        childIds,
+      });
+      nextFrontier.push(...childIds);
+    }
+    frontier = nextFrontier;
+    depth += 1;
   }
   return nodes;
+}
+
+/**
+ * Single-root convenience wrapper around `fetchSubtreeTimingNodesForRoots`,
+ * kept for callers (and `test-e2e/jira-api.e2e.ts`) that only need one
+ * subtree.
+ */
+export async function fetchSubtreeTimingNodes(
+  issueId: string,
+  selection: DateFieldSelection = DEFAULT_DATE_SELECTION,
+): Promise<Map<string, TimingNode>> {
+  return fetchSubtreeTimingNodesForRoots([issueId], selection);
 }
 
 /**
@@ -497,7 +797,7 @@ export async function fetchSubtreeTimingNodes(issueId: string): Promise<Map<stri
  * issue-type hierarchy configuration (never hardcoded — Constitution §6).
  */
 export async function fetchHierarchyLevels(): Promise<string[]> {
-  const res = await api.asApp().requestJira(route`/rest/api/3/issuetype`);
+  const res = await asApp().requestJira(route`/rest/api/3/issuetype`);
   if (!res.ok) return [];
   const types = (await res.json()) as Array<{ name: string; hierarchyLevel?: number }>;
   const namesByLevel = new Map<number, string[]>();
@@ -580,7 +880,7 @@ export interface ProjectInfo {
 
 /** Look up a project (+ its issue types) by key; null if it doesn't exist. */
 export async function findProjectByKey(key: string): Promise<ProjectInfo | null> {
-  const res = await api.asApp().requestJira(route`/rest/api/3/project/${key}?expand=issueTypes`);
+  const res = await asApp().requestJira(route`/rest/api/3/project/${key}?expand=issueTypes`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(await jiraError(res, `look up project "${key}"`));
   const p = (await res.json()) as {
@@ -607,7 +907,7 @@ export async function createKpiProject(
   leadAccountId: string,
 ): Promise<{ id: string; name: string }> {
   const name = `KPIs (${key})`;
-  const res = await api.asApp().requestJira(route`/rest/api/3/project`, {
+  const res = await asApp().requestJira(route`/rest/api/3/project`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ key, name, projectTypeKey: 'software', leadAccountId }),
@@ -622,12 +922,12 @@ export const KPI_ISSUE_TYPE = 'KPI';
 
 /** Find (or create) the global "KPI" standard issue type; returns its id. */
 async function ensureKpiIssueType(): Promise<string> {
-  const listRes = await api.asApp().requestJira(route`/rest/api/3/issuetype`);
+  const listRes = await asApp().requestJira(route`/rest/api/3/issuetype`);
   if (!listRes.ok) throw new Error(await jiraError(listRes, 'list issue types'));
   const types = (await listRes.json()) as Array<{ id: string; name: string }>;
   const found = types.find((t) => t.name === KPI_ISSUE_TYPE);
   if (found) return found.id;
-  const createRes = await api.asApp().requestJira(route`/rest/api/3/issuetype`, {
+  const createRes = await asApp().requestJira(route`/rest/api/3/issuetype`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -650,8 +950,7 @@ async function ensureKpiIssueType(): Promise<string> {
  */
 export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<void> {
   const issueTypeId = await ensureKpiIssueType();
-  const schemeRes = await api
-    .asApp()
+  const schemeRes = await asApp()
     .requestJira(route`/rest/api/3/issuetypescheme/project?projectId=${projectId}`);
   if (!schemeRes.ok) throw new Error(await jiraError(schemeRes, 'read the project issue-type scheme'));
   const body = (await schemeRes.json()) as {
@@ -663,8 +962,7 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
       'No issue-type scheme found for this project. Team-managed projects cannot be used as a KPI space — use a company-managed project.',
     );
   }
-  const addRes = await api
-    .asApp()
+  const addRes = await asApp()
     .requestJira(route`/rest/api/3/issuetypescheme/${schemeId}/issuetype`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -689,7 +987,7 @@ export async function createKpiIssue(projectId: string, input: CreateKpiInput): 
     issuetype: { name: KPI_ISSUE_TYPE },
     summary: input.name.trim() || 'Untitled KPI',
   };
-  const res = await api.asApp().requestJira(route`/rest/api/3/issue`, {
+  const res = await asApp().requestJira(route`/rest/api/3/issue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields }),
@@ -715,7 +1013,7 @@ export async function createKpiIssue(projectId: string, input: CreateKpiInput): 
  * the child its inward issue — matching how `parentFromIssueLinks` reads it back.
  */
 export async function linkKpiParent(parentKpiKey: string, childKpiKey: string): Promise<void> {
-  const res = await api.asApp().requestJira(route`/rest/api/3/issueLink`, {
+  const res = await asApp().requestJira(route`/rest/api/3/issueLink`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -733,7 +1031,7 @@ export async function linkKpiParent(parentKpiKey: string, childKpiKey: string): 
 /** Persist a KPI's unit/direction as the `kpi-meta` entity property. */
 export async function writeKpiMeta(kpiIssueKey: string, meta: KpiMetaProperty): Promise<void> {
   const value: unknown = KpiMetaProperty.parse(meta);
-  await api.asApp().requestJira(route`/rest/api/3/issue/${kpiIssueKey}/properties/${KPI_META_PROPERTY_KEY}`, {
+  await asApp().requestJira(route`/rest/api/3/issue/${kpiIssueKey}/properties/${KPI_META_PROPERTY_KEY}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(value),
@@ -742,11 +1040,9 @@ export async function writeKpiMeta(kpiIssueKey: string, meta: KpiMetaProperty): 
 
 /** Read a KPI's unit/direction from the `kpi-meta` entity property (null if unset). */
 export async function fetchKpiMeta(kpiIssueId: string): Promise<KpiMetaProperty | null> {
-  const res = await api
-    .asUser()
+  const res = await asUser()
     .requestJira(route`/rest/api/3/issue/${kpiIssueId}/properties/${KPI_META_PROPERTY_KEY}`);
   if (!res.ok) return null;
   const body = (await res.json()) as { value?: unknown };
-  const parsed = KpiMetaProperty.safeParse(body.value);
-  return parsed.success ? parsed.data : null;
+  return parseKpiMeta(body.value);
 }

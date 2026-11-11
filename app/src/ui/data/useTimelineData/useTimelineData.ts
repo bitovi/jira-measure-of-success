@@ -1,6 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { call } from '@ui/bridge.js';
-import type { AddTargetInput, CreateKpiInput, IssuePickerItem, TimelineData } from '@domain/index.js';
+import type {
+  AddTargetInput,
+  CreateKpiInput,
+  IssuePickerItem,
+  TimelineData,
+  TimelineTargetsData,
+} from '@domain/index.js';
+import { deriveTimelineView } from './timelineView.js';
 
 /**
  * A mutation (record / createKpi) failure, surfaced as inline, dismissible
@@ -25,7 +32,14 @@ function toActionError(e: unknown): TimelineActionError {
  */
 export interface TimelineController {
   data: TimelineData | null;
+  /** No skeleton yet — the page itself can't render. */
   pending: boolean;
+  /** Phase 2 (targets) outstanding: KPIs and readings are shown, rows shimmer. */
+  targetsPending: boolean;
+  /** Phase 2 failed: KPIs stay visible, with an inline retryable banner. */
+  targetsError: string | null;
+  /** Try loading the targets again after a Phase 2 failure. */
+  retryTargets(): void;
   /** Initial-load failure — drives the full-screen "Failed to load" state. */
   error: string | null;
   /** Mutation (record / createKpi) failure — drives the inline banner. */
@@ -44,25 +58,102 @@ export interface TimelineController {
 
 export type UseTimeline = () => TimelineController;
 
+interface TimelineRequests {
+  skeleton: Promise<TimelineData>;
+  targets: Promise<TimelineTargetsData>;
+}
+
+/** An unobserved rejection must not surface as an "unhandled rejection". */
+function guarded<T>(promise: Promise<T>): Promise<T> {
+  promise.catch(() => undefined);
+  return promise;
+}
+
+/** Console timing (ms since page load) so the real-site phase gap can be read off, not guessed. */
+const mark = (what: string) => console.info(`[timeline] ${what} at ${Math.round(performance.now())}ms`);
+
+const requestSkeleton = () => {
+  mark('KPIs requested');
+  return guarded(call<TimelineData>('getTimelineSkeleton'));
+};
+const requestTargets = () => {
+  mark('targets requested');
+  return guarded(call<TimelineTargetsData>('getTimelineTargets'));
+};
+
+// Phase 1 and Phase 2 are independent on the backend, so both start at once.
+// The entry point calls `prefetchTimeline()` before the first render so the
+// requests are already in flight while the theme and React mount.
+let prefetched: TimelineRequests | null = null;
+
+export function prefetchTimeline(): void {
+  prefetched ??= { skeleton: requestSkeleton(), targets: requestTargets() };
+}
+
+function takeRequests(): TimelineRequests {
+  const requests = prefetched ?? { skeleton: requestSkeleton(), targets: requestTargets() };
+  // React StrictMode runs this initializer twice in the same render; both calls
+  // must see the same requests. Release them afterwards so a later mount starts fresh.
+  queueMicrotask(() => {
+    if (prefetched === requests) prefetched = null;
+  });
+  return requests;
+}
+
 export const useTimelineData: UseTimeline = () => {
-  const [data, setData] = useState<TimelineData | null>(null);
+  const [requests] = useState(takeRequests);
+  const [targetsRequest, setTargetsRequest] = useState(requests.targets);
+  const [skeleton, setSkeleton] = useState<TimelineData | null>(null);
+  const [contributions, setContributions] = useState<TimelineTargetsData['contributions'] | null>(null);
+  const [targetsError, setTargetsError] = useState<string | null>(null);
+  // A complete timeline returned by a mutation. It already includes targets, so
+  // it supersedes the progressive pieces (see deriveTimelineView).
+  const [full, setFull] = useState<TimelineData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<TimelineActionError | null>(null);
 
   useEffect(() => {
     let alive = true;
-    call<TimelineData>('getTimelineData')
-      .then((d) => alive && setData(d))
-      .catch((e: unknown) => alive && setError(String(e)));
+    requests.skeleton.then(
+      (d) => {
+        mark('KPIs received');
+        if (alive) setSkeleton(d);
+      },
+      (e: unknown) => alive && setError(String(e)),
+    );
     return () => {
       alive = false;
     };
-  }, []);
+  }, [requests]);
+
+  useEffect(() => {
+    let alive = true;
+    targetsRequest.then(
+      (t) => {
+        mark('targets received');
+        if (alive) setContributions(t.contributions);
+      },
+      (e: unknown) => alive && setTargetsError(String(e)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [targetsRequest]);
+
+  const view = useMemo(
+    () => deriveTimelineView({ skeleton, contributions, targetsError, full }),
+    [skeleton, contributions, targetsError, full],
+  );
+
+  const retryTargets = () => {
+    setTargetsError(null);
+    setTargetsRequest(requestTargets());
+  };
 
   const record = async (kpiId: string, date: string, value: number | null) => {
     try {
       setActionError(null);
-      setData(await call<TimelineData>('recordValue', { kpiId, date, value }));
+      setFull(await call<TimelineData>('recordValue', { kpiId, date, value }));
     } catch (e) {
       setActionError(toActionError(e));
     }
@@ -71,7 +162,7 @@ export const useTimelineData: UseTimeline = () => {
   const createKpi = async (input: CreateKpiInput) => {
     try {
       setActionError(null);
-      setData(await call<TimelineData>('createKpi', input));
+      setFull(await call<TimelineData>('createKpi', input));
     } catch (e) {
       setActionError(toActionError(e));
     }
@@ -83,15 +174,18 @@ export const useTimelineData: UseTimeline = () => {
   const addTarget = async (input: AddTargetInput) => {
     try {
       setActionError(null);
-      setData(await call<TimelineData>('addTarget', input));
+      setFull(await call<TimelineData>('addTarget', input));
     } catch (e) {
       setActionError(toActionError(e));
     }
   };
 
   return {
-    data,
-    pending: data === null && error === null,
+    data: view.data,
+    pending: view.data === null && error === null,
+    targetsPending: view.targetsPending,
+    targetsError: view.targetsError,
+    retryTargets,
     error,
     actionError,
     clearActionError: () => setActionError(null),

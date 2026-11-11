@@ -71,6 +71,11 @@ function resolve(
   const own = endpoint === 'due' ? node.ownDue : node.ownStart;
 
   const children = (): { date: IsoDate | null; fromIssueKey?: string } => {
+    // Depth cap (FR-19): below the configured level, don't descend into the
+    // subtree — the issue's own date (or nothing) is used instead.
+    if (config.depthCap != null && depth >= config.depthCap) {
+      return { date: null };
+    }
     let best: IsoDate | null = null;
     let fromIssueKey: string | undefined;
     for (const childId of node.childIds) {

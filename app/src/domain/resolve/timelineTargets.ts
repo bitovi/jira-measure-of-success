@@ -2,22 +2,24 @@ import type { IsoDate, KpiDirection } from '../models/index';
 import type { Assignment } from '../models/assignment';
 import type { TimelineTargetDto } from '../contracts';
 import { resolveRelativeTargetDate, type RelativeTargetContext } from './relativeTargetDate';
+import { resolveRelativeTargetValue } from './relativeTargetValue';
+import { baselineDueEndpoint } from './panelLoad';
 import { targetStatus, type DatedValue } from './targetStatus';
 
 /**
  * Timeline target aggregation — turns the KPI targets authored on contributing
- * work issues (issue `kpi-assignments` properties) into the diamonds the KPI
+ * work issues (issue `kpi-assignments` properties) into the markers the KPI
  * Timeline renders. Pure: the resolver fetches the raw contributions from Jira,
- * this decides which become targets, where they sit on the axis, and their
- * hit/missed/upcoming status.
+ * this decides which become dated markers, which become UNDATED chips (pending
+ * anchor), where they sit, their hit/missed/upcoming status, and whether they're
+ * a provisional ESTIMATE (relative value not yet baselined, Feature 03 FR-22…24).
  *
- * v1 scope (specs/bug-fixes/timeline-targets-not-shown.md):
- *  - only `targetType: 'absolute'` targets are plotted; `delta` targets are
- *    skipped until baselines are modeled;
- *  - relative target dates are resolved from the contributing issue's OWN due
- *    (and its parent's own due) — no full subtree rollup — matching the panel;
- *  - a target whose date can't be resolved (pending anchor / unset absolute
- *    date / no target value) is skipped rather than plotted at a guessed spot.
+ *  - `absolute` targets plot at their resolved date, never provisional;
+ *  - `percent`/`relative` targets (a % or additive change on the baseline at the due date) resolve a value
+ *    and plot with `provisional` = true until the baseline is baselined;
+ *  - a target whose date can't be resolved (pending anchor) becomes an UNDATED
+ *    chip (`date: null`) rather than being plotted at a guessed spot;
+ *  - a `percent`/`relative` target with no baseline value yet (zero readings) is skipped.
  */
 
 /** The contributing issue behind a target (for the "issues behind this KPI" list). */
@@ -42,17 +44,23 @@ export interface KpiTargetContribution {
   source: TargetSourceIssue;
 }
 
+/** Dated markers + undated chips for one KPI row. */
+export interface BuiltKpiTargets {
+  dated: TimelineTargetDto[];
+  undated: TimelineTargetDto[];
+}
+
 export function buildKpiTargets(
   contributions: readonly KpiTargetContribution[],
   readings: readonly DatedValue[],
   direction: KpiDirection | null,
   today: IsoDate,
-): TimelineTargetDto[] {
-  const out: TimelineTargetDto[] = [];
+): BuiltKpiTargets {
+  const dated: TimelineTargetDto[] = [];
+  const undated: TimelineTargetDto[] = [];
+
   for (const { assignment, source } of contributions) {
-    // No target value, or a delta target (not plottable without a baseline).
     if (assignment.target === null) continue;
-    if (assignment.targetType === 'delta') continue;
 
     const ctx: RelativeTargetContext = {
       issue: { issueKey: source.key, due: { date: source.due, source: 'own' } },
@@ -61,17 +69,37 @@ export function buildKpiTargets(
       ctx.parent = { issueKey: source.parent.key, due: { date: source.parent.due, source: 'own' } };
     }
 
-    const resolved = resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
-    if (resolved.pending || resolved.date === null) continue;
+    const resolvedDate = resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
 
-    out.push({
-      date: resolved.date,
-      value: assignment.target,
-      status: targetStatus({ date: resolved.date, value: assignment.target }, readings, direction, today),
-      source: { issue: source.key, type: source.type, title: source.title, iconUrl: source.iconUrl },
+    // The baseline anchor — the same rule the issue panel uses (FR-4).
+    const dueDate = baselineDueEndpoint(assignment, ctx, resolvedDate.date).date;
+
+    const resolvedValue = resolveRelativeTargetValue(assignment, { dueDate, readings });
+    if (resolvedValue.value === null) continue; // percent/relative with no baseline yet → skip
+
+    const src = { issue: source.key, type: source.type, title: source.title, iconUrl: source.iconUrl };
+
+    if (resolvedDate.pending || resolvedDate.date === null) {
+      undated.push({
+        date: null,
+        value: resolvedValue.value,
+        status: 'upcoming',
+        provisional: resolvedValue.provisional,
+        source: src,
+      });
+      continue;
+    }
+
+    dated.push({
+      date: resolvedDate.date,
+      value: resolvedValue.value,
+      status: targetStatus({ date: resolvedDate.date, value: resolvedValue.value }, readings, direction, today),
+      provisional: resolvedValue.provisional,
+      source: src,
     });
   }
 
-  // Chronological so diamonds render left → right; stable within a date.
-  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  // Chronological so markers render left → right; stable within a date.
+  dated.sort((a, b) => ((a.date ?? '') < (b.date ?? '') ? -1 : (a.date ?? '') > (b.date ?? '') ? 1 : 0));
+  return { dated, undated };
 }

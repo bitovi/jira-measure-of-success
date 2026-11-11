@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Issue panel v3 — the bet first (mock)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: 'var(--ds-surface, #ffffff)',
+            'surface-sunken': 'var(--ds-surface-sunken, #f7f8f9)',
+            border: 'var(--ds-border, #091e4224)',
+            text: 'var(--ds-text, #172b4d)',
+            'text-subtle': 'var(--ds-text-subtle, #626f86)',
+            brand: 'var(--ds-background-brand-bold, #1868db)',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    /* Atlaskit tokens. Subtle backgrounds use their own tokens (not text color + alpha,
+       which Tailwind can't apply to var() colors — that's why v2's pills had no fill). */
+    :root {
+      --text: var(--ds-text, #172b4d);
+      --text-subtle: var(--ds-text-subtle, #626f86);
+      --text-subtlest: var(--ds-text-subtlest, #8590a2);
+      --border: var(--ds-border, #091e4224);
+      --surface: var(--ds-surface, #ffffff);
+      --brand: var(--ds-text-brand, #1868db);
+      --success: var(--ds-text-success, #216e4e);
+      --warning: var(--ds-text-warning, #a54800);
+      --danger: var(--ds-text-danger, #ae2e24);
+      --bg-info: var(--ds-background-information, #e9f2ff);
+      --bg-neutral: var(--ds-background-neutral, #091e420f);
+      --bg-success: var(--ds-background-success, #dcfff1);
+      --bg-warning: var(--ds-background-warning, #fff7d6);
+      --bg-danger: var(--ds-background-danger, #ffeceb);
+    }
+    /* ── Panel: everything inside responds to the PANEL's width, not the viewport ── */
+    #panel { container: panel / inline-size; resize: horizontal; overflow: auto;
+      min-width: 300px; max-width: 100%; }
+
+    /* ── Form ─────────────────────────────────────────────────────────────────── */
+    .lbl { font-size:12px; color:var(--text-subtle); display:block; }
+    .sel, .combo { margin-top:2px; width:100%; box-sizing:border-box;
+      border:1px solid var(--border); border-radius:4px; background:#fff; font-size:14px; color:var(--text); }
+    .sel { padding:4px 24px 4px 8px; -webkit-appearance:none; appearance:none;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath fill='%23626f86' d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
+      background-repeat:no-repeat; background-position:right 6px center; }
+    /* Amount + its type are ONE control: [ +2 ][ % change ▾ ] */
+    .combo { display:flex; align-items:stretch; overflow:hidden; }
+    .combo:focus-within { outline:2px solid #1868db; outline-offset:-1px; }
+    .combo input { min-width:0; border:0; padding:4px 8px; outline:none;
+      font-variant-numeric:tabular-nums; background:transparent; }
+    .combo select { width:auto; min-width:0; border:0; border-left:1px solid var(--border);
+      border-radius:0; margin:0; outline:none; background-color:var(--ds-surface-sunken, #f7f8f9); }
+    /* Input width follows what it holds: amounts can be long (1,458,600), months are short, dates are fixed-width. */
+    .combo[data-kind="amount"] input { flex:1 1 6rem; }
+    .combo[data-kind="amount"] select { flex:0 0 auto; }
+    .combo[data-kind="months"] input { flex:0 0 4.5rem; }
+    .combo[data-kind="date"] input { flex:0 1 9.5rem; min-width:8rem; }
+    .combo[data-kind="months"] select, .combo[data-kind="date"] select { flex:1 1 auto; }
+    .form-rows { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+    @container panel (min-width: 560px) {
+      .form-rows { grid-template-columns: minmax(0,1fr) minmax(0,1.4fr); }
+    }
+    @container panel (max-width: 340px) {
+      .combo[data-kind="months"] input { flex-basis:3rem; }
+    }
+
+    /* ── Saved targets ───────────────────────────────────────────────────────── */
+    .cards { display:flex; flex-direction:column; gap:12px; }
+    figure { margin:0; }
+    figcaption { font-size:12px; line-height:16px; font-weight:500; color:var(--text-subtlest); margin:0 0 4px 2px; }
+
+    /* Type scale — three levels only:
+         headline  16/24 semibold, --text         → the bet
+         body      14/20 regular,  --text-subtle  → KPI name, estimate line (numbers switch to --text, same weight)
+         small     12/16 medium                   → pill, nudge, captions, form labels */
+    .card { container: card / inline-size; position:relative; background:var(--surface);
+      border:1px solid var(--border); border-radius:6px; padding:10px 12px; }
+    .card-head { display:flex; align-items:center; gap:6px; margin-bottom:2px; }
+    .kpi { display:flex; align-items:center; gap:4px; min-width:0; font-size:14px; line-height:20px; color:var(--text-subtle); }
+    .kpi-name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .dir { flex:none; color:var(--success); font-size:12px; }
+
+    /* The bet — what the PM typed — is the headline, one style end to end. */
+    .bet { display:flex; flex-wrap:wrap; align-items:baseline; column-gap:6px;
+      font-size:16px; line-height:24px; font-weight:600; color:var(--text); font-variant-numeric:tabular-nums; }
+    .bet-when::before { content:'·'; color:var(--text-subtlest); margin-right:6px; }
+
+    /* The estimate shows its own math: starting value → aiming for. */
+    .est { font-size:14px; line-height:20px; color:var(--text-subtle); }
+    .est .n { color:var(--text); font-variant-numeric:tabular-nums; }
+    .est .n.good { color:var(--success); }
+    .est .n.bad { color:var(--danger); }
+    .est [title] { cursor:help; }
+    .est .arrow { color:var(--text-subtlest); }
+
+    /* Wide card: bet on the left, estimate on the right. */
+    @container card (min-width: 460px) {
+      .card-body { display:flex; align-items:baseline; justify-content:space-between; gap:16px; }
+      .card-body .bet { flex:none; flex-wrap:nowrap; }
+      .est { flex:0 1 auto; min-width:0; text-align:right; }
+    }
+    .est .nowrap { white-space:nowrap; }
+
+    .nudge { margin-top:8px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px;
+      font-size:12px; line-height:16px; font-weight:500; border-radius:4px; padding:6px 8px;
+      background:var(--bg-warning); color:var(--warning); }
+    .nudge button { margin-left:auto; font-weight:500; color:var(--brand); white-space:nowrap; }
+    .nudge button:hover { text-decoration:underline; }
+
+    /* One pill = how the BET is doing. */
+    .pill { margin-left:auto; flex:none; font-size:12px; line-height:16px; font-weight:500;
+      border-radius:3px; padding:2px 6px; }
+    .pill.upcoming   { background:var(--bg-neutral); color:var(--text-subtle); }
+    .pill.inprogress { background:var(--bg-info); color:var(--brand); }
+    .pill.pending    { background:var(--bg-neutral); color:var(--text-subtle); }
+    .pill.met      { background:var(--bg-success); color:var(--success); }
+    .pill.missed   { background:var(--bg-danger); color:var(--danger); }
+    .pill.unscored { background:var(--bg-warning); color:var(--warning); }
+
+    /* ••• menu (Edit / Remove) */
+    .menu { position:relative; flex:none; }
+    .menu summary { list-style:none; cursor:pointer; border-radius:3px; padding:0 4px;
+      color:var(--text-subtle); font-size:14px; line-height:18px; letter-spacing:1px; }
+    .menu summary::-webkit-details-marker { display:none; }
+    .menu summary:hover, .menu[open] summary { background:var(--bg-neutral); }
+    .menu-pop { position:absolute; right:0; top:22px; z-index:10; min-width:120px; padding:4px 0;
+      background:var(--surface); border:1px solid var(--border); border-radius:4px;
+      box-shadow:0 4px 8px #091e4226; }
+    .menu-pop button { display:block; width:100%; text-align:left; padding:4px 12px; font-size:14px; line-height:20px; color:var(--text); }
+    .menu-pop button:hover { background:var(--bg-neutral); }
+    .menu-pop button.danger { color:var(--danger); }
+
+
+    /* ── Editing a saved target — two options to compare ─────────────────────── */
+    /* A: Jira InlineEdit on the bet. Read view gets the ADS hover fill; edit view
+       floats ✓ / ✕ below-right, like @atlaskit/inline-edit. */
+    .edit-a .card:not([data-noedit]) .bet { margin:-2px -6px; padding:2px 6px; border-radius:3px; cursor:pointer; }
+    .edit-a .card:not([data-noedit]) .bet:hover { background:var(--ds-background-neutral-subtle-hovered, #091e420f); }
+    .bet:focus-visible { outline:2px solid var(--ds-border-focused, #388bff); outline-offset:0; }
+    .card.is-editing .card-body { display:block; }
+    .card.is-editing .est { text-align:left; margin-top:6px; }
+    /* reserve room for the floating ✓ / ✕ so they stay inside the card */
+    .edit-a .card.is-editing { padding-bottom:46px; }
+    /* the nudge is about the saved target, not the draft */
+    .card.is-editing .nudge { display:none; }
+    .ie { position:relative; margin-top:2px; }
+    .ie-actions { position:absolute; right:0; top:100%; margin-top:6px; display:flex; gap:4px; z-index:20; }
+    .ie-actions button { width:32px; height:32px; display:grid; place-items:center; border-radius:3px;
+      background:var(--ds-surface-overlay, #fff); color:var(--text-subtle);
+      box-shadow:var(--ds-shadow-overlay, 0 8px 12px #091e4226, 0 0 1px #091e424f); }
+    .ie-actions button:hover { background:var(--ds-surface-overlay-hovered, #f1f2f4); }
+    /* B: ••• Edit turns the card into the form. */
+    .edit-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:10px; }
+    .btn { font-size:14px; line-height:20px; font-weight:500; padding:6px 12px; border-radius:3px; }
+    .btn.primary { background:var(--ds-background-brand-bold, #1868db); color:var(--ds-text-inverse, #fff); }
+    .btn.subtle { color:var(--text-subtle); }
+    .btn.subtle:hover { background:var(--bg-neutral); }
+
+    .future .card { border-style:dashed; opacity:.75; }
+
+    .w-btn, .s-btn { font-size:12px; border:1px solid var(--border); border-radius:4px; padding:2px 8px; background:#fff; color:var(--text-subtle); }
+    .w-btn[aria-pressed="true"], .s-btn[aria-pressed="true"] { background:var(--bg-info); color:var(--brand); border-color:transparent; font-weight:600; }
+  </style>
+</head>
+<body class="bg-surface-sunken text-text">
+  <div class="mx-auto max-w-5xl p-6">
+    <div class="mb-3 rounded px-2 py-1.5 text-xs" style="background:var(--bg-warning);color:var(--warning)">
+      <b>Mock v3 — the bet first.</b> What the PM typed (<b>+2% · 3 months after due date</b>) is the headline on both the
+      form
+      preview and the saved card. Below it, one line says whether the number is still an <i>Estimated target</i> or a locked
+      <i>Target</i>, and where it came from. One pill says where the bet stands; missing readings become inline nudges. Compare with <a class="underline" href="./issue-panel.html">v2</a>.
+    </div>
+
+    <!-- Width demo: the panel is resizable (drag its bottom-right corner) -->
+    <div class="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-subtle">
+      <span>Panel width:</span>
+      <button class="w-btn" data-w="360">360px</button>
+      <button class="w-btn" data-w="560">560px</button>
+      <button class="w-btn" data-w="760" aria-pressed="true">760px</button>
+      <button class="w-btn" data-w="">Fill</button>
+      <span class="text-text-subtlest">· or drag the panel's corner</span>
+    </div>
+
+
+    <div class="mb-3 flex flex-wrap items-center gap-2 text-xs text-text-subtle">
+      <span>Edit style:</span>
+      <button class="s-btn" data-s="A" aria-pressed="true">A · inline edit on the bet (chosen)</button>
+      <button class="s-btn" data-s="B">B · ••• Edit opens the form</button>
+      <span class="text-text-subtlest">· click the date part of a bet to jump to the date input</span>
+    </div>
+
+    <div id="panel" class="edit-a rounded-lg border border-border bg-surface p-4" style="width:760px">
+      <!-- Issue header -->
+      <div class="mb-3 flex items-center gap-2 text-sm text-text-subtle">
+        <span class="rounded px-1.5 py-0.5 text-[11px] font-bold text-white" style="background:#1868db">I</span>
+        <a class="whitespace-nowrap font-semibold hover:underline" style="color:#1868db" href="#">INIT-48</a>
+        <span class="truncate">· Launch multi-store support · Parent: OUT-12</span>
+      </div>
+
+      <!-- ── FORM ─────────────────────────────────────────────────────────── -->
+      <section class="rounded-md border border-dashed border-border p-3" aria-labelledby="form-title">
+        <h3 id="form-title" class="mb-2 text-sm font-medium text-text-subtle">Set a KPI target</h3>
+        <div class="flex flex-col gap-2">
+          <label class="lbl">KPI
+            <select class="sel" id="kpi">
+              <option value="revenue">Revenue</option>
+              <option value="orders">&nbsp;&nbsp;# of Orders</option>
+              <option value="stores" selected>&nbsp;&nbsp;Number of Stores</option>
+            </select>
+          </label>
+
+          <div class="form-rows">
+            <label class="lbl">Target value
+              <span class="combo" data-kind="amount">
+                <input id="amt" inputmode="decimal" value="+2" aria-label="Amount" />
+                <select class="sel" id="amt-type" aria-label="Value type">
+                  <option value="percent" selected>% change</option>
+                  <option value="absolute">total</option>
+                  <option value="delta" disabled>more (later)</option>
+                </select>
+              </span>
+            </label>
+            <label class="lbl">Target date
+              <span class="combo" data-kind="months" id="when-combo">
+                <input id="when" inputmode="numeric" value="3" aria-label="Months or date" />
+                <select class="sel" id="when-type" aria-label="Date type">
+                  <option value="relative" selected>months after due date</option>
+                  <option value="fixed">on a date</option>
+                </select>
+              </span>
+            </label>
+          </div>
+
+          <!-- Preview = the real saved card (same markup + CSS), so it can't drift -->
+          <div class="preview" aria-live="polite">
+            <div class="mb-1 text-xs font-medium text-text-subtle">Preview</div>
+            <article class="card">
+              <header class="card-head">
+                <span class="kpi"><span class="kpi-name" id="p-kpi">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+                <span class="pill upcoming">Upcoming</span>
+              </header>
+              <div class="card-body">
+                <p class="bet"><span id="p-amt">+2%</span><span class="bet-when" id="p-when">3 months after due date</span></p>
+                <p class="est" id="p-est"></p>
+              </div>
+            </article>
+            <p class="nudge" id="p-sign" hidden>This lowers <span id="p-kpi-name"></span>, where higher is better. Double-check the sign.</p>
+          </div>
+
+          <div><button class="rounded px-3 py-1.5 text-sm font-medium text-white" style="background:#1868db">Set KPI target</button></div>
+        </div>
+      </section>
+
+      <!-- ── SAVED TARGETS — state gallery ───────────────────────────────── -->
+      <div class="mb-2 mt-5 flex flex-wrap items-baseline gap-x-2">
+        <h2 class="text-sm font-semibold">Saved targets</h2>
+        <span class="text-xs font-medium text-text-subtle">State gallery: the same bet (Number of Stores, +10%) shown in each state. Captions map to v2's 8 states.</span>
+      </div>
+
+      <div class="cards">
+        <figure>
+          <figcaption>1 · Work not due yet — estimate</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="2027-01-15" data-base="250">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill upcoming">Upcoming</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Estimated target</span> <span class="n t">275</span> <span class="nowrap by" title="Rolled-up due date Jan 15, 2027 + 3 months">by Apr 15, 2027</span> · <span class="nowrap" title="Latest reading, Jun 30, 2026">from <span class="n">250</span> now</span></p>
+            </div>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>2 · No due date yet — estimate</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="" data-base="250">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill pending">Pending</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Estimated target</span> <span class="n t">275</span> · <span class="nowrap" title="Latest reading, Jun 30, 2026">from <span class="n">250</span> now</span> · <span class="nowrap">no due date yet</span></p>
+            </div>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>3 · Due date passed, value recorded — target locked</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="2026-06-01" data-base="258">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill inprogress">In progress</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Target</span> <span class="n t">284</span> <span class="nowrap by" title="Due date Jun 1, 2026 + 3 months">by Sep 1, 2026</span> · <span class="nowrap" title="Value on the due date">from <span class="n">258</span> on Jun 1</span></p>
+            </div>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>4 · Due date passed, no value since — still an estimate</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="2026-06-01" data-base="250">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill inprogress">In progress</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Estimated target</span> <span class="n t">275</span> <span class="nowrap by" title="Due date Jun 1, 2026 + 3 months">by Sep 1, 2026</span> · <span class="nowrap" title="Latest reading — taken before the due date">from <span class="n">250</span> on Apr 30</span></p>
+            </div>
+            <p class="nudge">Due date passed — record a value to lock in the target. <button>Record a value</button></p>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>5 · Target date passed — met</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="2026-01-15" data-base="250">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill met">Met ✓</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Target</span> <span class="n t">275</span> <span class="nowrap by" title="Due date Jan 15, 2026 + 3 months">by Apr 15, 2026</span> · reached <span class="n good">281</span></p>
+            </div>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>6 · Target date passed — missed</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="2026-01-15" data-base="250">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill missed">Missed</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Target</span> <span class="n t">275</span> <span class="nowrap by" title="Due date Jan 15, 2026 + 3 months">by Apr 15, 2026</span> · reached <span class="n bad">268</span></p>
+            </div>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>7 · Target date passed, no value recorded</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="2026-01-15" data-base="250">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill unscored">Not measured</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Target</span> <span class="n t">275</span> <span class="nowrap by" title="Due date Jan 15, 2026 + 3 months">by Apr 15, 2026</span> · no reading</p>
+            </div>
+            <p class="nudge">No value recorded since the target date, so we can’t tell if it was met. <button>Record a value</button></p>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>8 · No values recorded yet</figcaption>
+          <article class="card" data-amt="10" data-type="percent" data-when="3" data-wtype="relative" data-due="2027-01-15" data-base="">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill upcoming">Upcoming</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+10%</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Estimated target</span> <span class="n t">—</span> <span class="nowrap by" title="Rolled-up due date Jan 15, 2027 + 3 months">by Apr 15, 2027</span> · no readings yet</p>
+            </div>
+            <p class="nudge">A % change needs a starting value. <button>Record a value</button></p>
+          </article>
+        </figure>
+
+        <figure>
+          <figcaption>Existing type · total by a fixed date (always locked)</figcaption>
+          <article class="card" data-amt="300" data-type="absolute" data-when="2026-12-31" data-wtype="fixed" data-due="2027-01-15" data-base="262">
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill upcoming">Upcoming</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>300 stores</span><span class="bet-when">by Dec 31, 2026</span></p>
+              <p class="est"><span class="est-lbl">Target</span> <span class="n t">300</span> · <span class="nowrap" title="Latest reading, Jun 30, 2026"><span class="n">262</span> now</span></p>
+            </div>
+          </article>
+        </figure>
+
+        <figure class="future">
+          <figcaption>Later · change by an amount</figcaption>
+          <article class="card" data-noedit>
+            <header class="card-head">
+              <span class="kpi"><span class="kpi-name">Number of Stores</span><span class="dir" title="Higher is better">▲</span></span>
+              <span class="pill upcoming">Upcoming</span>
+              <details class="menu"><summary aria-label="Target actions">•••</summary>
+                <div class="menu-pop"><button data-edit>Edit</button><button class="danger" data-remove>Remove</button></div></details>
+            </header>
+            <div class="card-body">
+              <p class="bet"><span>+50 stores</span><span class="bet-when">3 months after due date</span></p>
+              <p class="est"><span class="est-lbl">Estimated target</span> <span class="n t">300</span> <span class="nowrap by" title="Rolled-up due date Jan 15, 2027 + 3 months">by Apr 15, 2027</span> · <span class="nowrap" title="Latest reading, Jun 30, 2026">from <span class="n">250</span> now</span></p>
+            </div>
+          </article>
+        </figure>
+      </div>
+    </div>
+
+    <p class="mt-3 text-xs text-text-subtle">
+      Mock v3 · specs/03-relative-dates-and-values · requirements.md FR-9…FR-13, FR-26 · extends app/src/ui/surfaces/IssuePanel/IssuePanel.tsx
+    </p>
+  </div>
+
+  <script>
+    // ── Panel width presets ──────────────────────────────────────────────────
+    var panel = document.getElementById('panel');
+    document.querySelectorAll('.w-btn').forEach(function (b) {
+      b.addEventListener('click', function () {
+        panel.style.width = b.dataset.w ? b.dataset.w + 'px' : '100%';
+        document.querySelectorAll('.w-btn').forEach(function (x) { x.setAttribute('aria-pressed', x === b); });
+      });
+    });
+
+    // ── Remove needs a confirm; close other menus when one opens ────────────
+    document.addEventListener('click', function (e) {
+      if (e.target.matches('[data-remove]')) {
+        e.target.closest('details').open = false;
+        if (confirm('Remove this KPI target?')) e.target.closest('figure').remove();
+      }
+      document.querySelectorAll('details.menu[open]').forEach(function (d) {
+        if (!d.contains(e.target)) d.open = false;
+      });
+    });
+
+    // ── Form: preview mirrors the saved card, updates live ─────────────────
+    var KPIS = {
+      revenue: { name: 'Revenue', unit: 'USD', latest: 1326000, latestDate: '2026-06-30', up: true },
+      orders:  { name: '# of Orders', unit: 'orders', latest: 48200, latestDate: '2026-06-30', up: true },
+      stores:  { name: 'Number of Stores', unit: 'stores', latest: 250, latestDate: '2026-06-30', up: true },
+    };
+    var DUE = '2027-01-15'; // INIT-48 rolled-up due date
+
+    var $ = function (id) { return document.getElementById(id); };
+    var kpiSel = $('kpi'), amt = $('amt'), amtType = $('amt-type'), when = $('when'), whenType = $('when-type');
+
+    function fmtNum(n, k) {
+      if (k.unit === 'USD') return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 2 }).format(n);
+      return Math.round(n).toLocaleString('en-US');
+    }
+    function unitWord(k) { return k.unit === 'USD' ? '' : ' ' + k.unit; }
+    function parseISO(s) { var p = s.split('-').map(Number); return new Date(Date.UTC(p[0], p[1] - 1, p[2])); }
+    function fmtDate(d) { return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }); }
+    function addMonths(iso, m) { var d = parseISO(iso); d.setUTCMonth(d.getUTCMonth() + m); return d; }
+
+    function render() {
+      var k = KPIS[kpiSel.value], pct = amtType.value === 'percent', rel = whenType.value === 'relative';
+      var raw = amt.value.trim(), n = Number(raw.replace(/^\+/, ''));
+      var hasAmt = raw !== '' && !isNaN(n);
+
+      // Headline — the bet, as typed.
+      $('p-amt').textContent = !hasAmt ? '—' : pct ? (n > 0 ? '+' : '') + n + '%' : fmtNum(n, k) + unitWord(k);
+
+      var months = Number(when.value), targetDate = null, whenText = '—';
+      if (rel && when.value !== '' && !isNaN(months)) {
+        whenText = months + (months === 1 ? ' month' : ' months') + ' after due date';
+        targetDate = addMonths(DUE, months);
+      } else if (!rel && /^\d{4}-\d{2}-\d{2}$/.test(when.value)) {
+        targetDate = parseISO(when.value);
+        whenText = 'by ' + fmtDate(targetDate);
+      }
+      $('p-when').textContent = whenText;
+
+      // Estimate line — "Estimated target" until the starting value is known, then "Target".
+      var nowV = fmtNum(k.latest, k);
+      var aim = !hasAmt ? '—' : fmtNum(pct ? k.latest * (1 + n / 100) : n, k);
+      var by = rel && targetDate ? ' <span class="nowrap">by ' + fmtDate(targetDate) + '</span>' : '';
+      $('p-est').innerHTML = pct
+        ? 'Estimated target <span class="n">' + aim + '</span>' + by + ' · <span class="nowrap">from <span class="n">' + nowV + '</span> now</span>'
+        : 'Target <span class="n">' + aim + '</span>' + by + ' · <span class="nowrap"><span class="n">' + nowV + '</span> now</span>';
+
+      // Sign vs KPI direction.
+      var wrongWay = hasAmt && (pct ? n < 0 : n < k.latest) && k.up;
+      $('p-sign').hidden = !wrongWay;
+      $('p-kpi-name').textContent = k.name;
+      $('p-kpi').textContent = k.name;
+    }
+
+    whenType.addEventListener('change', function () {
+      var rel = whenType.value === 'relative';
+      when.type = rel ? 'text' : 'date';
+      when.setAttribute('inputmode', rel ? 'numeric' : '');
+      when.value = rel ? '3' : '2027-04-15';
+      $('when-combo').dataset.kind = rel ? 'months' : 'date';
+      render();
+    });
+    amtType.addEventListener('change', function () {
+      var k = KPIS[kpiSel.value];
+      amt.value = amtType.value === 'percent' ? '+2' : String(Math.round(k.latest * 1.1));
+      render();
+    });
+    [kpiSel, amt, when].forEach(function (el) { el.addEventListener('input', render); el.addEventListener('change', render); });
+    render();
+
+    // ── Editing a saved target (A: inline on the bet · B: ••• Edit → form) ──
+    var editStyle = 'A';
+    function setEditStyle(st) {
+      editStyle = st;
+      panel.classList.toggle('edit-a', st === 'A');
+      document.querySelectorAll('.card.is-editing').forEach(function (c) { closeEdit(c, false); });
+      document.querySelectorAll('.cards .card:not([data-noedit]) .bet').forEach(function (b) {
+        if (st === 'A') { b.tabIndex = 0; b.setAttribute('role', 'button'); b.setAttribute('aria-label', betLabel(b)); }
+        else { b.removeAttribute('tabindex'); b.removeAttribute('role'); b.removeAttribute('aria-label'); }
+      });
+      document.querySelectorAll('.s-btn').forEach(function (x) { x.setAttribute('aria-pressed', x.dataset.s === st); });
+    }
+    document.querySelectorAll('.s-btn').forEach(function (b) { b.addEventListener('click', function () { setEditStyle(b.dataset.s); }); });
+
+    function betLabel(b) { return 'Edit target: ' + [].map.call(b.children, function (x) { return x.textContent; }).join(' · '); }
+    function opt(v, label, cur) { return '<option value="' + v + '"' + (v === cur ? ' selected' : '') + '>' + label + '</option>'; }
+    function editorHTML(d) {
+      var amt = d.type === 'percent' && Number(d.amt) > 0 ? '+' + d.amt : d.amt, fixed = d.wtype === 'fixed';
+      return '<div class="form-rows">' +
+        '<label class="lbl">Target value<span class="combo" data-kind="amount">' +
+          '<input class="e-amt" inputmode="decimal" aria-label="Amount" value="' + amt + '">' +
+          '<select class="sel e-type" aria-label="Value type">' + opt('percent', '% change', d.type) + opt('absolute', 'total', d.type) + '</select></span></label>' +
+        '<label class="lbl">Target date<span class="combo" data-kind="' + (fixed ? 'date' : 'months') + '">' +
+          '<input class="e-when" aria-label="Months or date" ' + (fixed ? 'type="date"' : 'inputmode="numeric"') + ' value="' + d.when + '">' +
+          '<select class="sel e-wtype" aria-label="Date type">' + opt('relative', 'months after due date', d.wtype) + opt('fixed', 'on a date', d.wtype) + '</select></span></label>' +
+        '</div>';
+    }
+    function draftOf(c) {
+      return { amt: c.querySelector('.e-amt').value.trim().replace(/^\+/, ''), type: c.querySelector('.e-type').value,
+               when: c.querySelector('.e-when').value, wtype: c.querySelector('.e-wtype').value };
+    }
+    function betHTML(d) {
+      var n = Number(d.amt), m = Number(d.when);
+      var a = d.amt === '' || isNaN(n) ? '—' : d.type === 'percent' ? (n > 0 ? '+' : '') + n + '%' : n.toLocaleString('en-US') + ' stores';
+      var w = d.wtype === 'relative' ? (d.when === '' || isNaN(m) ? '—' : m + (m === 1 ? ' month' : ' months') + ' after due date')
+            : /^\d{4}-\d{2}-\d{2}$/.test(d.when) ? 'by ' + fmtDate(parseISO(d.when)) : '—';
+      return '<span>' + a + '</span><span class="bet-when">' + w + '</span>';
+    }
+    // The estimate line follows the draft live, so you see what the edit does before saving.
+    function updateEst(c, d) {
+      var est = c.querySelector('.est'), n = Number(d.amt), base = Number(c.dataset.base);
+      est.querySelector('.est-lbl').textContent = d.type === 'absolute' ? 'Target' : c.dataset.lbl;
+      est.querySelector('.n.t').textContent = d.amt === '' || isNaN(n) ? '—'
+        : d.type === 'absolute' ? n.toLocaleString('en-US') : c.dataset.base ? Math.round(base * (1 + n / 100)).toLocaleString('en-US') : '—';
+      var by = est.querySelector('.by');
+      if (!by && c.dataset.due) {
+        by = document.createElement('span'); by.className = 'nowrap by';
+        est.querySelector('.n.t').after(document.createTextNode(' '), by);
+      }
+      if (!by) return;
+      var m = Number(d.when), rel = d.wtype === 'relative';
+      by.hidden = !rel;
+      if (rel) by.textContent = d.when === '' || isNaN(m) ? 'by —' : 'by ' + fmtDate(addMonths(c.dataset.due, m));
+    }
+    // `focus` = which part of the bet was clicked, so the matching input gets focus.
+    function openEdit(c, focus) {
+      if (c.classList.contains('is-editing') || c.hasAttribute('data-noedit')) return;
+      var body = c.querySelector('.card-body'), bet = body.querySelector('.bet');
+      c._snapshot = body.innerHTML;
+      c.dataset.lbl = c.querySelector('.est-lbl').textContent;
+      c.classList.add('is-editing');
+      bet.hidden = true;
+      var ed = document.createElement('div');
+      ed.className = 'ie';
+      ed.innerHTML = editorHTML(c.dataset);
+      bet.after(ed);
+      ed.appendChild(body.querySelector('.est')); // live estimate is part of the edit view
+      if (editStyle === 'A') {
+        ed.insertAdjacentHTML('beforeend', '<div class="ie-actions">' +
+          '<button data-ok aria-label="Confirm"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button>' +
+          '<button data-cancel aria-label="Cancel"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></button></div>');
+        // ADS InlineEdit confirms on blur.
+        ed.addEventListener('focusout', function () {
+          setTimeout(function () { if (c.classList.contains('is-editing') && !ed.contains(document.activeElement)) closeEdit(c, true); });
+        });
+      } else {
+        body.insertAdjacentHTML('afterend', '<div class="edit-actions"><button class="btn subtle" data-cancel>Cancel</button><button class="btn primary" data-ok>Save</button></div>');
+      }
+      ed.addEventListener('input', function () { updateEst(c, draftOf(c)); });
+      ed.addEventListener('change', function (e) {
+        if (e.target.classList.contains('e-wtype')) {
+          var fixed = e.target.value === 'fixed', w = ed.querySelector('.e-when');
+          w.type = fixed ? 'date' : 'text'; w.value = fixed ? '2027-04-15' : '3';
+          w.closest('.combo').dataset.kind = fixed ? 'date' : 'months';
+        }
+        updateEst(c, draftOf(c));
+      });
+      ed.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); closeEdit(c, true); }
+        if (e.key === 'Escape') { e.preventDefault(); closeEdit(c, false); }
+      });
+      var first = ed.querySelector(focus === 'when' ? '.e-when' : '.e-amt');
+      first.focus();
+      if (first.select) first.select();
+    }
+    function closeEdit(c, save) {
+      if (!c.classList.contains('is-editing')) return;
+      var body = c.querySelector('.card-body'), d = draftOf(c);
+      c.classList.remove('is-editing');
+      var acts = c.querySelector('.edit-actions'); if (acts) acts.remove();
+      if (!save) { body.innerHTML = c._snapshot; return; }
+      Object.assign(c.dataset, d);
+      var ie = body.querySelector('.ie');
+      body.appendChild(ie.querySelector('.est'));
+      ie.remove();
+      var bet = body.querySelector('.bet');
+      bet.innerHTML = betHTML(d);
+      bet.hidden = false;
+      if (editStyle === 'A') { bet.setAttribute('aria-label', betLabel(bet)); bet.focus(); }
+    }
+    document.addEventListener('mousedown', function (e) {
+      // keep focus in the editor so blur-confirm doesn't fire before ✓ / ✕ handle the click
+      if (e.target.closest('.ie-actions')) e.preventDefault();
+    });
+    document.addEventListener('click', function (e) {
+      var c = e.target.closest('.card');
+      if (!c) return;
+      if (e.target.closest('[data-ok]')) closeEdit(c, true);
+      else if (e.target.closest('[data-cancel]')) closeEdit(c, false);
+      else if (e.target.matches('[data-edit]')) { e.target.closest('details').open = false; openEdit(c); }
+      else if (editStyle === 'A' && e.target.closest('.cards .bet')) openEdit(c, e.target.closest('.bet-when') ? 'when' : 'amt');
+    });
+    document.addEventListener('keydown', function (e) {
+      var b = e.target.closest && e.target.closest('.cards .bet[role="button"]');
+      if (b && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openEdit(b.closest('.card')); }
+    });
+    setEditStyle('A');
+  </script>
+</body>
+</html>

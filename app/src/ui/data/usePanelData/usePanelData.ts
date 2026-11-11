@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { call } from '@ui/bridge.js';
-import type { Assignment, PanelData } from '@domain/index.js';
+import type { Assignment, PanelData, PanelListData, PanelValuesData } from '@domain/index.js';
+import { derivePanelView } from './panelView.js';
 
 /**
  * Injectable loader hook for the Issue panel (the `@forge/bridge` seam).
@@ -10,52 +11,190 @@ import type { Assignment, PanelData } from '@domain/index.js';
  * exercising loading / error / empty / pending branches with no bridge or async.
  * See the "injectable loader hook" convention in
  * `.claude/skills/implement-feature/SKILL.md` and tech-choices §5.
+ *
+ * The load is progressive (specs/07-issue-panel-performance): Phase 1
+ * (`getPanelList`) has the targets, their grouping and the KPI catalog, so the
+ * list and the form render first. Phase 2 (`getPanelValues`) brings the readings
+ * and rolled-up due dates that the estimates, status pills and dates need.
  */
 export interface PanelController {
   data: PanelData | null;
-  /** true while the initial load is in flight */
+  /** true while Phase 1 (the list) is in flight */
   pending: boolean;
+  /** Phase 2 (values) outstanding: the list is shown, estimates shimmer */
+  valuesPending: boolean;
+  /** Phase 2 failed: the list stays visible, with an inline retryable banner */
+  valuesError: string | null;
+  /** Try loading the values again after a Phase 2 failure */
+  retryValues(): void;
   error: string | null;
   /** true while a save/remove mutation is in flight */
   busy: boolean;
+  /** the last save/remove/record failed (the panel keeps its previous data) */
+  actionError: string | null;
+  dismissActionError(): void;
   save(assignment: Assignment): void;
   remove(kpiId: string): void;
+  /**
+   * Record (or, with value=null, delete) a reading on a KPI — used by the KPI
+   * View (Feature 04) when this issue IS a KPI. Refreshes the panel afterwards
+   * so `data.kpiView` re-renders with the new series.
+   */
+  record(kpiId: string, date: string, value: number | null): void;
 }
 
 export type UsePanel = (issueId: string) => PanelController;
 
+interface PanelRequests {
+  list: Promise<PanelListData>;
+  values: Promise<PanelValuesData>;
+}
+
+/** An unobserved rejection must not surface as an "unhandled rejection". */
+function guarded<T>(promise: Promise<T>): Promise<T> {
+  promise.catch(() => undefined);
+  return promise;
+}
+
+/** Console timing (ms since page load) so the real-site phase gap can be read off, not guessed. */
+const mark = (what: string) => console.info(`[panel] ${what} at ${Math.round(performance.now())}ms`);
+
+// Without an issue id the resolver loads the issue the panel is open on (Forge
+// invocation context), which lets the load start before the context is read.
+const payloadFor = (issueId: string | null) => (issueId ? { issueId } : undefined);
+
+const requestList = (issueId: string | null) => {
+  mark('list requested');
+  return guarded(call<PanelListData>('getPanelList', payloadFor(issueId)));
+};
+const requestValues = (issueId: string | null) => {
+  mark('values requested');
+  return guarded(call<PanelValuesData>('getPanelValues', payloadFor(issueId)));
+};
+const startRequests = (issueId: string | null): PanelRequests => ({
+  list: requestList(issueId),
+  values: requestValues(issueId),
+});
+
+// The phases are independent on the backend, so both start at once. The Forge
+// entry calls `prefetchPanel()` at module load, so they are already in flight
+// while the theme loads, React mounts and the issue context is read.
+let prefetched: PanelRequests | null = null;
+
+export function prefetchPanel(): void {
+  prefetched ??= startRequests(null);
+}
+
+function takeRequests(issueId: string): PanelRequests {
+  const requests = prefetched ?? startRequests(issueId);
+  // React StrictMode runs this initializer twice in the same render; both calls
+  // must see the same requests. Release them afterwards so a later mount starts fresh.
+  queueMicrotask(() => {
+    if (prefetched === requests) prefetched = null;
+  });
+  return requests;
+}
+
 export const usePanelData: UsePanel = (issueId) => {
-  const [data, setData] = useState<PanelData | null>(null);
+  const [requests, setRequests] = useState(() => takeRequests(issueId));
+  const [list, setList] = useState<PanelListData | null>(null);
+  const [values, setValues] = useState<PanelValuesData | null>(null);
+  const [valuesError, setValuesError] = useState<string | null>(null);
+  // A complete panel returned by a mutation. It supersedes the progressive
+  // pieces (see derivePanelView).
+  const [full, setFull] = useState<PanelData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const loadedFor = useRef(issueId);
+  useEffect(() => {
+    if (loadedFor.current === issueId) return;
+    loadedFor.current = issueId;
+    setFull(null);
+    setBusy(false);
+    setActionError(null);
+    setRequests(startRequests(issueId));
+  }, [issueId]);
 
   useEffect(() => {
     let alive = true;
-    setData(null);
+    setList(null);
     setError(null);
-    call<PanelData>('getPanelData', { issueId })
-      .then((d) => alive && setData(d))
-      .catch((e: unknown) => alive && setError(String(e)));
+    requests.list.then(
+      (d) => {
+        mark('list received');
+        if (alive) setList(d);
+      },
+      (e: unknown) => alive && setError(String(e)),
+    );
     return () => {
       alive = false;
     };
-  }, [issueId]);
+  }, [requests.list]);
 
-  const mutate = async (key: string, payload: unknown) => {
+  useEffect(() => {
+    let alive = true;
+    setValues(null);
+    setValuesError(null);
+    requests.values.then(
+      (v) => {
+        mark('values received');
+        if (alive) setValues(v);
+      },
+      (e: unknown) => alive && setValuesError(String(e)),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [requests.values]);
+
+  const view = useMemo(
+    () => derivePanelView({ list, values, valuesError, full }),
+    [list, values, valuesError, full],
+  );
+
+  const retryValues = () => setRequests((r) => ({ ...r, values: requestValues(issueId) }));
+
+  // Run a mutation for the CURRENT issue. If the issue changes while it's in
+  // flight, its result (or failure) belongs to the old issue and is dropped.
+  const runAction = async (load: () => Promise<PanelData>) => {
+    const forIssue = issueId;
+    const stillCurrent = () => loadedFor.current === forIssue;
     setBusy(true);
+    setActionError(null);
     try {
-      setData(await call<PanelData>(key, payload));
+      const next = await load();
+      if (stillCurrent()) setFull(next);
+    } catch (e: unknown) {
+      if (stillCurrent()) setActionError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (stillCurrent()) setBusy(false);
     }
   };
 
+  const mutate = (key: string, payload: unknown) => runAction(() => call<PanelData>(key, payload));
+
+  // Recording a reading returns TimelineData (KPI-global), so ignore its result
+  // and re-fetch the panel to refresh `kpiView` with the new series.
+  const record = (kpiId: string, date: string, value: number | null) =>
+    runAction(async () => {
+      await call('recordValue', { kpiId, date, value });
+      return call<PanelData>('getPanelData', { issueId });
+    });
+
   return {
-    data,
-    pending: data === null && error === null,
+    data: view.data,
+    pending: view.data === null && error === null,
+    valuesPending: view.valuesPending,
+    valuesError: view.valuesError,
+    retryValues,
     error,
     busy,
+    actionError,
+    dismissActionError: () => setActionError(null),
     save: (assignment) => void mutate('saveAssignment', { issueId, assignment }),
     remove: (kpiId) => void mutate('removeAssignment', { issueId, kpiId }),
+    record: (kpiId, date, value) => void record(kpiId, date, value),
   };
 };

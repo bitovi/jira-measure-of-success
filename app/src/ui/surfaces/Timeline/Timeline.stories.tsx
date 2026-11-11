@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn, within, userEvent, expect, waitFor } from '@storybook/test';
+import { fn, within, userEvent, expect, waitFor, screen } from '@storybook/test';
 import type { TimelineData, TimelineNodeDto } from '@domain/index.js';
 import { Timeline } from './Timeline.js';
 import type { TimelineController, UseTimeline } from '@ui/data/useTimelineData/index.js';
@@ -22,6 +22,7 @@ const node = (over: Partial<TimelineNodeDto> & { id: string; kpiId: string; name
   direction: 'increase',
   depth: 0,
   targets: [],
+  undated: [],
   readings: [],
   children: [],
   ...over,
@@ -41,8 +42,8 @@ const POPULATED: TimelineData = {
         { date: '2026-07-06', value: 1_243_000 },
       ],
       targets: [
-        { date: '2026-06-30', value: 1_300_000, status: 'missed', source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
       ],
       children: [
         node({
@@ -54,7 +55,15 @@ const POPULATED: TimelineData = {
           depth: 1,
           readings: [],
           targets: [
-            { date: '2026-08-15', value: 11_500, status: 'upcoming', source: src('INIT-48', 'Initiative', 'Expand Orders') },
+            // No iconUrl here (unlike src()'s default) to cover the fallback
+            // diamond marker for sources without a resolvable issue-type icon.
+            {
+              date: '2026-08-15',
+              value: 11_500,
+              status: 'upcoming',
+              provisional: false,
+              source: { ...src('INIT-48', 'Initiative', 'Expand Orders'), iconUrl: null },
+            },
           ],
         }),
       ],
@@ -67,10 +76,44 @@ const NO_READINGS: TimelineData = {
   roots: [node({ id: 'n1', kpiId: 'opportunity', name: 'Opportunity Enablement', unit: 'future value', direction: null })],
 };
 
+/** A KPI with a provisional (estimate) marker and an undated projection chip. */
+const PROJECTIONS: TimelineData = {
+  today: '2026-07-10',
+  roots: [
+    node({
+      id: 'n1',
+      kpiId: 'revenue',
+      issueKey: 'KPI-1',
+      name: 'Revenue',
+      unit: 'USD',
+      readings: [{ date: '2026-06-01', value: 1_326_000 }],
+      targets: [
+        { date: '2026-09-30', value: 1_339_000, status: 'upcoming', provisional: true, source: src('INIT-48', 'Initiative', '+1% 3mo after due') },
+      ],
+      undated: [
+        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
+      ],
+    }),
+  ],
+};
+
+/** POPULATED as Phase 1 delivers it: same KPIs and readings, no targets, every row resolving. */
+const stripTargets = (n: TimelineNodeDto): TimelineNodeDto => ({
+  ...n,
+  targets: [],
+  undated: [],
+  resolving: true,
+  children: n.children.map(stripTargets),
+});
+const SKELETON: TimelineData = { ...POPULATED, roots: POPULATED.roots.map(stripTargets) };
+
 function stub(over: Partial<TimelineController>): UseTimeline {
   return () => ({
     data: over.data ?? null,
     pending: over.pending ?? false,
+    targetsPending: over.targetsPending ?? false,
+    targetsError: over.targetsError ?? null,
+    retryTargets: over.retryTargets ?? (() => {}),
     error: over.error ?? null,
     actionError: over.actionError ?? null,
     clearActionError: over.clearActionError ?? (() => {}),
@@ -98,6 +141,157 @@ export const Populated: Story = {
   },
 };
 
+/** Undated projections: an estimate chip in the right lane opens a projection modal. */
+export const UndatedProjections: Story = {
+  args: { useData: stub({ data: PROJECTIONS }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const chip = c.getByRole('button', { name: /1,255,000/ });
+    await expect(chip).toBeInTheDocument();
+    await userEvent.click(chip);
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(screen.getByText('Projected target')).toBeInTheDocument();
+    await expect(screen.getByText(/Due date TBD/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * Progressive load, Phase 1 only (spec 06 P4): the KPI names, units and readings
+ * are on screen (scaled to the readings alone) while the rows wait for their
+ * targets. No target markers exist yet; they arrive with a smooth re-scale.
+ */
+export const LoadingTargets: Story = {
+  args: { useData: stub({ data: SKELETON, targetsPending: true }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText('Revenue')).toBeInTheDocument();
+    await expect(c.getByText('# of Orders')).toBeInTheDocument();
+    await expect(canvasElement.querySelectorAll('[aria-busy="true"]')).toHaveLength(2);
+    await expect(c.getByText('Loading targets…')).toBeInTheDocument();
+    // readings are drawn, but no target markers/links exist yet
+    await expect(canvasElement.querySelectorAll('[data-reading]').length).toBeGreaterThan(0);
+    await expect(c.queryByRole('link', { name: /OUT-12|INIT-48/ })).not.toBeInTheDocument();
+    await expect(c.queryByText('Loading timeline…')).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A saved project filter can't be applied before targets exist (a KPI's projects
+ * come from its targets), so every KPI shows while loading instead of an empty page.
+ */
+export const FilterWaitsForTargets: Story = {
+  args: { useData: stub({ data: SKELETON, targetsPending: true }) },
+  decorators: [
+    (Story) => {
+      window.history.replaceState(null, '', '?projects=NOPE');
+      return <Story />;
+    },
+  ],
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText('Revenue')).toBeInTheDocument();
+    await expect(c.getByText('# of Orders')).toBeInTheDocument();
+    await expect(c.queryByText(/No KPIs match the selected project filter/)).not.toBeInTheDocument();
+    window.history.replaceState(null, '', window.location.pathname);
+  },
+};
+
+const retryTargets = fn();
+
+/** Phase 2 failed: the KPIs stay, the shimmer stops, and a banner offers a retry. */
+export const TargetsFailed: Story = {
+  args: {
+    useData: stub({
+      data: { ...SKELETON, roots: SKELETON.roots.map((n) => ({ ...n, resolving: undefined, children: [] })) },
+      targetsError: 'Request timed out',
+      retryTargets,
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText('Revenue')).toBeInTheDocument();
+    await expect(c.getByRole('alert')).toHaveTextContent('Couldn’t load targets');
+    await expect(c.getByRole('alert')).toHaveTextContent('Request timed out');
+    await expect(canvasElement.querySelectorAll('[aria-busy="true"]')).toHaveLength(0);
+    await expect(c.queryByText('Loading targets…')).not.toBeInTheDocument();
+    await expect(canvasElement.querySelectorAll('[data-reading]').length).toBeGreaterThan(0);
+    await userEvent.click(c.getByRole('button', { name: 'Retry' }));
+    await expect(retryTargets).toHaveBeenCalledTimes(1);
+  },
+};
+
+/** Interaction: the chevron hides and shows a KPI's child rows. */
+export const CollapseChildren: Story = {
+  args: { useData: stub({ data: POPULATED }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Collapse children' }));
+    await expect(c.queryByText('# of Orders')).not.toBeInTheDocument();
+    const expand = c.getByRole('button', { name: 'Expand children' });
+    await expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(expand);
+    await expect(c.getByText('# of Orders')).toBeInTheDocument();
+  },
+};
+
+/** Project filter option by name — reopens the menu first if a previous pick closed it. */
+async function pickProjectOption(c: ReturnType<typeof within>, name: string) {
+  if (!screen.queryByRole('option', { name })) {
+    await userEvent.click(c.getByRole('combobox', { name: 'Filter by Jira project' }));
+  }
+  return screen.findByRole('option', { name });
+}
+
+/**
+ * Interaction: the project filter narrows the tree to KPIs whose targets come
+ * from a selected Jira project (contributing issues can live in ANY project —
+ * `POPULATED` has Revenue's own target from OUT-12 and its child "# of Orders"
+ * from INIT-48). Subtree match: selecting "INIT" keeps BOTH rows (the child
+ * matches directly; Revenue is kept as its ancestor for tree context) even
+ * though Revenue's own target is from OUT — but that OUT-12 target marker is
+ * itself hidden on the Revenue row, since only matching-project targets are
+ * shown even on a kept/ancestor row. Selecting "OUT" instead drops
+ * "# of Orders" entirely (no match, no children of its own). The selection is
+ * also reflected in the URL (`?projects=...`) for shareability/refresh-safety.
+ */
+export const ProjectFilter: Story = {
+  args: { useData: stub({ data: POPULATED }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText('Project: All')).toBeInTheDocument();
+    await expect(c.getAllByRole('link', { name: /OUT-12/ }).length).toBeGreaterThan(0);
+
+    await userEvent.click(c.getByRole('combobox', { name: 'Filter by Jira project' }));
+    await userEvent.click(screen.getByRole('option', { name: 'INIT' }));
+    await expect(c.getByText('Project: INIT')).toBeInTheDocument();
+    await expect(c.getByText('Revenue')).toBeInTheDocument();
+    await expect(c.getByText('# of Orders')).toBeInTheDocument();
+    // Revenue is kept only for tree context — its own OUT-12 target marker,
+    // which doesn't match the INIT selection, is hidden.
+    await expect(c.queryByRole('link', { name: /OUT-12/ })).not.toBeInTheDocument();
+    await expect(c.getAllByRole('link', { name: /INIT-48/ }).length).toBeGreaterThan(0);
+    await waitFor(() => expect(window.location.search).toContain('projects=INIT'));
+
+    // Uncheck INIT, check OUT: the leaf ("# of Orders", INIT-48) no longer
+    // matches and has no children of its own, so it's dropped; Revenue
+    // (OUT-12, its own match) stays, and its OUT-12 marker is visible again.
+    await userEvent.click(await pickProjectOption(c, 'INIT'));
+    await userEvent.click(await pickProjectOption(c, 'OUT'));
+    await expect(c.getByText('Revenue')).toBeInTheDocument();
+    await expect(c.queryByText('# of Orders')).not.toBeInTheDocument();
+    await expect(c.getAllByRole('link', { name: /OUT-12/ }).length).toBeGreaterThan(0);
+    await expect(c.queryByRole('link', { name: /INIT-48/ })).not.toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toContain('projects=OUT'));
+
+    // Clear the filter and reset the URL — this jsdom `window` is shared
+    // across every story test in this file, so leaving `?projects=` set here
+    // would leak into later tests.
+    await userEvent.click(await pickProjectOption(c, 'OUT'));
+    await expect(c.getByText('Project: All')).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).not.toContain('projects'));
+  },
+};
+
 /** Interaction: the KPI name is a link that navigates to the KPI's Jira issue. */
 const openIssueSpy = fn();
 export const OpenIssue: Story = {
@@ -114,21 +308,21 @@ export const OpenIssue: Story = {
   },
 };
 
-/** Interaction: a target diamond deep-links to the work item that set it. */
+/** Interaction: a target marker deep-links to the work item that set it. */
 const openTargetSpy = fn();
 export const OpenTargetIssue: Story = {
   args: { useData: stub({ data: POPULATED }), onOpenIssueNewTab: openTargetSpy },
   play: async ({ canvasElement }) => {
     openTargetSpy.mockClear();
     const c = within(canvasElement);
-    const diamond = c.getByRole('link', {
+    const marker = c.getByRole('link', {
       name: /Target .* due 2026-06-30 .* Open Outcome OUT-12 in Jira \(new tab\)/i,
     });
     await waitFor(() =>
-      expect(diamond).toHaveAttribute('href', 'https://example.atlassian.net/browse/OUT-12'),
+      expect(marker).toHaveAttribute('href', 'https://example.atlassian.net/browse/OUT-12'),
     );
-    await expect(diamond).toHaveAttribute('target', '_blank');
-    await userEvent.click(diamond);
+    await expect(marker).toHaveAttribute('target', '_blank');
+    await userEvent.click(marker);
     await waitFor(() => expect(openTargetSpy).toHaveBeenCalledWith('OUT-12'));
   },
 };
@@ -176,7 +370,7 @@ export const RecordValue: Story = {
     recordSpy.mockClear();
     const c = within(canvasElement);
     await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]);
-    const dialog = within(await c.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog'));
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
     await waitFor(() => expect(recordSpy).toHaveBeenCalledTimes(1));
@@ -196,7 +390,7 @@ export const EditValue: Story = {
     await userEvent.click(
       c.getByRole('button', { name: 'Edit value 1,243,000 USD on 2026-07-06' }),
     );
-    const dialog = within(await c.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog'));
     const input = dialog.getByLabelText('Value');
     await userEvent.clear(input);
     await userEvent.type(input, '1250000');
@@ -215,13 +409,13 @@ export const DeleteValue: Story = {
     await userEvent.click(
       c.getByRole('button', { name: 'Edit value 1,000,000 USD on 2026-01-03' }),
     );
-    const dialog = within(await c.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog'));
     await userEvent.click(dialog.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('revenue', '2026-01-03', null));
   },
 };
 
-/** Interaction: "+ Add KPI" opens the create modal and Create calls the loader (root KPI). */
+/** Interaction: "Add KPI" opens the create modal and Create calls the loader (root KPI). */
 const createSpy = fn();
 export const AddKpi: Story = {
   args: { useData: stub({ data: POPULATED, createKpi: createSpy }) },
@@ -229,7 +423,7 @@ export const AddKpi: Story = {
     createSpy.mockClear();
     const c = within(canvasElement);
     await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
-    const dialog = within(await c.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog'));
     await userEvent.type(dialog.getByLabelText('KPI name'), 'Net Revenue');
     await userEvent.type(dialog.getByLabelText('KPI unit'), 'USD');
     await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
@@ -252,12 +446,37 @@ export const AddChildKpi: Story = {
     createChildSpy.mockClear();
     const c = within(canvasElement);
     await userEvent.click(c.getAllByRole('button', { name: 'Add child KPI' })[0]);
-    const dialog = within(await c.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog'));
     await userEvent.type(dialog.getByLabelText('KPI name'), 'Sub Metric');
     await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
     await waitFor(() =>
       expect(createChildSpy).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Sub Metric', parentKpiId: 'revenue' }),
+      ),
+    );
+  },
+};
+
+/**
+ * Interaction: "Add KPI" also offers an optional parent picker (typing
+ * filters the existing KPI tree) — choosing one nests the new KPI under it,
+ * same as the row-level add-child flow but reachable from the header button.
+ */
+const createWithParentSpy = fn();
+export const AddKpiWithParent: Story = {
+  args: { useData: stub({ data: POPULATED, createKpi: createWithParentSpy }) },
+  play: async ({ canvasElement }) => {
+    createWithParentSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Repeat Orders');
+    await userEvent.click(dialog.getByRole('combobox', { name: 'Search for a parent KPI' }));
+    await userEvent.click(await screen.findByRole('option', { name: '# of Orders' }));
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    await waitFor(() =>
+      expect(createWithParentSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Repeat Orders', parentKpiId: 'orders' }),
       ),
     );
   },
@@ -314,9 +533,9 @@ export const AddTarget: Story = {
     addTargetSpy.mockClear();
     const c = within(canvasElement);
     await userEvent.click(c.getAllByRole('button', { name: 'Add a target' })[0]);
-    const dialog = within(await c.findByRole('dialog'));
-    await userEvent.type(dialog.getByLabelText('Search for an issue'), 'INIT');
-    await userEvent.click(await dialog.findByRole('button', { name: /INIT-48/ }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('combobox', { name: 'Search for an issue' }));
+    await userEvent.click(await screen.findByText('Multi-store support'));
     await userEvent.type(dialog.getByLabelText('Target value'), '2000000');
     await userEvent.click(dialog.getByRole('button', { name: 'Add target' }));
     await waitFor(() =>
@@ -337,13 +556,18 @@ export const ExcludeExistingTarget: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     await userEvent.click(c.getAllByRole('button', { name: 'Add a target' })[0]);
-    const dialog = within(await c.findByRole('dialog'));
-    await userEvent.click(dialog.getByLabelText('Search for an issue'));
-    // OUT-12 already targets Revenue → present but not a selectable button.
-    await dialog.findByText('OUT-12');
-    await expect(dialog.queryByRole('button', { name: /OUT-12/ })).toBeNull();
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('combobox', { name: 'Search for an issue' }));
+    // OUT-12 already targets Revenue → listed but disabled.
+    await expect(await screen.findByRole('option', { name: /OUT-12/ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
     // INIT-48 has no Revenue target → selectable.
-    await expect(await dialog.findByRole('button', { name: /INIT-48/ })).toBeInTheDocument();
+    await expect(await screen.findByRole('option', { name: /INIT-48/ })).not.toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
   },
 };
 

@@ -25,7 +25,7 @@ export interface GroupedPanel {
 
 export function groupByRelationship(
   ownAssignments: Assignment[],
-  parentAssignments: Assignment[],
+  parentAssignments: Pick<Assignment, 'kpiId'>[],
   catalog: KpiDefinition[],
 ): GroupedPanel {
   const byId = new Map(catalog.map((k) => [k.id, k]));

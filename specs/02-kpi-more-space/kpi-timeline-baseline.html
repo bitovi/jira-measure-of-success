@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI Timeline — baseline (current row height)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: 'var(--ds-surface, #ffffff)',
+            'surface-sunken': 'var(--ds-surface-sunken, #f7f8f9)',
+            border: 'var(--ds-border, #091e4224)',
+            text: 'var(--ds-text, #172b4d)',
+            'text-subtle': 'var(--ds-text-subtle, #626f86)',
+            brand: 'var(--ds-background-brand-bold, #1868db)',
+            success: 'var(--ds-text-success, #216e4e)',
+            warning: 'var(--ds-text-warning, #a54800)',
+            danger: 'var(--ds-text-danger, #ae2e24)',
+          },
+        },
+      },
+    };
+  </script>
+</head>
+<body class="bg-surface-sunken">
+  <div class="mx-auto max-w-6xl p-6">
+    <div class="mb-3 inline-block rounded bg-border px-2 py-1 text-xs font-semibold text-text-subtle">
+      Baseline — current row height (44px), name / unit / direction on one line
+    </div>
+
+    <h1 class="text-2xl font-bold text-text">KPI Timeline</h1>
+
+    <div class="mt-2 flex items-start justify-between gap-4">
+      <p class="max-w-3xl text-sm text-text-subtle">
+        The KPI tree as a nested plan. Each KPI shows recorded values as a sparkline; markers
+        (the source issue's type icon) mark targets.
+        Click an empty spot on a past date to record a value, click a future date to add a target, or click a
+        recorded value to edit or delete it.
+      </p>
+      <button class="flex-none rounded-md bg-brand px-3 py-2 text-sm font-semibold text-white hover:opacity-90">
+        + Add KPI
+      </button>
+    </div>
+
+    <div class="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
+      <div class="flex">
+        <!-- Left label column -->
+        <div class="flex-none" style="width: 300px">
+          <div
+            class="flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+            style="height: 33px"
+          >
+            KPI
+          </div>
+
+          <!-- Revenue -->
+          <div class="group flex items-center gap-2 border-b border-r border-border bg-surface px-3 last:border-b-0" style="height: 44px">
+            <div class="flex items-center gap-2" style="padding-left: 0px">
+              <button class="grid h-4 w-4 flex-none place-items-center text-text-subtle" aria-label="Collapse children" aria-expanded="true">
+                <svg fill="none" viewBox="0 0 16 16" role="presentation" class="h-4 w-4"><path fill="currentColor" d="m14.53 6.03-6 6a.75.75 0 0 1-1.004.052l-.056-.052-6-6 1.06-1.06L8 10.44l5.47-5.47z"/></svg>
+              </button>
+              <a href="https://bitovi-training.atlassian.net/browse/KPI-1" class="truncate text-sm font-semibold text-brand hover:underline" title="Open Revenue (KPI-1) in Jira">Revenue</a>
+            </div>
+            <span class="flex-none text-xs text-text-subtle">USD</span>
+            <span class="text-[11px] text-success">▲</span>
+            <button class="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add child KPI" title="Create child KPI"><span class="text-[13px] leading-none">+</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Record a value" title="Record a value"><span class="text-[13px] leading-none">●</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add a target" title="Add a target"><span class="text-[11px] leading-none">◇</span></button>
+          </div>
+
+          <!-- Num Orders -->
+          <div class="group flex items-center gap-2 border-b border-r border-border bg-surface px-3 last:border-b-0" style="height: 44px">
+            <div class="flex items-center gap-2" style="padding-left: 12px">
+              <button class="grid h-4 w-4 flex-none place-items-center text-text-subtle invisible" aria-hidden="true" disabled>
+                <svg fill="none" viewBox="0 0 16 16" role="presentation" class="h-4 w-4"><path fill="currentColor" d="m6.03 1.47 6 6a.75.75 0 0 1 .052 1.004l-.052.056-6 6-1.06-1.06L10.44 8 4.97 2.53z"/></svg>
+              </button>
+              <a href="https://bitovi-training.atlassian.net/browse/KPI-6" class="truncate text-sm font-semibold text-brand hover:underline" title="Open Num Orders (KPI-6) in Jira">Num Orders</a>
+            </div>
+            <span class="flex-none text-xs text-text-subtle">count</span>
+            <span class="text-[11px] text-success">▲</span>
+            <button class="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add child KPI" title="Create child KPI"><span class="text-[13px] leading-none">+</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Record a value" title="Record a value"><span class="text-[13px] leading-none">●</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add a target" title="Add a target"><span class="text-[11px] leading-none">◇</span></button>
+          </div>
+
+          <!-- Average Order Amount -->
+          <div class="group flex items-center gap-2 border-b border-r border-border bg-surface px-3 last:border-b-0" style="height: 44px">
+            <div class="flex items-center gap-2" style="padding-left: 12px">
+              <button class="grid h-4 w-4 flex-none place-items-center text-text-subtle invisible" aria-hidden="true" disabled>
+                <svg fill="none" viewBox="0 0 16 16" role="presentation" class="h-4 w-4"><path fill="currentColor" d="m6.03 1.47 6 6a.75.75 0 0 1 .052 1.004l-.052.056-6 6-1.06-1.06L10.44 8 4.97 2.53z"/></svg>
+              </button>
+              <a href="https://bitovi-training.atlassian.net/browse/KPI-8" class="truncate text-sm font-semibold text-brand hover:underline" title="Open Average Order Amount (KPI-8) in Jira">Average Order Amount</a>
+            </div>
+            <span class="flex-none text-xs text-text-subtle">USD</span>
+            <span class="text-[11px] text-success">▲</span>
+            <button class="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add child KPI" title="Create child KPI"><span class="text-[13px] leading-none">+</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Record a value" title="Record a value"><span class="text-[13px] leading-none">●</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add a target" title="Add a target"><span class="text-[11px] leading-none">◇</span></button>
+          </div>
+
+          <!-- Costs -->
+          <div class="group flex items-center gap-2 border-b border-r border-border bg-surface px-3 last:border-b-0" style="height: 44px">
+            <div class="flex items-center gap-2" style="padding-left: 0px">
+              <button class="grid h-4 w-4 flex-none place-items-center text-text-subtle" aria-label="Collapse children" aria-expanded="true">
+                <svg fill="none" viewBox="0 0 16 16" role="presentation" class="h-4 w-4"><path fill="currentColor" d="m14.53 6.03-6 6a.75.75 0 0 1-1.004.052l-.056-.052-6-6 1.06-1.06L8 10.44l5.47-5.47z"/></svg>
+              </button>
+              <a href="https://bitovi-training.atlassian.net/browse/KPI-5" class="truncate text-sm font-semibold text-brand hover:underline" title="Open Costs (KPI-5) in Jira">Costs</a>
+            </div>
+            <span class="flex-none text-xs text-text-subtle">USD</span>
+            <span class="text-[11px] text-danger">▼</span>
+            <button class="ml-auto grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add child KPI" title="Create child KPI"><span class="text-[13px] leading-none">+</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Record a value" title="Record a value"><span class="text-[13px] leading-none">●</span></button>
+            <button class="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100" aria-label="Add a target" title="Add a target"><span class="text-[11px] leading-none">◇</span></button>
+          </div>
+        </div>
+
+        <!-- Right timeline column -->
+        <div class="min-w-0 flex-1 overflow-x-auto">
+          <div style="width: 1996px">
+            <div class="relative border-b border-border bg-surface-sunken" style="height: 33px">
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 0px">Q3 2025</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 221.606px">Q4 2025</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 443.212px">Q1 2026</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 660px">Q2 2026</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 879.197px">Q3 2026</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 1100.8px">Q4 2026</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 1322.41px">Q1 2027</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 1539.2px">Q2 2027</div>
+              <div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left: 1758.39px">Q3 2027</div>
+            </div>
+
+            <!-- Revenue track -->
+            <div class="group border-b border-border last:border-b-0">
+              <div class="relative cursor-pointer" style="width: 1996px; height: 44px">
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 0px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 221.606px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 443.212px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 660px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 879.197px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1100.8px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1322.41px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1539.2px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1758.39px"></div>
+                <div class="absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80" style="left: 912.92px"></div>
+                <svg class="pointer-events-none absolute left-0 top-0" width="1996" height="44">
+                  <polyline points="587.7372262773723,35.2 763.5766423357663,32.62439024390244 905.6934306569343,20.77658536585366 910.5109489051094,21.935609756097563" fill="none" stroke="#22a06b" stroke-width="1.5"></polyline>
+                  <circle cx="587.7372262773723" cy="35.2" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="763.5766423357663" cy="32.62439024390244" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="905.6934306569343" cy="20.77658536585366" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="910.5109489051094" cy="21.935609756097563" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                </svg>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 20 USD on 2026-03-02" title="20 USD · 2026-03-02 — click to edit or delete" style="left: 587.737px; top: 35.2px"></button>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 40 USD on 2026-05-14" title="40 USD · 2026-05-14 — click to edit or delete" style="left: 763.577px; top: 32.6244px"></button>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 132 USD on 2026-07-12" title="132 USD · 2026-07-12 — click to edit or delete" style="left: 905.693px; top: 20.7766px"></button>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 123 USD on 2026-07-14" title="123 USD · 2026-07-14 — click to edit or delete" style="left: 910.511px; top: 21.9356px"></button>
+                <a href="https://bitovi-training.atlassian.net/browse/ECOM-30" target="_blank" rel="noopener noreferrer" class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center" aria-label="Target 225 USD due 2026-08-18 — Upcoming. Open Initiative ECOM-30 in Jira (new tab)" style="left: 994.818px; top: 8.8px">
+                  <div class="h-2.5 w-2.5 rotate-45 bg-text-subtle"></div>
+                </a>
+              </div>
+            </div>
+
+            <!-- Num Orders track -->
+            <div class="group border-b border-border last:border-b-0">
+              <div class="relative cursor-pointer" style="width: 1996px; height: 44px">
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 0px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 221.606px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 443.212px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 660px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 879.197px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1100.8px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1322.41px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1539.2px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1758.39px"></div>
+                <div class="absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80" style="left: 912.92px"></div>
+                <svg class="pointer-events-none absolute left-0 top-0" width="1996" height="44">
+                  <polyline points="578.1021897810218,35.2 669.6350364963503,28.6 821.3868613138686,22" fill="none" stroke="#22a06b" stroke-width="1.5"></polyline>
+                  <circle cx="578.1021897810218" cy="35.2" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="669.6350364963503" cy="28.6" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="821.3868613138686" cy="22" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                </svg>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 1 count on 2026-02-26" title="1 count · 2026-02-26 — click to edit or delete" style="left: 578.102px; top: 35.2px"></button>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 2 count on 2026-04-05" title="2 count · 2026-04-05 — click to edit or delete" style="left: 669.635px; top: 28.6px"></button>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 3 count on 2026-06-07" title="3 count · 2026-06-07 — click to edit or delete" style="left: 821.387px; top: 22px"></button>
+                <a href="https://bitovi-training.atlassian.net/browse/POS-3" target="_blank" rel="noopener noreferrer" class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center" aria-label="Target 5 count due 2026-07-31 — Upcoming. Open Initiative POS-3 in Jira (new tab)" style="left: 951.46px; top: 8.8px">
+                  <div class="h-2.5 w-2.5 rotate-45 bg-text-subtle"></div>
+                </a>
+              </div>
+            </div>
+
+            <!-- Average Order Amount track -->
+            <div class="group border-b border-border last:border-b-0">
+              <div class="relative cursor-pointer" style="width: 1996px; height: 44px">
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 0px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 221.606px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 443.212px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 660px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 879.197px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1100.8px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1322.41px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1539.2px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1758.39px"></div>
+                <div class="absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80" style="left: 912.92px"></div>
+                <svg class="pointer-events-none absolute left-0 top-0" width="1996" height="44">
+                  <polyline points="708.1751824817518,35.2 898.4671532846716,26.400000000000002" fill="none" stroke="#22a06b" stroke-width="1.5"></polyline>
+                  <circle cx="708.1751824817518" cy="35.2" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                  <circle cx="898.4671532846716" cy="26.400000000000002" r="4" fill="#22a06b" stroke="#fff" stroke-width="2"></circle>
+                </svg>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 15 USD on 2026-04-21" title="15 USD · 2026-04-21 — click to edit or delete" style="left: 708.175px; top: 35.2px"></button>
+                <button type="button" class="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full" aria-label="Edit value 20 USD on 2026-07-09" title="20 USD · 2026-07-09 — click to edit or delete" style="left: 898.467px; top: 26.4px"></button>
+                <a href="https://bitovi-training.atlassian.net/browse/STORE-12" target="_blank" rel="noopener noreferrer" class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center" aria-label="Target 15 USD due 2026-06-04 — Target hit. Open Epic STORE-12 in Jira (new tab)" style="left: 814.161px; top: 35.2px">
+                  <div class="h-2.5 w-2.5 rotate-45 bg-success"></div>
+                </a>
+                <a href="https://bitovi-training.atlassian.net/browse/SUNNYSUSHI-36" target="_blank" rel="noopener noreferrer" class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center" aria-label="Target 30 USD due 2026-06-22 — Target missed. Open Outcome SUNNYSUSHI-36 in Jira (new tab)" style="left: 857.518px; top: 8.8px">
+                  <div class="h-2.5 w-2.5 rotate-45 bg-danger"></div>
+                </a>
+                <a href="https://bitovi-training.atlassian.net/browse/POS-3" target="_blank" rel="noopener noreferrer" class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center" aria-label="Target 25 USD due 2026-08-31 — Upcoming. Open Initiative POS-3 in Jira (new tab)" style="left: 1026.13px; top: 17.6px">
+                  <div class="h-2.5 w-2.5 rotate-45 bg-text-subtle"></div>
+                </a>
+              </div>
+            </div>
+
+            <!-- Costs track (empty) -->
+            <div class="group border-b border-border last:border-b-0">
+              <div class="relative cursor-pointer" style="width: 1996px; height: 44px">
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 0px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 221.606px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 443.212px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 660px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 879.197px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1100.8px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1322.41px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1539.2px"></div>
+                <div class="absolute top-0 bottom-0 w-px bg-border" style="left: 1758.39px"></div>
+                <div class="absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80" style="left: 912.92px"></div>
+                <span class="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">No values yet — click a past date to add</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="mt-2 text-xs text-text-subtle">
+      Target markers show the source issue's icon · the red line is today · green = hit, red = missed, gray = upcoming · click a recorded value to edit or delete it.
+    </p>
+  </div>
+</body>
+</html>

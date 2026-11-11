@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isValidProjectKey, normalizeProjectKey } from './projectKey.js';
+import { isValidProjectKey, normalizeProjectKey, projectKeyOfIssueKey } from './projectKey.js';
 
 /**
  * KPI space provisioning uses a Jira project key (storage-model.md). Keys are
@@ -32,5 +32,17 @@ describe('isValidProjectKey', () => {
     expect(isValidProjectKey('kpi')).toBe(false); // lowercase
     expect(isValidProjectKey('KP-I')).toBe(false); // hyphen
     expect(isValidProjectKey('')).toBe(false);
+  });
+});
+
+describe('projectKeyOfIssueKey', () => {
+  it('extracts the project key prefix from an issue key', () => {
+    expect(projectKeyOfIssueKey('INIT-48')).toBe('INIT');
+    expect(projectKeyOfIssueKey('OUT-12')).toBe('OUT');
+    expect(projectKeyOfIssueKey('ECOM-1029')).toBe('ECOM');
+  });
+
+  it('falls back to the whole string when there is no hyphen', () => {
+    expect(projectKeyOfIssueKey('WEIRD')).toBe('WEIRD');
   });
 });
