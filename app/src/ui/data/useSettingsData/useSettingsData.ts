@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { call } from '@ui/bridge.js';
-import type { KpiSpaceStatus, RollupConfig } from '@domain/index.js';
+import type { DateFieldCatalog, KpiSpaceStatus, RollupConfig } from '@domain/index.js';
 
 /**
  * Injectable loader hook for Settings (see usePanelData.ts for the pattern).
@@ -10,6 +10,8 @@ import type { KpiSpaceStatus, RollupConfig } from '@domain/index.js';
 export interface SettingsController {
   levels: string[] | null;
   config: RollupConfig | null;
+  /** pickable date fields + site defaults; null while loading or if the lookup failed */
+  dateFields: DateFieldCatalog | null;
   /** KPI space status (storage-model.md); null while loading. */
   space: KpiSpaceStatus | null;
   pending: boolean;
@@ -27,6 +29,7 @@ export type UseSettings = () => SettingsController;
 export const useSettingsData: UseSettings = () => {
   const [levels, setLevels] = useState<string[] | null>(null);
   const [config, setConfig] = useState<RollupConfig | null>(null);
+  const [dateFields, setDateFields] = useState<DateFieldCatalog | null>(null);
   const [space, setSpace] = useState<KpiSpaceStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,14 +37,17 @@ export const useSettingsData: UseSettings = () => {
     let alive = true;
     (async () => {
       try {
-        const [lv, cfg, sp] = await Promise.all([
+        const [lv, cfg, sp, df] = await Promise.all([
           call<string[]>('getHierarchyLevels'),
           call<RollupConfig>('getRollupConfig'),
           call<KpiSpaceStatus>('getKpiSpace'),
+          // best-effort: without the field list the rollup methods still work
+          call<DateFieldCatalog>('getDateFields').catch(() => null),
         ]);
         if (!alive) return;
         setLevels(lv);
         setConfig(cfg);
+        setDateFields(df);
         setSpace(sp);
       } catch (e: unknown) {
         if (alive) setError(String(e));
@@ -72,6 +78,7 @@ export const useSettingsData: UseSettings = () => {
   return {
     levels,
     config,
+    dateFields,
     space,
     pending: levels === null && error === null,
     error,

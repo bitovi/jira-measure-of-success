@@ -2,13 +2,23 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { view } from '@forge/bridge';
 import { IssuePanel } from '@ui/surfaces/IssuePanel/index.js';
+import { prefetchPanel } from '@ui/data/usePanelData/index.js';
+import { configureFeatureFlags } from '@ui/featureFlags.js';
 import '@ui/styles.css';
+
+configureFeatureFlags();
 
 /**
  * Forge Custom UI entry for the Issue panel. Unlike the local harness (which
  * reads ?issueId=…), the real surface gets the issue id from the Forge bridge
  * context (`view.getContext()`).
+ *
+ * The data requests start NOW, in parallel with enabling the theme, mounting
+ * React and reading the context (spec 07): the resolver takes the issue from
+ * its own invocation context when no id is sent.
  */
+prefetchPanel();
+
 interface IssueContext {
   extension?: { issue?: { id?: string | number } };
 }
@@ -33,8 +43,11 @@ function Root() {
   return <IssuePanel issueId={issueId} />;
 }
 
-createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <Root />
-  </React.StrictMode>,
-);
+// Let Jira apply its design-token theme (light/dark) before first paint.
+void view.theme.enable().then(() => {
+  createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <Root />
+    </React.StrictMode>,
+  );
+});

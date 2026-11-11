@@ -1,4 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
+import Button from '@atlaskit/button/new';
+import CrossIcon from '@atlaskit/icon/core/cross';
+import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle } from '@atlaskit/modal-dialog';
+import Textfield from '@atlaskit/textfield';
 import type { TimelineNodeDto, TimelineReadingDto, TimelineTargetDto } from '@domain/index.js';
 import { fmtVal } from './scale.js';
 
@@ -6,8 +10,34 @@ import { fmtVal } from './scale.js';
  * The record / edit / projection modals shared by the KPI Timeline and the KPI
  * View. Behavior is identical on both surfaces (record a value, edit/delete a
  * reading, inspect an undated projection), so they live here rather than being
- * duplicated per surface.
+ * duplicated per surface. Built on `@atlaskit/modal-dialog` (portal, focus trap,
+ * Escape/blanket close); each modal is mounted by its parent only while open.
  */
+
+/** Small caption under a modal title — the KPI the modal acts on. */
+export function ModalSubtitle({ children }: { children: ReactNode }) {
+  return <p className="mb-3 text-xs text-text-subtle">{children}</p>;
+}
+
+/** A labelled form row inside a modal body (Atlaskit controls take no className). */
+export function ModalField({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: ReactNode;
+  htmlFor: string;
+  children: ReactNode;
+}) {
+  return (
+    <div>
+      <label htmlFor={htmlFor} className="text-xs text-text-subtle">
+        {label}
+      </label>
+      <div className="mt-0.5">{children}</div>
+    </div>
+  );
+}
 
 /** Projection details for one undated (or estimated) target — §6.3. */
 export function ProjectionModal({
@@ -26,22 +56,14 @@ export function ProjectionModal({
   const issueKey = target.source.issue;
   const href = siteUrl ? `${siteUrl}/browse/${issueKey}` : `/browse/${issueKey}`;
   return (
-    <div
-      className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4"
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-sm rounded-lg border border-border bg-surface p-4 shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-2 flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-text">Projected target</h2>
-          <button className="ml-auto text-text-subtle hover:text-text" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
+    <Modal onClose={onClose} width={380}>
+      <ModalHeader>
+        <ModalTitle>Projected target</ModalTitle>
+        <Button appearance="subtle" spacing="compact" aria-label="Close" onClick={onClose}>
+          <CrossIcon label="" size="small" />
+        </Button>
+      </ModalHeader>
+      <ModalBody>
         <p className="text-sm text-text">
           <b>{node.name}</b> — projected{' '}
           <b>
@@ -69,8 +91,8 @@ export function ProjectionModal({
         >
           Open {target.source.type} {issueKey} in Jira ↗
         </a>
-      </div>
-    </div>
+      </ModalBody>
+    </Modal>
   );
 }
 
@@ -81,7 +103,7 @@ export function RecordModal({
   onCancel,
   onRecord,
 }: {
-  node: TimelineNodeDto;
+  node: Pick<TimelineNodeDto, 'name' | 'unit'>;
   defaultDate: string;
   today: string;
   onCancel: () => void;
@@ -89,15 +111,8 @@ export function RecordModal({
 }) {
   const [date, setDate] = useState(defaultDate);
   const [value, setValue] = useState('');
+  const valueRef = useRef<HTMLInputElement>(null);
   const isFutureDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && date > today;
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
 
   const submit = () => {
     const num = Number(value.replace(/,/g, ''));
@@ -107,62 +122,49 @@ export function RecordModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(9,30,66,0.54)]"
-      onClick={onCancel}
-    >
-      <div
-        className="w-[380px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg bg-surface shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 pb-1 pt-4">
-          <h2 className="text-base font-semibold">Record a value</h2>
-          <p className="mt-1 text-xs text-text-subtle">
-            {node.name} · {node.unit}
-          </p>
-        </div>
-        <div className="flex flex-col gap-3 px-5 py-3">
-          <label className="text-xs text-text-subtle">
-            Date
-            <input
+    <Modal onClose={onCancel} width={380} autoFocus={valueRef}>
+      <ModalHeader>
+        <ModalTitle>Record a value</ModalTitle>
+      </ModalHeader>
+      <ModalBody>
+        <ModalSubtitle>
+          {node.name} · {node.unit}
+        </ModalSubtitle>
+        <div className="flex flex-col gap-3">
+          <ModalField label="Date" htmlFor="record-date">
+            <Textfield
+              id="record-date"
               type="date"
-              className="mt-0.5 h-9 w-full rounded border border-border px-2 py-1.5 text-sm"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e: FormEvent<HTMLInputElement>) => setDate(e.currentTarget.value)}
             />
-          </label>
+          </ModalField>
           {isFutureDate && (
             <p role="alert" className="-mt-1 text-xs text-warning">
               This date is in the future. You can still record it, but the value
               hasn’t happened yet.
             </p>
           )}
-          <label className="text-xs text-text-subtle">
-            Value
-            <input
-              className="mt-0.5 w-full rounded border border-border px-2 py-1.5 text-sm"
+          <ModalField label="Value" htmlFor="record-value">
+            <Textfield
+              id="record-value"
+              ref={valueRef}
               value={value}
               placeholder="e.g. 1,300,000"
-              autoFocus
-              onChange={(e) => setValue(e.target.value)}
+              onChange={(e: FormEvent<HTMLInputElement>) => setValue(e.currentTarget.value)}
             />
-          </label>
+          </ModalField>
         </div>
-        <div className="flex justify-end gap-2 px-5 pb-4 pt-3">
-          <button className="rounded border border-border px-3 py-1.5 text-sm" onClick={onCancel}>
-            Cancel
-          </button>
-          <button
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
-            onClick={submit}
-          >
-            Record
-          </button>
-        </div>
-      </div>
-    </div>
+      </ModalBody>
+      <ModalFooter>
+        <Button appearance="subtle" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button appearance="primary" onClick={submit}>
+          Record
+        </Button>
+      </ModalFooter>
+    </Modal>
   );
 }
 
@@ -185,14 +187,7 @@ export function EditReadingModal({
   onDelete: () => void;
 }) {
   const [value, setValue] = useState(String(reading.value));
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onCancel]);
+  const valueRef = useRef<HTMLInputElement>(null);
 
   const submit = () => {
     const num = Number(value.replace(/,/g, ''));
@@ -201,55 +196,37 @@ export function EditReadingModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(9,30,66,0.54)]"
-      onClick={onCancel}
-    >
-      <div
-        className="w-[380px] max-w-[calc(100vw-32px)] overflow-hidden rounded-lg bg-surface shadow-xl"
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 pb-1 pt-4">
-          <h2 className="text-base font-semibold">Edit value</h2>
-          <p className="mt-1 text-xs text-text-subtle">
-            {node.name} · {node.unit} · {reading.date}
-          </p>
-        </div>
-        <div className="flex flex-col gap-3 px-5 py-3">
-          <label className="text-xs text-text-subtle">
-            Value
-            <input
-              className="mt-0.5 w-full rounded border border-border px-2 py-1.5 text-sm"
-              value={value}
-              placeholder="e.g. 1,300,000"
-              autoFocus
-              aria-label="Value"
-              onChange={(e) => setValue(e.target.value)}
-            />
-          </label>
-        </div>
-        <div className="flex items-center justify-between px-5 pb-4 pt-3">
-          <button
-            className="rounded border border-danger px-3 py-1.5 text-sm font-medium text-danger hover:bg-surface-sunken"
-            onClick={onDelete}
-          >
+    <Modal onClose={onCancel} width={380} autoFocus={valueRef}>
+      <ModalHeader>
+        <ModalTitle>Edit value</ModalTitle>
+      </ModalHeader>
+      <ModalBody>
+        <ModalSubtitle>
+          {node.name} · {node.unit} · {reading.date}
+        </ModalSubtitle>
+        <ModalField label="Value" htmlFor="edit-reading-value">
+          <Textfield
+            id="edit-reading-value"
+            ref={valueRef}
+            value={value}
+            placeholder="e.g. 1,300,000"
+            onChange={(e: FormEvent<HTMLInputElement>) => setValue(e.currentTarget.value)}
+          />
+        </ModalField>
+      </ModalBody>
+      <ModalFooter>
+        <div className="mr-auto">
+          <Button appearance="danger" onClick={onDelete}>
             Delete
-          </button>
-          <div className="flex gap-2">
-            <button className="rounded border border-border px-3 py-1.5 text-sm" onClick={onCancel}>
-              Cancel
-            </button>
-            <button
-              className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
-              onClick={submit}
-            >
-              Save
-            </button>
-          </div>
+          </Button>
         </div>
-      </div>
-    </div>
+        <Button appearance="subtle" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button appearance="primary" onClick={submit}>
+          Save
+        </Button>
+      </ModalFooter>
+    </Modal>
   );
 }

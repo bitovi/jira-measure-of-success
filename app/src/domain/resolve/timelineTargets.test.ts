@@ -76,10 +76,10 @@ describe('buildKpiTargets', () => {
     expect(dated[0]?.date).toBe('2026-12-31');
   });
 
-  it('resolves a delta (percent) target to a provisional estimate marker (FR-22/23)', () => {
+  it('resolves a percent target to a provisional estimate marker (FR-22/23)', () => {
     // +10% of the baseline carried from the last reading (200) = 220, provisional.
     const { dated } = buildKpiTargets(
-      [contribution({ due: '2026-06-30' }, assignment({ kpiId: 'r', targetType: 'delta', target: 10, timing: { start: null, due: relative('issueDueDate', 0) } }))],
+      [contribution({ due: '2026-06-30' }, assignment({ kpiId: 'r', targetType: 'percent', target: 10, timing: { start: null, due: relative('issueDueDate', 0) } }))],
       [{ date: '2026-05-01', value: 200 }],
       'increase',
       TODAY,
@@ -88,9 +88,21 @@ describe('buildKpiTargets', () => {
     expect(dated[0]?.provisional).toBe(true);
   });
 
+  it('resolves a relative (additive) target to baseline + amount, provisional', () => {
+    // +100 on the baseline carried from the last reading (200) = 300, provisional.
+    const { dated } = buildKpiTargets(
+      [contribution({ due: '2026-06-30' }, assignment({ kpiId: 'r', targetType: 'relative', target: 100, timing: { start: null, due: relative('issueDueDate', 0) } }))],
+      [{ date: '2026-05-01', value: 200 }],
+      'increase',
+      TODAY,
+    );
+    expect(dated[0]?.value).toBe(300);
+    expect(dated[0]?.provisional).toBe(true);
+  });
+
   it('routes a pending-date target into the undated lane (FR-24)', () => {
     const { dated, undated } = buildKpiTargets(
-      [contribution({ due: null }, assignment({ kpiId: 'r', targetType: 'delta', target: 10, timing: { start: null, due: relative('issueDueDate', 1) } }))],
+      [contribution({ due: null }, assignment({ kpiId: 'r', targetType: 'percent', target: 10, timing: { start: null, due: relative('issueDueDate', 1) } }))],
       [{ date: '2026-05-01', value: 200 }],
       'increase',
       TODAY,
@@ -102,11 +114,12 @@ describe('buildKpiTargets', () => {
     expect(undated[0]?.value).toBeCloseTo(220, 6);
   });
 
-  it('skips null-value targets and delta targets with no baseline reading', () => {
+  it('skips null-value targets and percent/relative targets with no baseline reading', () => {
     const { dated, undated } = buildKpiTargets(
       [
         contribution({}, assignment({ kpiId: 'r', target: null })),
-        contribution({}, assignment({ kpiId: 'r', targetType: 'delta', target: 50 })),
+        contribution({}, assignment({ kpiId: 'r', targetType: 'percent', target: 50 })),
+        contribution({}, assignment({ kpiId: 'r', targetType: 'relative', target: 50 })),
       ],
       [],
       'increase',

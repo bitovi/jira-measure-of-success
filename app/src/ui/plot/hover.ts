@@ -40,7 +40,7 @@ export function computeHover(
   const rect = e.currentTarget.getBoundingClientRect();
   const rawX = e.clientX - rect.left;
   const x = Math.max(0, Math.min(rawX, axis.plotWidth));
-  const t = axis.domainStart + (x / axis.plotWidth) * (axis.domainEnd - axis.domainStart);
+  const t = axis.msAt(x);
   const dateISO = new Date(t).toISOString().slice(0, 10);
 
   let primary: string;

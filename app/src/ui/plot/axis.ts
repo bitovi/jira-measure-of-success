@@ -19,7 +19,10 @@ export interface Axis {
   domainStart: number;
   domainEnd: number;
   plotWidth: number;
+  /** pixel offset of an ISO date */
   xOf: (iso: string) => number;
+  /** inverse of `xOf`: the date (UTC ms) at a pixel offset */
+  msAt: (x: number) => number;
   todayMs: number;
 }
 
@@ -79,9 +82,25 @@ export function buildAxis(
   const domainStart = firstQ;
   const domainEnd = addQuarters(firstQ, count);
   const plotWidth = count * QUARTER_PX;
-  const xOf = (iso: string) => ((ms(iso) - domainStart) / (domainEnd - domainStart)) * plotWidth;
+  // Piecewise per quarter: every quarter column is exactly QUARTER_PX wide, so a
+  // date's pixel offset depends only on its own quarter's position — adding
+  // quarters on the right never moves anything, and adding N on the left moves
+  // everything by exactly N * QUARTER_PX (the extend-only rule, spec 06 P4).
+  const firstIdx = quarterIndex(firstQ);
+  const xOf = (iso: string) => {
+    const t = ms(iso);
+    const qStart = quarterStartMs(t);
+    const qEnd = addQuarters(qStart, 1);
+    return (quarterIndex(qStart) - firstIdx + (t - qStart) / (qEnd - qStart)) * QUARTER_PX;
+  };
+  const msAt = (x: number) => {
+    const idx = Math.floor(x / QUARTER_PX);
+    const qStart = addQuarters(firstQ, idx);
+    const qEnd = addQuarters(qStart, 1);
+    return qStart + (x / QUARTER_PX - idx) * (qEnd - qStart);
+  };
 
-  return { quarters, domainStart, domainEnd, plotWidth, xOf, todayMs };
+  return { quarters, domainStart, domainEnd, plotWidth, xOf, msAt, todayMs };
 }
 
 /** The ISO dates a node contributes to the shared axis (readings + dated targets). */
@@ -92,4 +111,33 @@ export function axisDatesOf(node: {
   const dates = node.readings.map((r) => r.date);
   for (const t of node.targets) if (t.date) dates.push(t.date);
   return dates;
+}
+
+/**
+ * The quarter that should sit at the left edge when the timeline first opens
+ * (specs/06-timeline-performance, P4): the CURRENT quarter, so the view shows it
+ * and the ones after it — except during its first month, when the PREVIOUS
+ * quarter is used instead so the most recent history stays visible.
+ */
+export function initialViewQuarterStart(today: string): number {
+  const todayMs = ms(today);
+  const current = quarterStartMs(todayMs);
+  const d = new Date(current);
+  const oneMonthIn = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  return todayMs < oneMonthIn ? addQuarters(current, -1) : current;
+}
+
+/** `scrollLeft` that puts `initialViewQuarterStart(today)` at the left edge of `axis`. */
+export function initialScrollLeft(axis: Axis, today: string): number {
+  const startIso = new Date(initialViewQuarterStart(today)).toISOString().slice(0, 10);
+  return Math.max(0, axis.xOf(startIso));
+}
+
+/**
+ * How far existing content moved right when the axis start changed from
+ * `prevDomainStart` to `axis.domainStart` (quarters added on the left). Adding
+ * this to `scrollLeft` keeps whatever is on screen exactly where it was.
+ */
+export function scrollShiftForAxisChange(axis: Axis, prevDomainStart: number): number {
+  return axis.xOf(new Date(prevDomainStart).toISOString().slice(0, 10));
 }

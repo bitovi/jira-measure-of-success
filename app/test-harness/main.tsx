@@ -3,15 +3,20 @@ import { createRoot } from 'react-dom/client';
 import { IssuePanel } from '@ui/surfaces/IssuePanel/index.js';
 import { Settings } from '@ui/surfaces/Settings/index.js';
 import { Timeline } from '@ui/surfaces/Timeline/index.js';
+import { enableTheme, type ColorMode } from '@ui/theme.js';
 import '@ui/styles.css';
 
 /**
  * Harness entry — renders a Custom UI surface in a plain browser tab.
- * Pick a surface with ?surface=issue|settings|timeline (&issueId=… for issue).
+ * Pick a surface with ?surface=issue|settings|timeline (&issueId=… for issue),
+ * and optionally &theme=light|dark.
  */
 const params = new URLSearchParams(location.search);
 const surface = params.get('surface') ?? 'issue';
 const issueId = params.get('issueId') ?? '10048';
+// ?theme=light|dark forces a color mode; default follows the OS preference.
+const theme = params.get('theme');
+void enableTheme(theme === 'light' || theme === 'dark' ? (theme as ColorMode) : 'auto');
 
 const surfaces: Record<string, React.ReactNode> = {
   issue: <IssuePanel issueId={issueId} />,

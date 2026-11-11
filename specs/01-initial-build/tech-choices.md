@@ -74,6 +74,8 @@ With Custom UI chosen, a second decision follows: do surfaces look like **native
 - **Native (Atlaskit components + design tokens):** users get the familiar Jira look, free dark mode / theming / accessibility. **Consequence:** the app deliberately will *not* match `specs/00-mocks/styles.css`, so the mocks become **layout/interaction references, not a pixel-diff target.**
 - **Mock parity (port the mock CSS):** pixel-matches the mocks; costs the native look and free theming.
 
+> **Status:** implemented in [05-atlaskit-components](../05-atlaskit-components/plan.md) — standard controls use Atlaskit; the timeline canvas and its glyphs stay custom.
+
 ### Decision: **Native Atlaskit look.** The mocks are the reference for *what elements exist, their arrangement, and their states* (inherited/local, pending, coverage) — not a pixel target. This reshapes visual testing (see §5): computer vision verifies **regression against our own baselines** and **semantic correctness** (timeline geometry, no clipping, dark mode intact), and diffs the **custom timeline** against the mock for *geometry* with loose tolerance.
 
 ---

@@ -156,7 +156,7 @@ Same Superpowers loop as the initial build (constitution-honoring):
 
 Per requirements §2 / §10:
 
-- **Amount change** (absolute-amount delta) and **Rate of change** (trend/growth) target types — reserved label siblings, not built.
+- **Rate of change** (trend/growth) target type: a reserved label sibling, not built. *(**Amount change** has since shipped as `more` / stored `relative`. See requirements §11.)*
 - Configurable baseline ("Measured from" picker) — dropped; baseline is always the value at the due date.
 - Trend/slope extrapolation, ML, seasonality, confidence intervals.
 - Child→parent value aggregation / coverage / summing; value inheritance down the chain.

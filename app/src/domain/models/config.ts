@@ -15,9 +15,22 @@ export const RollupMethod = z.enum([
 ]);
 export type RollupMethod = z.infer<typeof RollupMethod>;
 
+/**
+ * Which Jira date fields an issue type's own start/due dates are read from
+ * (field ids, e.g. `duedate`, `customfield_10015`). Omitted endpoints use the
+ * site defaults ("Start date" / "Due date").
+ */
+export const DateFieldChoice = z.object({
+  start: z.string().min(1).optional(),
+  due: z.string().min(1).optional(),
+});
+export type DateFieldChoice = z.infer<typeof DateFieldChoice>;
+
 export const RollupConfig = z.object({
   /** issueTypeName -> method */
   dueDateRollup: z.record(z.string(), RollupMethod),
+  /** issueTypeName -> the date fields to read for that level (default Start date / Due date) */
+  dateFields: z.record(z.string(), DateFieldChoice).optional(),
   /**
    * Optional rollup DEPTH CAP (Feature 03, FR-19): how many hierarchy levels
    * below the queried issue due-date rollup may descend. `0` = own date only;

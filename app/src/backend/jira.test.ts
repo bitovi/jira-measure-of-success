@@ -60,6 +60,7 @@ import {
   fetchSubtreeTimingNodesForRoots,
   fetchIconDataUrl,
 } from './jira.js';
+import { dateFieldSelection } from '../domain/index.js';
 
 describe('createKpiIssue', () => {
   beforeEach(() => {
@@ -250,6 +251,44 @@ describe('fetchIssuesByIds / fetchChildrenForIds batching', () => {
 
     expect(requestJira).toHaveBeenCalledTimes(2); // 40 + 1, chunked
     expect(result.get('41')).toEqual(['41-child']);
+  });
+
+  it('requests and reads the date fields selected per issue type', async () => {
+    requestJira.mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({
+        issues: [
+          {
+            id: '1',
+            key: 'INIT-1',
+            fields: {
+              issuetype: { name: 'Initiative' },
+              duedate: '2026-12-31',
+              customfield_10015: '2026-01-01',
+              customfield_20001: '2026-02-01',
+              customfield_20002: '2026-09-30T17:00:00.000-0500',
+            },
+          },
+          {
+            id: '2',
+            key: 'EPIC-2',
+            fields: { issuetype: { name: 'Epic' }, duedate: '2026-05-31', customfield_10015: '2026-03-01' },
+          },
+        ],
+      }),
+    }));
+
+    const selection = dateFieldSelection({
+      dateFields: { Initiative: { start: 'customfield_20001', due: 'customfield_20002' } },
+    });
+    const result = await fetchIssuesByIds(['1', '2'], selection);
+
+    const url = String(requestJira.mock.calls[0][0]);
+    for (const f of ['duedate', 'customfield_10015', 'customfield_20001', 'customfield_20002']) {
+      expect(url).toContain(f);
+    }
+    expect(result.get('1')).toMatchObject({ ownStart: '2026-02-01', ownDueDate: '2026-09-30' });
+    expect(result.get('2')).toMatchObject({ ownStart: '2026-03-01', ownDueDate: '2026-05-31' });
   });
 });
 

@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
+import Button from '@atlaskit/button/new';
+import Lozenge from '@atlaskit/lozenge';
+import Select from '@atlaskit/select';
+import Spinner from '@atlaskit/spinner';
+import Textfield from '@atlaskit/textfield';
 import { useSettingsData, type UseSettings } from '@ui/data/useSettingsData/index.js';
 import {
   DEFAULT_ROLLUP_METHOD,
+  type DateFieldChoice,
+  type DateFieldDefaults,
   isValidProjectKey,
   labelsFor,
   normalizeProjectKey,
@@ -10,14 +17,24 @@ import {
   type RollupConfig,
   type RollupMethod,
 } from '@domain/index.js';
+import { DateFieldsTable } from './components/DateFieldsTable/index.js';
 
 /**
- * Settings — Due Date Rollup (global admin page). One dropdown per discovered
+ * Settings — Date Rollup (global admin page). Two areas: which date fields each
+ * level reads (ST-5), then one parent-vs-children dropdown per discovered
  * hierarchy level (ST-1/ST-2/ST-3). Level names are read at runtime — nothing is
  * hardcoded. Mock: specs/00-mocks/settings.html.
  *
  * Data comes from an INJECTABLE loader hook (`useSettings`) — see usePanelData.ts.
  */
+const DEPTH_CAP_OPTIONS: SelectOption[] = [
+  { label: 'No limit (roll up all levels)', value: '' },
+  { label: '1 level deep', value: '1' },
+  { label: '2 levels deep', value: '2' },
+  { label: '3 levels deep', value: '3' },
+  { label: '4 levels deep', value: '4' },
+];
+
 const METHOD_ORDER: RollupMethod[] = [
   'childrenFirstThenParent',
   'childrenOnly',
@@ -26,9 +43,42 @@ const METHOD_ORDER: RollupMethod[] = [
   'widestRange',
 ];
 
+type SelectOption = { label: string; value: string };
+
+/** Every level's start/due field ids, filled in from the site defaults. */
+function resolveDateFields(
+  stored: RollupConfig['dateFields'],
+  levels: string[],
+  defaults: DateFieldDefaults,
+): Record<string, DateFieldDefaults> {
+  return Object.fromEntries(
+    levels.map((level) => [
+      level,
+      { start: stored?.[level]?.start ?? defaults.start, due: stored?.[level]?.due ?? defaults.due },
+    ]),
+  );
+}
+
+/** Only the choices that differ from the defaults are stored, keeping the config sparse. */
+function toStoredDateFields(
+  fields: Record<string, DateFieldDefaults>,
+  defaults: DateFieldDefaults,
+): Record<string, DateFieldChoice> {
+  const out: Record<string, DateFieldChoice> = {};
+  for (const [level, { start, due }] of Object.entries(fields)) {
+    const choice: DateFieldChoice = {};
+    if (start !== defaults.start) choice.start = start;
+    if (due !== defaults.due) choice.due = due;
+    if (choice.start || choice.due) out[level] = choice;
+  }
+  return out;
+}
+
 export function Settings({ useSettings = useSettingsData }: { useSettings?: UseSettings }) {
-  const { levels, config, space, pending, error, save, saveSpaceKey, createSpace } = useSettings();
+  const { levels, config, dateFields, space, pending, error, save, saveSpaceKey, createSpace } =
+    useSettings();
   const [methods, setMethods] = useState<Record<string, RollupMethod>>({});
+  const [fields, setFields] = useState<Record<string, DateFieldDefaults>>({});
   const [depthCap, setDepthCap] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
@@ -40,6 +90,17 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
     if (config) setDepthCap(config.depthCap ?? null);
   }, [config]);
 
+  useEffect(() => {
+    if (levels && config && dateFields) {
+      setFields(resolveDateFields(config.dateFields, levels, dateFields.defaults));
+    }
+  }, [levels, config, dateFields]);
+
+  const setLevelFields = (level: string, next: DateFieldDefaults) => {
+    setFields((f) => ({ ...f, [level]: next }));
+    setSaveState('idle');
+  };
+
   const setMethod = (level: string, method: RollupMethod) => {
     setMethods((m) => ({ ...m, [level]: method }));
     setSaveState('idle');
@@ -47,6 +108,7 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
 
   const resetDefaults = () => {
     if (levels) setMethods(resolveConfig({ dueDateRollup: {} }, levels));
+    if (levels && dateFields) setFields(resolveDateFields({}, levels, dateFields.defaults));
     setDepthCap(null);
     setSaveState('idle');
   };
@@ -54,7 +116,12 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
   const doSave = async () => {
     setSaveState('saving');
     try {
-      const next: RollupConfig = { dueDateRollup: { ...methods }, depthCap };
+      const next: RollupConfig = {
+        dueDateRollup: { ...methods },
+        // Without the field list (lookup failed) keep whatever was stored.
+        dateFields: dateFields ? toStoredDateFields(fields, dateFields.defaults) : config?.dateFields,
+        depthCap,
+      };
       await save(next);
       setSaveState('saved');
     } catch {
@@ -73,17 +140,38 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
       <div className="mx-auto max-w-3xl p-6">
         {space && <KpiSpaceCard space={space} onSaveKey={saveSpaceKey} onCreate={createSpace} />}
 
-        {/* Due Date Rollup card */}
+        {/* Date Rollup card */}
         <section className="mt-6 rounded-lg border border-border bg-surface">
           <header className="flex items-center gap-2 border-b border-border px-5 py-3">
-            <h2 className="text-base font-semibold">Due Date Rollup</h2>
+            <h2 className="text-base font-semibold">Date Rollup</h2>
           </header>
           <div className="px-5 py-4">
             <p className="mb-4 text-sm text-text-subtle">
-              Which dates are prioritized between a parent and its children? Levels are read at
-              runtime from the site's issue-type configuration — nothing is hard-coded.
+              Levels are read at runtime from the site's issue-type configuration — nothing is
+              hard-coded.
             </p>
 
+            {/* Which fields hold each level's own dates */}
+            {dateFields && (
+              <div className="mb-6 border-b border-border pb-6">
+                <h3 className="text-sm font-medium">Date fields</h3>
+                <p className="mb-3 mt-0.5 text-sm text-text-subtle">
+                  Which Jira fields hold each level's start and end dates.
+                </p>
+                <DateFieldsTable
+                  levels={levels}
+                  fields={dateFields.fields}
+                  value={fields}
+                  onChange={setLevelFields}
+                />
+              </div>
+            )}
+
+            {/* Whose dates win between a parent and its children */}
+            <h3 className="text-sm font-medium">Parent vs. children</h3>
+            <p className="mb-2 mt-0.5 text-sm text-text-subtle">
+              Which dates are prioritized between a parent and its children?
+            </p>
             <div className="flex flex-col gap-2">
               <div className="py-2 text-sm font-medium">{levels[0]}</div>
               {levels.slice(0, -1).map((level, i) => {
@@ -95,17 +183,16 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
                       &nbsp;
                     </div>
                     <div className="flex w-full flex-col">
-                      <select
-                        className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm"
-                        value={methods[level] ?? DEFAULT_ROLLUP_METHOD}
-                        onChange={(e) => setMethod(level, e.target.value as RollupMethod)}
-                      >
-                        {METHOD_ORDER.map((m) => (
-                          <option key={m} value={m}>
-                            {labels[m]}
-                          </option>
-                        ))}
-                      </select>
+                      <Select<SelectOption>
+                        aria-label={`Due date rollup for ${level} and ${child}`}
+                        options={METHOD_ORDER.map((m) => ({ label: labels[m], value: m }))}
+                        value={{
+                          label: labels[methods[level] ?? DEFAULT_ROLLUP_METHOD],
+                          value: methods[level] ?? DEFAULT_ROLLUP_METHOD,
+                        }}
+                        onChange={(o) => o && setMethod(level, o.value as RollupMethod)}
+                        isSearchable={false}
+                      />
                       <div className="p-2 pt-4 text-sm font-medium">{child}</div>
                     </div>
                   </div>
@@ -123,39 +210,28 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
                 hierarchies; unlimited is most accurate.{' '}
                 <span className="text-text">Recommended: cap on large sites.</span>
               </p>
-              <select
-                id="rollup-depth-cap"
-                className="w-full rounded border border-border bg-surface px-2 py-1.5 text-sm sm:w-72"
-                value={depthCap === null ? '' : String(depthCap)}
-                onChange={(e) => {
-                  setDepthCap(e.target.value === '' ? null : Number(e.target.value));
-                  setSaveState('idle');
-                }}
-              >
-                <option value="">No limit (roll up all levels)</option>
-                <option value="1">1 level deep</option>
-                <option value="2">2 levels deep</option>
-                <option value="3">3 levels deep</option>
-                <option value="4">4 levels deep</option>
-              </select>
+              <div className="sm:w-72">
+                <Select<SelectOption>
+                  inputId="rollup-depth-cap"
+                  options={DEPTH_CAP_OPTIONS}
+                  value={DEPTH_CAP_OPTIONS.find((o) => o.value === (depthCap === null ? '' : String(depthCap)))}
+                  onChange={(o) => {
+                    if (!o) return;
+                    setDepthCap(o.value === '' ? null : Number(o.value));
+                    setSaveState('idle');
+                  }}
+                  isSearchable={false}
+                />
+              </div>
             </div>
           </div>
           <footer className="flex items-center justify-end gap-3 border-t border-border px-5 py-3">
             {saveState === 'saved' && <span className="text-sm text-success">Saved.</span>}
             {saveState === 'error' && <span className="text-sm text-danger">Save failed.</span>}
-            <button
-              className="rounded border border-border px-3 py-1.5 text-sm hover:bg-surface-sunken"
-              onClick={resetDefaults}
-            >
-              Reset to defaults
-            </button>
-            <button
-              className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
-              onClick={doSave}
-              disabled={saveState === 'saving'}
-            >
+            <Button onClick={resetDefaults}>Reset to defaults</Button>
+            <Button appearance="primary" onClick={doSave} isDisabled={saveState === 'saving'}>
               {saveState === 'saving' ? 'Saving…' : 'Save settings'}
-            </button>
+            </Button>
           </footer>
         </section>
       </div>
@@ -163,22 +239,15 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
   );
 }
 
-const SPACE_BADGE: Record<KpiSpaceStatus['state'], { label: string; cls: string }> = {
-  unset: { label: 'Not set', cls: 'bg-surface-sunken text-text-subtle' },
-  missing: { label: 'Not created', cls: 'bg-surface-sunken text-danger' },
-  misconfigured: { label: 'Needs setup', cls: 'bg-surface-sunken text-danger' },
-  ready: { label: 'Connected', cls: 'bg-surface-sunken text-success' },
+const SPACE_BADGE: Record<
+  KpiSpaceStatus['state'],
+  { label: string; appearance: 'default' | 'removed' | 'moved' | 'success' }
+> = {
+  unset: { label: 'Not set', appearance: 'default' },
+  missing: { label: 'Not created', appearance: 'removed' },
+  misconfigured: { label: 'Needs setup', appearance: 'moved' },
+  ready: { label: 'Connected', appearance: 'success' },
 };
-
-/** Inline loading spinner for in-progress provisioning actions. */
-function Spinner() {
-  return (
-    <svg className="h-3.5 w-3.5 animate-spin" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" className="opacity-25" />
-      <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  );
-}
 
 /**
  * KPI Space provisioning (storage-model.md). An admin picks a Jira project key;
@@ -216,7 +285,7 @@ function KpiSpaceCard({
     <section className="mt-6 rounded-lg border border-border bg-surface">
       <header className="flex items-center gap-2 border-b border-border px-5 py-3">
         <h2 className="text-base font-semibold">KPI Space</h2>
-        <span className={`rounded px-2 py-0.5 text-xs ${badge.cls}`}>{badge.label}</span>
+        <Lozenge appearance={badge.appearance}>{badge.label}</Lozenge>
       </header>
       <div className="px-5 py-4">
         {space.state === 'ready' ? (
@@ -239,33 +308,33 @@ function KpiSpaceCard({
             <div className="flex flex-wrap items-end gap-3">
               <label className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">Project key</span>
-                <input
-                  className="w-40 rounded border border-border bg-surface px-2 py-1.5 text-sm uppercase tracking-wide"
+                <Textfield
+                  width="small"
+                  isCompact
                   value={key}
                   onChange={(e) => {
-                    setKey(normalizeProjectKey(e.target.value));
+                    setKey(normalizeProjectKey(e.currentTarget.value));
                     setErr(null);
                   }}
                   placeholder="KPI"
                   aria-label="Project key"
                 />
               </label>
-              <button
-                className="inline-flex items-center gap-1.5 rounded bg-brand px-3 py-1.5 text-sm font-medium text-white disabled:opacity-60"
+              <Button
+                appearance="primary"
                 onClick={() => run('create')}
-                disabled={!valid || busy !== null}
+                isDisabled={!valid || busy !== null}
+                isLoading={busy === 'create'}
               >
-                {busy === 'create' && <Spinner />}
                 {busy === 'create' ? 'Creating…' : 'Create space'}
-              </button>
-              <button
-                className="inline-flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-sm hover:bg-surface-sunken disabled:opacity-60"
+              </Button>
+              <Button
                 onClick={() => run('save')}
-                disabled={!valid || busy !== null}
+                isDisabled={!valid || busy !== null}
+                isLoading={busy === 'save'}
               >
-                {busy === 'save' && <Spinner />}
                 {busy === 'save' ? 'Saving…' : 'Save key'}
-              </button>
+              </Button>
               {!valid && <span className="text-xs text-danger">2–10 letters/digits, starts with a letter.</span>}
               {space.state === 'missing' && valid && busy === null && (
                 <span className="text-xs text-text-subtle">
@@ -282,7 +351,7 @@ function KpiSpaceCard({
             </div>
             {busy === 'create' && (
               <p className="mt-3 flex items-center gap-2 text-xs text-text-subtle">
-                <Spinner />
+                <Spinner size="small" label="Creating project" />
                 Creating the project and configuring the KPI work-item type — this can take up to a
                 minute. Please keep this page open.
               </p>

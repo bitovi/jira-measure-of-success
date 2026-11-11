@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn, within, userEvent, expect, waitFor } from '@storybook/test';
+import { fn, within, userEvent, expect, waitFor, screen } from '@storybook/test';
 import type { TimelineNodeDto } from '@domain/index.js';
 import { KpiView } from './KpiView.js';
 
@@ -95,8 +95,8 @@ export const Undated: Story = {
     const c = within(canvasElement);
     const chip = c.getByRole('button', { name: /1,255,000/ });
     await userEvent.click(chip);
-    await expect(c.getByRole('dialog')).toBeInTheDocument();
-    await expect(c.getByText('Projected target')).toBeInTheDocument();
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(screen.getByText('Projected target')).toBeInTheDocument();
   },
 };
 
@@ -108,7 +108,7 @@ export const RecordValue: Story = {
     recordSpy.mockClear();
     const c = within(canvasElement);
     await userEvent.click(c.getByRole('button', { name: 'Record a value' }));
-    const dialog = within(await c.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog'));
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
     await waitFor(() => expect(recordSpy).toHaveBeenCalledWith('revenue', '2026-07-10', 1_300_000));
@@ -123,7 +123,7 @@ export const EditValue: Story = {
     editSpy.mockClear();
     const c = within(canvasElement);
     await userEvent.click(c.getByRole('button', { name: 'Edit value 1,243,000 USD on 2026-07-06' }));
-    const dialog = within(await c.findByRole('dialog'));
+    const dialog = within(await screen.findByRole('dialog'));
     const input = dialog.getByLabelText('Value');
     await userEvent.clear(input);
     await userEvent.type(input, '1250000');

@@ -181,7 +181,7 @@ export function TargetMarker({
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center"
+        className="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 animate-fade-in cursor-pointer place-items-center"
         style={{ left: axis.xOf(target.date), top: y }}
         data-diamond
         aria-label={`Target ${fmtVal(target.value)} ${node.unit} due ${target.date} — ${statusLabel}. Open ${target.source.type} ${issueKey} in Jira (new tab)`}

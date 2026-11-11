@@ -273,6 +273,18 @@ As an app administrator, I want the leaf level's control disabled, so that I can
 
 ---
 
+**Story ST-5 — Choose which date fields each level reads**
+As an app administrator, I want to pick the Jira fields that hold each level's start and end dates (e.g. *Target start* / *Target end* for Initiatives planned in Jira Plans), so that rollups use the dates my teams actually fill in.
+
+1. Given the field list loads, When the settings form renders, Then a **Date fields** area — separate from the parent-vs-children rollup area — shows a table with one row per level and **Start date field** / **End date field** pickers offering every date/datetime field on the site (built-in and custom; per-user *Last viewed* excluded), sorted by name.
+2. Given a level has no choice stored, When the form loads, Then its pickers show the defaults **Start date** (`customfield_10015`) and **Due date** (`duedate`) — the same fields the rollup reads by default.
+3. Given I change a picker and save, When the config is written, Then only the choices that differ from the defaults are stored under `dateFields`, keyed by runtime issue-type name; **Reset to defaults** clears them.
+4. Given a level's chosen fields, When its issues' own start/due are read (issue panel and timeline rollups), Then those fields are used; datetime values contribute their calendar day.
+5. Given a stored field no longer exists on the site, When the form loads, Then its picker shows the field id as "not found" so it can be changed.
+6. Given the field list can't be loaded, When the form renders, Then the rollup methods remain editable, the Date fields area is hidden, and saving keeps the stored field choices.
+
+---
+
 **Story ST-3 — Save and reset the configuration**
 As an app administrator, I want to save my choices or reset to defaults, so that I can manage the app-level configuration deliberately.
 

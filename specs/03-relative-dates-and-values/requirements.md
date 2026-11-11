@@ -2,7 +2,7 @@
 
 Status: **Draft for design review** · Scope: feature increment on top of the initial build
 Sources: [build brief §4.2/§6.1](../kpi-forge-app-build-brief.md) · [initial requirements](../01-initial-build/requirements.md) · [best KPI-tree mock](../02-kpi-more-space/kpi-timeline-proposed.html)
-Mocks (this folder): [issue-panel.html](./issue-panel.html) · [kpi-tree.html](./kpi-tree.html)
+Mocks (this folder): [issue-panel-v3.html](./issue-panel-v3.html) (current issue panel; v2: [issue-panel.html](./issue-panel.html)) · [kpi-tree.html](./kpi-tree.html)
 
 > This document describes **what** the feature must do and **why** — not how. Architecture (`architecture.md`) and the build plan (`plan.md`) follow once these requirements are agreed. Open design decisions are collected in [§9](#9-open-questions).
 
@@ -94,7 +94,7 @@ The hard, novel parts this feature must get right:
 
 Mock: [issue-panel.html](./issue-panel.html).
 
-- **FR-1 — Target type control.** Each KPI row's target offers **Absolute value** vs **Percent change**. (In the current form this is the `Target type` `<select>`; extend its labels from `absolute` / `delta` to **Absolute value** / **Percent change** — the stored values stay `absolute` / `delta`.) The label family is chosen so future behaviors slot in as siblings — **Amount change** (absolute-amount delta) and **Rate of change** (trend/growth) — with *Absolute value* as the odd-one-out. *(v1: only Absolute value + Percent change.)*
+- **FR-1 — Target type control.** *(See [§11](#11-addendum-amount-change-more-target-type): **Amount change** has since shipped as `more`.)* Each KPI row's target offers **Absolute value** vs **Percent change**. (In the current form this is the `Target type` `<select>`; extend its labels from `absolute` / `delta` to **Absolute value** / **Percent change** — the stored values stay `absolute` / `delta`.) The label family is chosen so future behaviors slot in as siblings — **Amount change** (absolute-amount delta) and **Rate of change** (trend/growth) — with *Absolute value* as the odd-one-out. *(v1: only Absolute value + Percent change.)*
 - **FR-1a — Target type must be editable, not just at creation.** Today the target-type control exists **only** in the Associate form; the inline edit path (`TrackedRow`) can't change it. The feature must expose target type (and, for **Percent change**, the value-as-percent) in the **edit** path too — ideally as a shared value/type editor sub-component mirroring `TargetDateEditor` (see §8).
 - **FR-2 — Value input adapts.** With **Absolute value**, the value field is a plain number in the KPI's unit. With **Percent change**, the field becomes a percent input (suffix `%`, sign allowed, e.g. `+1`), and a note beneath the value controls states the resolved amounts in plain language ("Current value: 1,326,000 USD → targeting **1,339,000 USD**") — mirroring the due-date note beneath the timing controls. The percent stays in the input and is not repeated in the note.
 - **FR-3 — Timing control.** The target date offers **Fixed date** vs **N months after due date** — where the due date = **this issue's** rolled-up (or own) due date (the existing `issueDueDate` anchor). Offset is a signed integer number of months. *(v1: only the `issueDueDate` anchor is offered; `parentDueDate`/`kpiStart` are not surfaced.)*
@@ -156,24 +156,25 @@ Mock: [kpi-tree.html](./kpi-tree.html) (based on the current best tree mock).
 
 ### 5.9 Saved relative target — display states (issue panel)
 
-Mock: [issue-panel.html](./issue-panel.html) ("Saved target — states" gallery). A saved target renders as a card with **two stacked rows mirroring the form** — a **Target value** row and a **Target date** row — each with a recap line + a `↳` resolved note; a **status pill** top-right; an optional **warning strip** placed **in the area it concerns** (value warnings in the Target value row, result warnings in the Target date row); and an **Edit / Remove** action footer bottom-right (FR-27).
+Mock: [issue-panel-v3.html](./issue-panel-v3.html) (supersedes the v2 [issue-panel.html](./issue-panel.html) gallery). A saved target renders as a card: **KPI name** (+ direction) with **one status pill** and a **•••** menu in the header; the **bet** — what the PM typed, e.g. `+10% · 3 months after due date` — as the headline; one **estimate line** under it (to its right on wide cards); and an optional **nudge** with a **Record a value** button. Cards size to the panel's width (container queries), not the viewport.
 
-- **FR-26 — The status pill encodes the combined value × date state.** Eight states (driven by §5.3 baseline state × where *today* sits relative to the due date and target date):
+- **FR-26 — The status pill + estimate line encode the combined value × date state.** Eight states (driven by §5.3 baseline state × where *today* sits relative to the due date and target date). The estimate line says whether the number is a locked **Target** (baselined) or an **Estimated target** (provisional), and where it came from:
 
-  | # | Pill | Condition | Value row | Date row |
+  | # | State | Condition | Pill | Estimate line (example) |
   |---|---|---|---|---|
-  | 1 | **Projected** | due date in the future | `baseline (provisional from {date}) ≈ v → targeting ≈ t` | `~{targetDate}` · Upcoming |
-  | 2 | **Provisional** | no due date (pending) | `baseline (provisional from {date}) ≈ v → targeting ≈ t` | `pending` · Date TBD |
-  | 3 | **Baselined** | due date reached, reading covers it | `baselined v → targeting t` | `{targetDate}` · Upcoming |
-  | 4 | **Needs measurement** | due date passed, no reading after it | `baseline (provisional from {date}) ≈ v → targeting ≈ t` + ⚠ stale | `{targetDate}` · Upcoming |
-  | 5 | **Met ✓** | target date passed, actual meets target | `baselined v → target t · actual a` | `{targetDate}` · Met on {date} |
-  | 6 | **Missed ✗** | target date passed, actual misses | `baselined v → target t · actual a` | `{targetDate}` · Missed |
-  | 7 | **Result unknown** | target date passed, no reading since baseline | `baselined v → target t · actual —` | `{targetDate}` · passed + ⚠ can't confirm |
-  | 8 | **Needs baseline** | zero readings | *needs a baseline reading* + ⚠ | `~{targetDate}` · Upcoming |
+  | 1 | Projected | due date in the future | **Upcoming** | `Estimated target 275 by Apr 15, 2027 · from 250 now` |
+  | 2 | Provisional | no due date (pending) | **Pending** | `Estimated target 275 · from 250 now · no due date yet` |
+  | 3 | Baselined | due date reached, reading covers it | **In progress** | `Target 284 by Sep 1, 2026 · from 258 on Jun 1` |
+  | 4 | Needs measurement | due date passed, no reading after it | **In progress** | `Estimated target 275 by Sep 1, 2026 · from 250 on Apr 30` + nudge |
+  | 5 | Met | target date passed, actual meets target | **Met ✓** | `Target 275 by Apr 15, 2026 · reached 281` (green) |
+  | 6 | Missed | target date passed, actual misses | **Missed** | `Target 275 by Apr 15, 2026 · reached 268` (red) |
+  | 7 | Result unknown | target date passed, no reading since baseline | **Not measured** | `Target 275 by Apr 15, 2026 · no reading` + nudge |
+  | 8 | Needs baseline | zero readings | **Upcoming** | `Estimated target — by Apr 15, 2027 · no readings yet` + nudge |
 
-- **FR-26a — Two warnings.** *Needs measurement* (state 4): due date passed with no measurement → baseline may be stale. *Result unknown* (state 7): target date passed with no measurement since the baseline → can't confirm hit/miss. Both prompt "Record a value."
-- **FR-27 — Edit / Remove.** Every saved-target card exposes **Edit** and **Remove** as a bottom-right footer, rendered as **subtle gray** text that colors on hover (Edit → brand, Remove → danger) so secondary/destructive actions stay quiet until reached for. (Edit must reach the target-type + percent + timing controls per FR-1a.)
-- **FR-28 — Display conventions.** The **user-set intent** is bold — `+10%` leads the value row (with "Percent change" de-emphasized) and **"3 months after due date"** leads the date row (with the resolved date de-emphasized). Provisional values carry `≈`; projected dates carry `~`. All dates are `YYYY-MM-DD`. Field labels use Jira's label style (14px / 500 / sentence case).
+  A **total** target is always locked (`Target 300 · 262 now`); a total **by a fixed date** never shows *Pending* (it doesn't depend on the due date). `by {date}` appears on the estimate line only for relative dates — a fixed date is already in the bet.
+- **FR-26a — Nudges.** State 4: *"Due date passed — record a value to lock in the target."* State 7: *"No value recorded since the target date, so we can't tell if it was met."* State 8: *"A % change needs a starting value."* Each has a **Record a value** button (opens the record-a-value modal for that KPI).
+- **FR-27 — Edit / Remove.** The bet is a Jira **inline edit** (IP-8/Q10): click it to edit the value and date in place with the same controls as the "Set a KPI target" form; clicking the **date part** focuses the date input, anything else focuses the amount. ✓/✕, Enter, blur confirm; Esc cancels. The estimate line updates live while editing; nudges hide while editing. The **•••** menu offers **Edit** (same inline edit) and **Remove** (asks for confirmation).
+- **FR-28 — Display conventions.** The bet is the headline (16/24 semibold); the KPI name and estimate are body text (14/20, subtle, numbers in the default text color); pill, nudge and captions are small (12/16 medium). Dates read `Apr 15, 2027`. No `≈` / `~` — **Target** vs **Estimated target** carries the locked/provisional distinction, and hovering a date or starting value explains where it came from.
 
 ---
 
@@ -255,7 +256,7 @@ Verified against the code (`app/src/ui/surfaces/IssuePanel/IssuePanel.tsx`, `app
 - **Q5 — Freeze mechanics.** Freeze **lazily on read** (pure, no write) vs. an **explicit write / background reconciliation** (durable, but needs a job + write path)? And how is a frozen target shown? *Recommend: compute-on-read semantics in v1 (a target *presents* as frozen when the condition holds) — no new write path; mark "final" in the UI.*
 - **Q6 — Depth-cap default.** Default to **no cap** (correct but potentially slow) or cap at **Epic** out of the box? *Recommend: no cap by default, with a prominent Settings recommendation to cap on large sites.*
 - **Q7 — Estimated-marker visual.** How to distinguish a **projected** target from a **committed** one on the axis — hollow marker, dashed outline, `≈` in tooltip only, opacity? *Recommend: hollow/outlined marker + `≈` in tooltip; confirm in mock review.*
-- **Q8 — Data-model shape for relative value. RESOLVED (v1): keep `targetType: 'absolute' | 'delta'`, treat `delta` as a percent.** No `deltaKind`/`baselineAnchor` field — `delta` means "percent of the value at the due date"; the stored `target` number is the percent (`1` = +1%). UI label = **Percent change**. Add `deltaKind`/amount later only if **Amount change** / **Rate of change** siblings ship.
+- **Q8 — Data-model shape for relative value.** *(Superseded by [§11](#11-addendum-amount-change-more-target-type): `delta` → `percent`, plus additive `relative`.)* **RESOLVED (v1): keep `targetType: 'absolute' | 'delta'`, treat `delta` as a percent.** No `deltaKind`/`baselineAnchor` field — `delta` means "percent of the value at the due date"; the stored `target` number is the percent (`1` = +1%). UI label = **Percent change**. Add `deltaKind`/amount later only if **Amount change** / **Rate of change** siblings ship.
 - **Q9 — Storage of frozen snapshots.** If freeze becomes a write (rejecting Q5's read-only recommendation), where does the snapshot live — the assignment property, or a reading? *Deferred until Q5 is decided.*
 - **Q10 — KPI-tree "Undated" lane placement.** A right-pinned lane per row (mock's approach) vs. a single grouped "Undated projections" section below the tree? *Recommend: right-pinned lane; revisit if it crowds narrow screens.*
 
@@ -267,3 +268,17 @@ Verified against the code (`app/src/ui/surfaces/IssuePanel/IssuePanel.tsx`, `app
 - Value inheritance down the parent chain (parked).
 - Sprint-derived due dates (deferred; uses `duedate` rollup).
 - Multi-metric or blended projections, seasonality, confidence intervals.
+
+## 11. Addendum: Amount change ("more") target type
+
+*Added after v1. This supersedes the Q8 / FR-1 / §2 "no absolute-amount delta" limit.*
+
+- **What it is:** an additive change to the KPI's value at the due date. *"Orders per month will be **+100** higher than at the due date"* resolves to `baseline + 100`. A **Percent change** resolves to `baseline × (1 + p/100)`.
+- **Stored shape:** `TargetType = 'absolute' | 'percent' | 'relative'`.
+  - `relative` is the additive kind. Its stored `target` is the signed amount in KPI units (`100` = +100).
+  - `delta` is **renamed** to `percent`. Legacy `delta` values are accepted on read and normalized to `percent`, so no migration is needed. New saves write `percent`.
+  - Not to be confused with `DueTiming.mode: 'relative'`, which is the **date** half.
+- **UI:** the value-type select reads `% change` · `more` · `total`. The bet headline is signed with the KPI unit: `+100 orders`, `+$5,000`, `−3 stores`. %-unit KPIs are not special-cased (`+2` shows `+2%`).
+- **Baseline:** identical to Percent change. It covers baselined/provisional/needsBaseline (nudge: *"An amount change needs a starting value."*), freeze-on-close (FR-16…18), timeline estimate markers (FR-22…24), and the wrong-way sign check (FR-6).
+- **Code:** `isBaselineRelative` / `applyTargetChange` in `app/src/domain/resolve/relativeTargetValue.ts` are the single place the change is applied. The panel's live preview (`applyDraft`) reuses them.
+

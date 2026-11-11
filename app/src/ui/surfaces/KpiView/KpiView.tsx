@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import Button from '@atlaskit/button/new';
+import ArrowDownIcon from '@atlaskit/icon/core/arrow-down';
+import ArrowUpIcon from '@atlaskit/icon/core/arrow-up';
+import { ModalTransition } from '@atlaskit/modal-dialog';
+import Tooltip from '@atlaskit/tooltip';
 import { openIssue, openIssueNewTab, getSiteUrl } from '@ui/bridge.js';
 import {
   axisDatesOf,
@@ -110,12 +115,11 @@ export function KpiView({
     if ((e.target as HTMLElement).closest('[data-diamond],[data-reading]')) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = Math.max(0, Math.min(e.clientX - rect.left, axis.plotWidth));
-    const t = axis.domainStart + (x / axis.plotWidth) * (axis.domainEnd - axis.domainStart);
+    const t = axis.msAt(x);
     const dateISO = new Date(t).toISOString().slice(0, 10);
     if (dateISO <= today) setAdding({ date: dateISO });
   };
 
-  const dirGlyph = node.direction === 'increase' ? '▲' : node.direction === 'decrease' ? '▼' : '';
   const href = node.issueKey
     ? siteUrl
       ? `${siteUrl}/browse/${node.issueKey}`
@@ -127,24 +131,35 @@ export function KpiView({
       {/* Header: KPI name (links to the KPI issue), unit · direction, Record a value */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {href ? (
-          <a
-            href={href}
-            className="text-lg font-semibold text-brand hover:underline"
-            title={`Open ${node.name} (${node.issueKey}) in Jira`}
-            onClick={(e) => {
-              e.preventDefault();
-              void onOpenIssue(node.issueKey);
-            }}
-          >
-            {node.name}
-          </a>
+          <Tooltip content={`Open ${node.name} (${node.issueKey}) in Jira`}>
+            {(tooltipProps) => (
+              <a
+                {...tooltipProps}
+                href={href}
+                className="text-lg font-semibold text-brand hover:underline"
+                onClick={(e) => {
+                  e.preventDefault();
+                  void onOpenIssue(node.issueKey);
+                }}
+              >
+                {node.name}
+              </a>
+            )}
+          </Tooltip>
         ) : (
           <span className="text-lg font-semibold">{node.name}</span>
         )}
         <span className="text-sm text-text-subtle">· {node.unit}</span>
-        {dirGlyph && (
-          <span className={node.direction === 'increase' ? 'text-sm text-success' : 'text-sm text-danger'}>
-            {dirGlyph} {node.direction === 'increase' ? 'increase' : 'decrease'}
+        {node.direction && (
+          <span
+            className={`inline-flex items-center text-sm ${node.direction === 'increase' ? 'text-success' : 'text-danger'}`}
+          >
+            {node.direction === 'increase' ? (
+              <ArrowUpIcon label="" size="small" />
+            ) : (
+              <ArrowDownIcon label="" size="small" />
+            )}
+            {node.direction === 'increase' ? 'increase' : 'decrease'}
           </span>
         )}
         <div className="ml-auto flex items-center gap-3">
@@ -159,12 +174,9 @@ export function KpiView({
               {nextTarget.date}
             </span>
           )}
-          <button
-            className="rounded bg-brand px-3 py-1.5 text-sm font-medium text-white"
-            onClick={() => setAdding({ date: today })}
-          >
+          <Button appearance="primary" onClick={() => setAdding({ date: today })}>
             Record a value
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -283,16 +295,15 @@ export function KpiView({
           </div>
           <div className="flex flex-wrap gap-2">
             {node.undated.map((t, i) => (
-              <button
+              <Tooltip
                 key={i}
-                type="button"
-                className="rounded border border-dashed border-text-subtle px-2 py-0.5 text-xs text-text-subtle hover:border-brand hover:text-brand"
-                title={`Projected ${t.provisional ? '≈ ' : ''}${fmtVal(t.value)} ${node.unit} · date TBD — click for details`}
-                onClick={() => setProjecting(t)}
+                content={`Projected ${t.provisional ? '≈ ' : ''}${fmtVal(t.value)} ${node.unit} · date TBD — click for details`}
               >
-                {t.provisional ? '≈ ' : ''}
-                {fmtVal(t.value)} {node.unit}
-              </button>
+                <Button spacing="compact" onClick={() => setProjecting(t)}>
+                  {t.provisional ? '≈ ' : ''}
+                  {fmtVal(t.value)} {node.unit}
+                </Button>
+              </Tooltip>
             ))}
           </div>
         </div>
@@ -315,35 +326,41 @@ export function KpiView({
         </span>
       </div>
 
-      {adding && (
-        <RecordModal
-          node={node}
-          defaultDate={adding.date}
-          today={today}
-          onCancel={() => setAdding(null)}
-          onRecord={(date, value) => record(date, value)}
-        />
-      )}
+      <ModalTransition>
+        {adding && (
+          <RecordModal
+            node={node}
+            defaultDate={adding.date}
+            today={today}
+            onCancel={() => setAdding(null)}
+            onRecord={(date, value) => record(date, value)}
+          />
+        )}
+      </ModalTransition>
 
-      {editing && (
-        <EditReadingModal
-          node={node}
-          reading={editing}
-          onCancel={() => setEditing(null)}
-          onSave={(value) => record(editing.date, value)}
-          onDelete={() => record(editing.date, null)}
-        />
-      )}
+      <ModalTransition>
+        {editing && (
+          <EditReadingModal
+            node={node}
+            reading={editing}
+            onCancel={() => setEditing(null)}
+            onSave={(value) => record(editing.date, value)}
+            onDelete={() => record(editing.date, null)}
+          />
+        )}
+      </ModalTransition>
 
-      {projecting && (
-        <ProjectionModal
-          node={node}
-          target={projecting}
-          siteUrl={siteUrl}
-          onClose={() => setProjecting(null)}
-          onOpenIssueNewTab={onOpenIssueNewTab}
-        />
-      )}
+      <ModalTransition>
+        {projecting && (
+          <ProjectionModal
+            node={node}
+            target={projecting}
+            siteUrl={siteUrl}
+            onClose={() => setProjecting(null)}
+            onOpenIssueNewTab={onOpenIssueNewTab}
+          />
+        )}
+      </ModalTransition>
     </div>
   );
 }

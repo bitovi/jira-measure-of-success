@@ -14,11 +14,11 @@ import { targetStatus, type DatedValue } from './targetStatus';
  * a provisional ESTIMATE (relative value not yet baselined, Feature 03 FR-22…24).
  *
  *  - `absolute` targets plot at their resolved date, never provisional;
- *  - `delta` targets (percent of the baseline at the due date) resolve a value
+ *  - `percent`/`relative` targets (a % or additive change on the baseline at the due date) resolve a value
  *    and plot with `provisional` = true until the baseline is baselined;
  *  - a target whose date can't be resolved (pending anchor) becomes an UNDATED
  *    chip (`date: null`) rather than being plotted at a guessed spot;
- *  - a `delta` target with no baseline value yet (zero readings) is skipped.
+ *  - a `percent`/`relative` target with no baseline value yet (zero readings) is skipped.
  */
 
 /** The contributing issue behind a target (for the "issues behind this KPI" list). */
@@ -70,7 +70,7 @@ export function buildKpiTargets(
 
     const resolvedDate = resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
 
-    // The baseline anchor for a percent target = the issue's own due date (v1
+    // The baseline anchor for a percent/relative target = the issue's own due date (v1
     // only offers the issueDueDate anchor); other anchors fall back to the date.
     const dueDate =
       assignment.timing.due.mode === 'relative' && assignment.timing.due.anchor === 'issueDueDate'
@@ -80,7 +80,7 @@ export function buildKpiTargets(
           : resolvedDate.date;
 
     const resolvedValue = resolveRelativeTargetValue(assignment, { dueDate, readings });
-    if (resolvedValue.value === null) continue; // delta with no baseline yet → skip
+    if (resolvedValue.value === null) continue; // percent/relative with no baseline yet → skip
 
     const src = { issue: source.key, type: source.type, title: source.title, iconUrl: source.iconUrl };
 

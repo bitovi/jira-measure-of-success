@@ -8,7 +8,7 @@ function r(date: string, value: number): DatedValue {
 }
 
 const relativeDelta: Pick<Assignment, 'targetType' | 'target' | 'timing'> = {
-  targetType: 'delta',
+  targetType: 'percent',
   target: 1, // +1%
   timing: {
     start: null,
@@ -29,6 +29,16 @@ describe('freezeIfDone (FR-16…FR-18, §7-#11)', () => {
     // due 2026-10-15 + 3 months = 2027-01-15
     expect(frozen!.date).toBe('2027-01-15');
     expect(frozen!.value).toBeCloseTo(1_010_000, 6);
+  });
+
+  it('relative (additive) target → frozen value is baseline + amount', () => {
+    const frozen = freezeIfDone({ ...relativeDelta, targetType: 'relative', target: 250 }, {
+      closed: true,
+      dueDate: '2026-10-15',
+      today: '2027-02-01',
+      readings: [r('2026-10-15', 1_000)],
+    });
+    expect(frozen).toEqual({ date: '2027-01-15', value: 1_250 });
   });
 
   it('not closed → null (stays relative)', () => {

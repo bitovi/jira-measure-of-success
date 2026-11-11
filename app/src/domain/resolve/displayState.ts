@@ -34,7 +34,7 @@ export type DisplayState =
 export type TargetWarning =
   | 'staleBaseline' // FR-26a: due date passed with no measurement
   | 'unconfirmedResult' // FR-26a: target date passed with no reading since baseline
-  | 'needsBaseline' // FR-9b: a percent target needs at least one reading
+  | 'needsBaseline' // FR-9b: a percent/relative target needs at least one reading
   | null;
 
 export interface DisplayStateInput {

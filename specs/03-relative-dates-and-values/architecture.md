@@ -13,7 +13,7 @@ This is the **HOW it fits together** — the layering, data flow, module design,
 1. **Pure domain, zero `@forge/*`.** All new math (baseline, relative value, display-state, freeze) lives in `app/src/domain/resolve/**` as pure, Zod-guarded, exhaustively-tested TS. It never imports Forge or React.
 2. **Resolve at read time, never snapshot.** A relative target's date and value are *derived* every read from the current rolled-up due date and reading series. Nothing durable goes stale (§5.2/FR-8). Freeze is a **computed display state**, not a write (§7).
 3. **Two mocked seams.** The `invoke` (our resolver) and `requestJira` (Jira REST) boundaries are identical in the harness and in Forge, so every scenario renders locally.
-4. **Stored schema unchanged.** `Assignment` (`targetType: 'absolute' | 'delta'`, `target: number`, `timing: DueTiming`) is untouched. `delta` is reinterpreted as a **percent of the value at the due date** (Q8). The only config-adjacent addition is an **optional rollup depth cap**.
+4. **Stored schema unchanged.** *(Later: `delta` was renamed to `percent` and an additive `relative` kind was added. See requirements §11.)* `Assignment` (`targetType: 'absolute' | 'delta'`, `target: number`, `timing: DueTiming`) is untouched. `delta` is reinterpreted as a **percent of the value at the due date** (Q8). The only config-adjacent addition is an **optional rollup depth cap**.
 5. **Injectable loader hooks.** Surfaces take a `usePanel`/`useTimeline` hook defaulted to the real-bridge hook, so stories inject canned scenarios for every state.
 
 ---

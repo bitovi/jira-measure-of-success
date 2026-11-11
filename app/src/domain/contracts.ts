@@ -1,7 +1,9 @@
-import type { DueTiming, IsoDate, KpiDirection, TargetType } from './models/index';
+import type { Assignment, DueTiming, IsoDate, KpiDirection, TargetType } from './models/index';
+import type { ResolvedEndpoint } from './resolve/effectiveTiming';
 import type { TargetStatus } from './resolve/targetStatus';
 import type { BaselineState } from './resolve/baseline';
 import type { DisplayState, TargetWarning } from './resolve/displayState';
+import type { KpiTargetContribution } from './resolve/timelineTargets';
 
 /**
  * Resolver payload contracts — the `invoke(...)` seam between Custom UI and the
@@ -63,6 +65,11 @@ export interface PanelRowDto {
   dueDateRolledUp: boolean;
   /** recorded value in effect at the target date (for met/missed/unknown rows) */
   actual: number | null;
+  /**
+   * true while the values that need readings or rolled-up dates (the estimate
+   * line, status pill, dates) are still loading — spec 07 progressive panel.
+   */
+  resolving?: boolean;
 }
 
 export interface CatalogEntryDto {
@@ -91,6 +98,47 @@ export interface PanelData {
    * of the associate/target-editor form. Carries this KPI's own series.
    */
   kpiView?: KpiViewDto | null;
+  /** true while Phase 2 (readings + rolled-up dates) is outstanding — spec 07 */
+  resolving?: boolean;
+}
+
+/**
+ * Phase 1 of the progressive issue panel (spec 07): what the target list and the
+ * "Set a KPI target" form need — the issue's and its parent's targets and the
+ * KPI catalog. No readings and no rolled-up dates.
+ */
+export interface PanelBasis {
+  issueKey: string;
+  /** the issue's status category is "done" (Feature 03 freeze) */
+  closed: boolean;
+  /** the issue's own targets */
+  own: Assignment[];
+  /** KPI ids targeted on the parent issue (only used to group the rows) */
+  parentKpiIds: string[];
+  /** the KPI picker catalog, without `currentValue` (that needs readings) */
+  catalog: CatalogEntryDto[];
+}
+
+/**
+ * `getPanelList` result. An ordinary work item gets the `basis`. A KPI issue
+ * (Feature 04) gets its complete `panel` (the KPI chart), so no Phase 2 is needed.
+ */
+export type PanelListData = { basis: PanelBasis; panel?: undefined } | { panel: PanelData; basis?: undefined };
+
+/**
+ * Phase 2 of the progressive issue panel (spec 07): the facts that need the
+ * rollup walk or the KPI readings. The client turns basis + values into rows
+ * with the same `assemblePanel` the backend uses.
+ */
+export interface PanelValuesData {
+  /** ISO "today" used for status classification */
+  today: string;
+  /** the issue's effective (possibly rolled-up) due date */
+  issueDue: ResolvedEndpoint;
+  /** the parent's key and effective due — only loaded when a target anchors to it */
+  parent: { issueKey: string; due: ResolvedEndpoint } | null;
+  /** reading series per KPI id (every KPI in the space) */
+  readings: Record<string, TimelineReadingDto[]>;
 }
 
 /** The single-KPI chart payload for a KPI issue's panel (Feature 04). */
@@ -143,6 +191,15 @@ export interface TimelineData {
   /** ISO date treated as "today" for status classification + the axis marker */
   today: string;
   roots: TimelineNodeDto[];
+}
+
+/**
+ * Phase 2 of the progressive timeline load: the raw target contributions per
+ * KPI (assignment + source issue with rolled-up dates). The client turns them
+ * into markers with `applyTargetContributions`.
+ */
+export interface TimelineTargetsData {
+  contributions: Record<string, KpiTargetContribution[]>;
 }
 
 // ── KPI space (storage-model.md) ────────────────────────────────────────

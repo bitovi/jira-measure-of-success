@@ -8,11 +8,11 @@ import { resolveRelativeTargetValue } from './relativeTargetValue';
  *
  * Once a contributing issue is CLOSED and its rolled-up due date is in the PAST,
  * a relative target is a settled fact: its date and baseline value are captured
- * from actuals, the percent is applied once, and the result is a fixed
+ * from actuals, the percent/amount change is applied once, and the result is a fixed
  * `{ date, value }` snapshot.
  *
  * v1 is COMPUTE-ON-READ (Q5): this is a pure function, not a write. The stored
- * assignment stays `delta` + relative; the resolver merely presents the snapshot
+ * assignment stays `percent`/`relative` + relative date; the resolver merely presents the snapshot
  * (and a `frozen: true` flag) when the condition holds. Returns `null` when the
  * target is not yet frozen. No @forge/*, no React.
  */
@@ -41,7 +41,7 @@ export function freezeIfDone(
   const date = due.mode === 'absolute' ? due.absolute : addMonths(dueDate, due.offsetMonths);
   if (date === null) return null;
 
-  // Value snapshot from actuals (baseline at the due date, percent applied once).
+  // Value snapshot from actuals (baseline at the due date, change applied once).
   const resolved = resolveRelativeTargetValue(assignment, { dueDate, readings });
   if (resolved.value === null) return null;
 

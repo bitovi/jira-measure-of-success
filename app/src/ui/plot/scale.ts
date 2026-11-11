@@ -76,7 +76,11 @@ export function domainFor(node: TimelineNodeDto): { min: number; max: number } |
  * No ticks (a 60px row can't hold labels).
  */
 export function bandScale(node: TimelineNodeDto, plotH: number): (v: number) => number {
-  const dom = domainFor(node);
+  return bandScaleOf(domainFor(node), plotH);
+}
+
+/** `bandScale` for an explicit value domain (lets the Timeline animate the domain). */
+export function bandScaleOf(dom: { min: number; max: number } | null, plotH: number): (v: number) => number {
   return (v: number): number => {
     if (!dom) return plotH / 2;
     const frac = (v - dom.min) / (dom.max - dom.min);

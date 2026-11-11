@@ -7,6 +7,7 @@
  */
 export * from './axis.js';
 export * from './scale.js';
+export * from './useBandScale.js';
 export * from './markers.js';
 export * from './modals.js';
 export * from './hover.js';

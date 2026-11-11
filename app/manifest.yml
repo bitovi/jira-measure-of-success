@@ -4,21 +4,21 @@ modules:
       resource: issue-panel
       resolver:
         function: resolver
-      title: KPIs
+      title: KPIs${TITLE_SUFFIX}
       icon: https://developer.atlassian.com/platform/forge/images/icons/issue-panel-icon.svg
   jira:globalPage:
     - key: kpi-timeline-page
       resource: timeline
       resolver:
         function: resolver
-      title: KPI Timeline
+      title: KPI Timeline${TITLE_SUFFIX}
       layout: native
   jira:adminPage:
     - key: kpi-settings-page
       resource: settings
       resolver:
         function: resolver
-      title: KPI Settings
+      title: KPI Settings${TITLE_SUFFIX}
       layout: blank
   jira:entityProperty:
     - key: kpi-index
@@ -30,7 +30,7 @@ modules:
           searchAlias: kpiIds
   jira:customField:
     - key: kpi-reading
-      name: KPI Reading
+      name: KPI Reading${TITLE_SUFFIX}
       description: >-
         Append-only KPI reading value (app-managed). Each recorded value is an
         embedded-date entry; the reading series is reconstructed from this
@@ -84,3 +84,12 @@ app:
   id: ari:cloud:ecosystem::app/f92bb5d3-136d-4f6d-9245-fc31f4e8fdec
 
 # id assigned by `forge register` (deferred until a dev site is provisioned).
+
+# Per-environment label appended to every user-visible title so dev/staging
+# installs on the same site are distinguishable (e.g. "KPIs (staging)" in the
+# issue app menu). Set by the `deploy:*` / `tunnel` npm scripts; production
+# deploys leave it empty.
+environment:
+  variables:
+    - key: TITLE_SUFFIX
+      default: ''

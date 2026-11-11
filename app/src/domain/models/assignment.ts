@@ -16,8 +16,16 @@ export const IsoDate = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'expected an ISO date (YYYY-MM-DD)');
 export type IsoDate = z.infer<typeof IsoDate>;
 
-export const TargetType = z.enum(['absolute', 'delta']);
-export type TargetType = z.infer<typeof TargetType>;
+/**
+ * How a target's value is read:
+ *  - `absolute` — the stored number IS the target ("total").
+ *  - `percent`  — a % change applied to the KPI's value at the due date (`1` = +1%).
+ *  - `relative` — an additive change to the KPI's value at the due date (`100` = +100).
+ * Legacy `delta` (the pre-rename name for `percent`) is normalized on read.
+ */
+export const TARGET_TYPES = ['absolute', 'percent', 'relative'] as const;
+export const TargetType = z.preprocess((v) => (v === 'delta' ? 'percent' : v), z.enum(TARGET_TYPES));
+export type TargetType = (typeof TARGET_TYPES)[number];
 
 /** What a relative due date is measured from. Brief §4.2 / §6.1. */
 export const DueAnchor = z.enum(['issueDueDate', 'parentDueDate', 'kpiStart']);

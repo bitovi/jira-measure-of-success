@@ -3,6 +3,7 @@ import type {
   KpiDefinition,
   KpiDirection,
   KpiReading,
+  DateFieldCatalog,
   RollupConfig,
 } from '@domain/index.js';
 
@@ -83,6 +84,8 @@ export interface FixtureIssue {
   parentId: string | null;
   ownStart: string | null;
   ownDue: string | null;
+  /** values of other date fields by field id (e.g. Target start / Target end) */
+  otherDates?: Record<string, string | null>;
   assignments: Assignment[];
   /** resolved/closed status (Feature 03 freeze); defaults to false */
   closed?: boolean;
@@ -121,6 +124,7 @@ export const ISSUES: FixtureIssue[] = [
     parentId: '10012',
     ownStart: '2026-02-01',
     ownDue: '2026-09-30',
+    otherDates: { customfield_10023: '2026-03-01', customfield_10022: '2026-10-31' },
     assignments: [
       assignment({
         kpiId: 'revenue',
@@ -165,6 +169,21 @@ export const ISSUES: FixtureIssue[] = [
     assignments: [],
   },
 ];
+
+// ── Date fields (Settings pickers) — ids mirror a typical Jira Cloud site ────
+export const START_DATE_FIELD_ID = 'customfield_10015';
+export const DATE_FIELDS: DateFieldCatalog = {
+  fields: [
+    { id: 'created', name: 'Created' },
+    { id: 'duedate', name: 'Due date' },
+    { id: 'resolutiondate', name: 'Resolved' },
+    { id: START_DATE_FIELD_ID, name: 'Start date' },
+    { id: 'customfield_10022', name: 'Target end' },
+    { id: 'customfield_10023', name: 'Target start' },
+    { id: 'updated', name: 'Updated' },
+  ],
+  defaults: { start: START_DATE_FIELD_ID, due: 'duedate' },
+};
 
 export const ROLLUP_CONFIG: RollupConfig = {
   dueDateRollup: {

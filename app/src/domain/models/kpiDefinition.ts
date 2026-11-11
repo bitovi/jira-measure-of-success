@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
 /**
- * KPI definition (catalog entry) — stored in Forge KVS under `kpi:def:{kpiId}`.
- * Brief §4.1. One key per definition; deletion is soft (`archived`).
+ * KPI definition shape used by the issue panel's grouping logic and test
+ * fixtures. Not persisted: live KPIs are issues in the KPI space (storage-model.md).
  */
 export const KpiDirection = z.enum(['increase', 'decrease']);
 export type KpiDirection = z.infer<typeof KpiDirection>;
