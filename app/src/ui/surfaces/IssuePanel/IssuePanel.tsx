@@ -51,7 +51,8 @@ export function IssuePanel({
   issueId?: string;
   usePanel?: UsePanel;
 }) {
-  const { data, pending, error, busy, valuesError, retryValues, save, remove, record } = usePanel(issueId);
+  const { data, pending, error, busy, actionError, dismissActionError, valuesError, retryValues, save, remove, record } =
+    usePanel(issueId);
   const [recordFor, setRecordFor] = useState<PanelRowDto | null>(null);
   const menuRoomRef = useMenuRoom();
 
@@ -69,11 +70,18 @@ export function IssuePanel({
   if (error) return <div className="p-4 text-danger">Failed to load KPIs: {error}</div>;
   if (pending || !data) return <div className="p-4 text-text-subtle">Loading KPIs…</div>;
 
+  const actionBanner = actionError && <ActionErrorBanner message={actionError} onDismiss={dismissActionError} />;
+
   // This issue IS a KPI (it lives in the KPI space, Feature 04): render ONLY the
   // single-KPI chart — no group list, no "Set a KPI target" form. Authoring
   // nested KPIs happens on the Timeline's add-child, not here.
   if (data.kpiView) {
-    return <KpiView node={data.kpiView.node} today={data.kpiView.today} onRecord={record} />;
+    return (
+      <>
+        {actionBanner && <div className="px-4 pt-4">{actionBanner}</div>}
+        <KpiView node={data.kpiView.node} today={data.kpiView.today} onRecord={record} />
+      </>
+    );
   }
 
   const tracked = data.rows.filter((r) => r.relationship !== 'onParentNotTracked');
@@ -85,6 +93,8 @@ export function IssuePanel({
   return (
     <div ref={menuRoomRef} className="p-4 text-text [container-type:inline-size]">
       {busy && <div className="mb-3 text-xs text-text-subtle">saving…</div>}
+
+      {actionBanner}
 
       {valuesError && <ValuesErrorBanner message={valuesError} onRetry={retryValues} />}
 
@@ -164,6 +174,21 @@ function ValuesErrorBanner({ message, onRetry }: { message: string; onRetry: () 
       <div className="mt-2">
         <Button appearance="primary" spacing="compact" onClick={onRetry}>
           Retry
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** A save / remove / record failed: the panel still shows its previous data. */
+function ActionErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
+  return (
+    <div role="alert" className="mb-3 rounded-md border border-danger px-3 py-2 text-sm">
+      <p className="font-semibold text-danger">Couldn’t save your change</p>
+      <p className="mt-0.5 text-text-subtle">{message}</p>
+      <div className="mt-2">
+        <Button appearance="subtle" spacing="compact" onClick={onDismiss}>
+          Dismiss
         </Button>
       </div>
     </div>

@@ -173,6 +173,8 @@ function stub(over: Partial<PanelController> & { data: PanelData | null }): UseP
     retryValues: over.retryValues ?? (() => {}),
     error: over.error ?? null,
     busy: over.busy ?? false,
+    actionError: over.actionError ?? null,
+    dismissActionError: over.dismissActionError ?? (() => {}),
     save: over.save ?? (() => {}),
     remove: over.remove ?? (() => {}),
     record: over.record ?? (() => {}),
@@ -363,6 +365,31 @@ export const ErrorState: Story = {
   args: { usePanel: stub({ data: null, error: 'boom' }) },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByText(/Failed to load KPIs/i)).toBeInTheDocument();
+  },
+};
+
+/** A save / remove / record failed: the panel keeps its data and shows a dismissible alert. */
+const dismissActionErrorSpy = fn();
+export const ActionFailed: Story = {
+  args: {
+    usePanel: stub({ data: ALL_GROUPS, actionError: 'Network error', dismissActionError: dismissActionErrorSpy }),
+  },
+  play: async ({ canvasElement }) => {
+    dismissActionErrorSpy.mockClear();
+    const c = within(canvasElement);
+    await expect(c.getByRole('alert')).toHaveTextContent('Couldn’t save your change');
+    await expect(c.getByRole('alert')).toHaveTextContent('Network error');
+    await expect(c.getByRole('group', { name: 'Revenue' })).toBeInTheDocument();
+    await userEvent.click(c.getByRole('button', { name: 'Dismiss' }));
+    await expect(dismissActionErrorSpy).toHaveBeenCalledOnce();
+  },
+};
+
+/** The KPI View variant surfaces a failed reading write too. */
+export const KpiViewActionFailed: Story = {
+  args: { usePanel: stub({ data: KPI_VIEW, actionError: 'Network error' }) },
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByRole('alert')).toHaveTextContent('Couldn’t save your change');
   },
 };
 

@@ -84,3 +84,12 @@ export function routeFromAbsolute(absolutePath: string): string {
   const u = new URL(absolutePath);
   return `${u.pathname}${u.search}`;
 }
+
+/**
+ * Mirror of `@forge/api`'s `assumeTrustedRoute` — `jira.ts` uses it for
+ * gateway-shaped custom icon URLs. `requestJira` here takes a plain path, so
+ * the path passes through unchanged.
+ */
+export function assumeTrustedRoute(path: string): string {
+  return path;
+}

@@ -30,6 +30,9 @@ export interface PanelController {
   error: string | null;
   /** true while a save/remove mutation is in flight */
   busy: boolean;
+  /** the last save/remove/record failed (the panel keeps its previous data) */
+  actionError: string | null;
+  dismissActionError(): void;
   save(assignment: Assignment): void;
   remove(kpiId: string): void;
   /**
@@ -102,12 +105,15 @@ export const usePanelData: UsePanel = (issueId) => {
   const [full, setFull] = useState<PanelData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const loadedFor = useRef(issueId);
   useEffect(() => {
     if (loadedFor.current === issueId) return;
     loadedFor.current = issueId;
     setFull(null);
+    setBusy(false);
+    setActionError(null);
     setRequests(startRequests(issueId));
   }, [issueId]);
 
@@ -150,26 +156,32 @@ export const usePanelData: UsePanel = (issueId) => {
 
   const retryValues = () => setRequests((r) => ({ ...r, values: requestValues(issueId) }));
 
-  const mutate = async (key: string, payload: unknown) => {
+  // Run a mutation for the CURRENT issue. If the issue changes while it's in
+  // flight, its result (or failure) belongs to the old issue and is dropped.
+  const runAction = async (load: () => Promise<PanelData>) => {
+    const forIssue = issueId;
+    const stillCurrent = () => loadedFor.current === forIssue;
     setBusy(true);
+    setActionError(null);
     try {
-      setFull(await call<PanelData>(key, payload));
+      const next = await load();
+      if (stillCurrent()) setFull(next);
+    } catch (e: unknown) {
+      if (stillCurrent()) setActionError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (stillCurrent()) setBusy(false);
     }
   };
 
+  const mutate = (key: string, payload: unknown) => runAction(() => call<PanelData>(key, payload));
+
   // Recording a reading returns TimelineData (KPI-global), so ignore its result
   // and re-fetch the panel to refresh `kpiView` with the new series.
-  const record = async (kpiId: string, date: string, value: number | null) => {
-    setBusy(true);
-    try {
+  const record = (kpiId: string, date: string, value: number | null) =>
+    runAction(async () => {
       await call('recordValue', { kpiId, date, value });
-      setFull(await call<PanelData>('getPanelData', { issueId }));
-    } finally {
-      setBusy(false);
-    }
-  };
+      return call<PanelData>('getPanelData', { issueId });
+    });
 
   return {
     data: view.data,
@@ -179,6 +191,8 @@ export const usePanelData: UsePanel = (issueId) => {
     retryValues,
     error,
     busy,
+    actionError,
+    dismissActionError: () => setActionError(null),
     save: (assignment) => void mutate('saveAssignment', { issueId, assignment }),
     remove: (kpiId) => void mutate('removeAssignment', { issueId, kpiId }),
     record: (kpiId, date, value) => void record(kpiId, date, value),

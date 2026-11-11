@@ -3,6 +3,7 @@ import type { Assignment } from '../models/assignment';
 import type { TimelineTargetDto } from '../contracts';
 import { resolveRelativeTargetDate, type RelativeTargetContext } from './relativeTargetDate';
 import { resolveRelativeTargetValue } from './relativeTargetValue';
+import { baselineDueEndpoint } from './panelLoad';
 import { targetStatus, type DatedValue } from './targetStatus';
 
 /**
@@ -70,14 +71,8 @@ export function buildKpiTargets(
 
     const resolvedDate = resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
 
-    // The baseline anchor for a percent/relative target = the issue's own due date (v1
-    // only offers the issueDueDate anchor); other anchors fall back to the date.
-    const dueDate =
-      assignment.timing.due.mode === 'relative' && assignment.timing.due.anchor === 'issueDueDate'
-        ? source.due
-        : assignment.timing.due.mode === 'relative' && assignment.timing.due.anchor === 'parentDueDate'
-          ? source.parent?.due ?? null
-          : resolvedDate.date;
+    // The baseline anchor — the same rule the issue panel uses (FR-4).
+    const dueDate = baselineDueEndpoint(assignment, ctx, resolvedDate.date).date;
 
     const resolvedValue = resolveRelativeTargetValue(assignment, { dueDate, readings });
     if (resolvedValue.value === null) continue; // percent/relative with no baseline yet → skip

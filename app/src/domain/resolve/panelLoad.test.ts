@@ -83,6 +83,24 @@ describe('assemblePanel', () => {
     expect(churn.targetDate).toMatchObject({ date: null, pending: true });
   });
 
+  it('a fixed-date percent target baselines at the issue due date, not the target date (FR-4)', () => {
+    const fixed = { mode: 'absolute', absolute: '2026-12-15', anchor: 'issueDueDate', offsetMonths: 0 } as const;
+    const panel = assemblePanel({ ...basis, own: [assignment('KPI-1', fixed)], parentKpiIds: [] }, values);
+    const signups = panel.rows.find((r) => r.kpiId === 'KPI-1')!;
+    expect(signups.targetDate?.date).toBe('2026-12-15');
+    expect(signups.dueDate).toBe('2026-09-30');
+    expect(signups.resolvedValue).toMatchObject({ baselineDate: '2026-09-30', baseline: 120, value: 132 });
+  });
+
+  it('a fixed-date absolute target ignores the issue due date (no baseline needed)', () => {
+    const fixed = { mode: 'absolute', absolute: '2026-12-15', anchor: 'issueDueDate', offsetMonths: 0 } as const;
+    const total: Assignment = { ...assignment('KPI-1', fixed), targetType: 'absolute', target: 500 };
+    const noDue = { ...values, issueDue: { date: null, source: 'pending' } } as const;
+    const signups = assemblePanel({ ...basis, own: [total], parentKpiIds: [] }, noDue).rows[0];
+    expect(signups.dueDate).toBe('2026-12-15');
+    expect(signups.displayState).toBe('projected');
+  });
+
   it('clearPanelResolving stops the shimmer and keeps the rows', () => {
     const cleared = clearPanelResolving(assemblePanel(basis, null));
     expect(cleared.resolving).toBeUndefined();

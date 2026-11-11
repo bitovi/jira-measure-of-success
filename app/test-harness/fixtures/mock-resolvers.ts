@@ -1,4 +1,5 @@
 import {
+  baselineDueEndpoint,
   dateFieldSelection,
   effectiveTiming,
   readOwnDates,
@@ -149,25 +150,6 @@ function targetContext(
 
 function resolveDate(assignment: Assignment, ctx: RelativeTargetContext) {
   return resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
-}
-
-/**
- * The endpoint the baseline is measured at — the DUE date the timing anchors to
- * (FR-4), before the offset. v1 only offers the `issueDueDate` anchor; other
- * anchors fall back to the resolved target date so absolute/fixed targets still
- * resolve a sensible baseline date.
- */
-function baselineDueEndpoint(
-  assignment: Assignment,
-  ctx: RelativeTargetContext,
-  targetDate: string | null,
-): ResolvedEndpoint {
-  const due = assignment.timing.due;
-  if (due.mode === 'relative' && due.anchor === 'issueDueDate') return ctx.issue.due;
-  if (due.mode === 'relative' && due.anchor === 'parentDueDate') {
-    return ctx.parent?.due ?? { date: null, source: 'pending' };
-  }
-  return { date: targetDate, source: 'own' };
 }
 
 // ── Issue panel ─────────────────────────────────────────────────────────────

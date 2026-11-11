@@ -12,7 +12,7 @@ import type { BaselineState } from './baseline';
  * `≈`/`~`, warning strip). No @forge/*, no React.
  *
  * The eight states (FR-26):
- *  1 projected        due date in the future
+ *  1 projected        due date in the future (and the target not yet judgeable)
  *  2 provisional      no due date (pending rollup)
  *  3 baselined        due date reached, a reading covers it
  *  4 needsMeasurement due date passed, no reading after it (stale baseline)
@@ -70,18 +70,24 @@ export function displayState(input: DisplayStateInput): {
 
   const todayT = ms(today);
   const dueT = ms(dueDate);
+  const targetT = targetDate !== null ? ms(targetDate) : null;
+  const targetPassed = targetT !== null && todayT >= targetT;
 
-  // 1 — due date is still in the future.
-  if (todayT < dueT) {
+  // 1 — due date is still in the future. A target dated BEFORE the due date
+  // (negative offset / early fixed date) can still be judged once its date
+  // passes — but only when its value is final (absolute, or a baseline that's
+  // already covered); a percent change on a future baseline is still projected.
+  if (todayT < dueT && !(targetPassed && valueState === 'baselined')) {
     return { state: 'projected', warning: null };
   }
 
-  // Due date has been reached or passed.
-  const targetPassed = targetDate !== null && todayT >= ms(targetDate);
-
   if (targetPassed) {
-    // 5/6/7 — the target date is in the past; try to judge the result.
-    const hasConfirming = readings.some((r) => ms(r.date) > dueT);
+    // 5/6/7 — the target date is in the past; try to judge the result. A
+    // confirming reading comes after the baseline (due date) — or, for a target
+    // dated before its due date, on/after the target date itself.
+    const hasConfirming = readings.some((r) =>
+      targetT! < dueT ? ms(r.date) >= targetT! : ms(r.date) > dueT,
+    );
     const actual = valueAt(readings, targetDate!);
     if (!hasConfirming || actual === null || target === null) {
       return { state: 'resultUnknown', warning: 'unconfirmedResult' };

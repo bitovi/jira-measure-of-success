@@ -81,3 +81,36 @@ describe('displayState — the 8 FR-26 states (§7-#9)', () => {
     ).toEqual({ state: 'needsBaseline', warning: 'needsBaseline' });
   });
 });
+
+describe('displayState — target dated before its due date (negative offset)', () => {
+  const early: DisplayStateInput = {
+    ...base,
+    today: '2027-12-15',
+    dueDate: '2027-12-31',
+    targetDate: '2027-11-30',
+    target: 100,
+  };
+
+  it('judges an absolute target once its date passes, even with the due date ahead', () => {
+    const readings = [r('2027-10-01', 90), r('2027-11-30', 105)];
+    expect(displayState({ ...early, readings })).toEqual({ state: 'met', warning: null });
+    expect(displayState({ ...early, readings, target: 110 })).toEqual({ state: 'missed', warning: null });
+  });
+
+  it('is resultUnknown when no reading lands on/after the passed target date', () => {
+    const readings = [r('2027-10-01', 90)];
+    expect(displayState({ ...early, readings })).toEqual({ state: 'resultUnknown', warning: 'unconfirmedResult' });
+  });
+
+  it('stays projected for a percent target whose baseline (due date) is still ahead', () => {
+    const readings = [r('2027-10-01', 90), r('2027-11-30', 105)];
+    expect(displayState({ ...early, valueState: 'provisional', readings })).toEqual({
+      state: 'projected',
+      warning: null,
+    });
+  });
+
+  it('stays projected before the target date', () => {
+    expect(displayState({ ...early, today: '2027-11-01' })).toEqual({ state: 'projected', warning: null });
+  });
+});

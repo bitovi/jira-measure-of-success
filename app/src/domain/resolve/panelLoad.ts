@@ -4,6 +4,7 @@ import type { ResolvedEndpoint } from './effectiveTiming';
 import { groupByRelationship } from './panelGrouping';
 import { resolvePanelTarget } from './panelTarget';
 import { resolveRelativeTargetDate, type RelativeTargetContext } from './relativeTargetDate';
+import { isBaselineRelative } from './relativeTargetValue';
 
 /**
  * Progressive issue panel (specs/07-issue-panel-performance).
@@ -24,11 +25,21 @@ export function needsParentDue(assignments: Assignment[]): boolean {
 
 const PENDING: ResolvedEndpoint = { date: null, source: 'pending' };
 
-/** The endpoint a target's baseline is measured at: the due date its timing anchors to. */
-function dueEndpointFor(a: Assignment, ctx: RelativeTargetContext, targetDate: string | null): ResolvedEndpoint {
+/**
+ * The due date a target's baseline is measured at (FR-4): the date its timing
+ * anchors to, or — for fixed-date timing — the issue's own (rolled-up) due date.
+ * Fixed-date ABSOLUTE targets need no baseline, so they keep the target date and
+ * stay independent of whether the issue has a due date.
+ */
+export function baselineDueEndpoint(
+  a: Pick<Assignment, 'targetType' | 'timing'>,
+  ctx: RelativeTargetContext,
+  targetDate: string | null,
+): ResolvedEndpoint {
   const due = a.timing.due;
   if (due.mode === 'relative' && due.anchor === 'issueDueDate') return ctx.issue.due;
   if (due.mode === 'relative' && due.anchor === 'parentDueDate') return ctx.parent?.due ?? PENDING;
+  if (isBaselineRelative(a.targetType)) return ctx.issue.due;
   return { date: targetDate, source: 'own' };
 }
 
@@ -84,7 +95,7 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
       return;
     }
     const targetDate = resolveRelativeTargetDate(a.timing.due, ctx, a.timing.start);
-    const dueEndpoint = dueEndpointFor(a, ctx, targetDate.date);
+    const dueEndpoint = baselineDueEndpoint(a, ctx, targetDate.date);
     const resolved = resolvePanelTarget({
       assignment: a,
       dueDate: dueEndpoint.date,
