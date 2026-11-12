@@ -108,11 +108,12 @@ describe('assemblePanel', () => {
     expect(cleared.rows.every((r) => r.resolving === undefined)).toBe(true);
   });
 
-  describe('a target on a KPI that is no longer in the catalog (deleted KPI)', () => {
+  describe('a target on a KPI that Jira confirmed deleted', () => {
     const orphaned: PanelBasis = {
       ...basis,
       own: [assignment('KPI-1', ownDue), assignment('KPI-9', ownDue)],
       parentKpiIds: ['KPI-9', 'KPI-8'],
+      deletedKpiIds: ['KPI-9', 'KPI-8'],
     };
 
     it.each([
@@ -143,6 +144,25 @@ describe('assemblePanel', () => {
     it("doesn't offer to track a parent's target on a deleted KPI", () => {
       const panel = assemblePanel(orphaned, values);
       expect(panel.rows.some((r) => r.kpiId === 'KPI-8')).toBe(false);
+    });
+  });
+
+  describe('a KPI missing from the catalog but not confirmed deleted (e.g. search-index lag)', () => {
+    const lagging: PanelBasis = {
+      ...basis,
+      own: [assignment('KPI-1', ownDue), assignment('KPI-9', ownDue)],
+      parentKpiIds: ['KPI-9', 'KPI-8'],
+    };
+
+    it('is not flagged as deleted', () => {
+      const row = assemblePanel(lagging, values).rows.find((r) => r.kpiId === 'KPI-9')!;
+      expect(row.kpiMissing).toBeUndefined();
+      expect(row).toMatchObject({ name: 'KPI-9', target: 10, relationship: 'shared' });
+    });
+
+    it("still offers to track the parent's target", () => {
+      const row = assemblePanel(lagging, values).rows.find((r) => r.kpiId === 'KPI-8');
+      expect(row).toMatchObject({ relationship: 'onParentNotTracked', target: null });
     });
   });
 });

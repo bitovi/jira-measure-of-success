@@ -95,7 +95,7 @@ export function ProjectionModal({
         </p>
         {target.provisional && (
           <p className="mt-1 text-[12px] text-text-subtle">
-            Provisional estimate — the baseline is carried from the latest reading and isn’t baselined yet.
+            Relative target — ≈ until the KPI’s value at the due date is recorded.
           </p>
         )}
         <a

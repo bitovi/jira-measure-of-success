@@ -46,6 +46,7 @@ describe('buildKpiTargets', () => {
         value: 100,
         status: 'hit',
         provisional: false,
+        relative: false,
         source: { issue: 'INIT-48', type: 'Initiative', title: 'Multi-store support', iconUrl: null },
       },
     ]);
@@ -98,6 +99,21 @@ describe('buildKpiTargets', () => {
     );
     expect(dated[0]?.value).toBe(300);
     expect(dated[0]?.provisional).toBe(true);
+  });
+
+  it('marks percent/relative targets `relative` even once the baseline is measured (no longer provisional)', () => {
+    // +10% on the value at the issue's due date (Jun 30, recorded: 200), due 3 months later.
+    const { dated } = buildKpiTargets(
+      [contribution({ due: '2026-06-30' }, assignment({ kpiId: 'r', targetType: 'percent', target: 10, timing: { start: null, due: relative('issueDueDate', 3) } }))],
+      [
+        { date: '2026-06-30', value: 200 },
+        { date: '2026-07-05', value: 205 },
+      ],
+      'increase',
+      TODAY,
+    );
+    expect(dated[0]).toMatchObject({ date: '2026-09-30', status: 'upcoming', provisional: false, relative: true });
+    expect(dated[0]?.value).toBeCloseTo(220, 6);
   });
 
   it('routes a pending-date target into the undated lane (FR-24)', () => {

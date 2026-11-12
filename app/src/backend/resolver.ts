@@ -19,7 +19,7 @@ import {
   type PanelListData,
   type PanelParts,
   type PanelValuesData,
-  type RecordValueInput,
+  RecordValueInput,
   type ResolvedEndpoint,
   type TargetContributionsByKpi,
   type TargetSourceIssue,
@@ -30,6 +30,7 @@ import {
 import {
   fetchAssignments,
   fetchDateFieldCatalog,
+  fetchDeletedIssueKeys,
   fetchHierarchyLevels,
   fetchIssueWithAssignments,
   fetchKpiSpaceIssues,
@@ -200,13 +201,20 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
   }
 
   const [kpiIssues, parentKpiIds] = await Promise.all([kpiIssuesP, parentKpiIdsP]);
+  const catalog = buildKpiCatalog(kpiIssues);
+  const known = new Set(catalog.map((c) => c.id));
+  // Only check the (rare) targeted KPIs the catalog doesn't list: they may be
+  // deleted, or just too new for the search index.
+  const unlisted = [...issue.assignments.map((a) => a.kpiId), ...parentKpiIds].filter((id) => !known.has(id));
+  const deletedKpiIds = unlisted.length ? await stage('deletedKpis', () => fetchDeletedIssueKeys(unlisted)) : [];
   return {
     basis: {
       issueKey: issue.issueKey,
       closed: issue.closed,
       own: issue.assignments,
       parentKpiIds: [...new Set(parentKpiIds)],
-      catalog: buildKpiCatalog(kpiIssues),
+      catalog,
+      ...(deletedKpiIds.length ? { deletedKpiIds } : {}),
     },
   };
 }
@@ -550,7 +558,7 @@ define('getTimelineData', async () => buildTimelineData());
 // the same edit to the series it already holds (applyReadingEdits) instead of
 // waiting on a rebuilt timeline or panel.
 define('recordValue', async ({ payload }) => {
-  const { kpiId, date, value } = payload as RecordValueInput;
+  const { kpiId, date, value } = RecordValueInput.parse(payload);
   // Readings are KPI-global (storage-model.md): kpiId identifies the KPI issue
   // whose reading-field changelog holds the series. value=null tombstones a date.
   await writeReading(kpiId, date, value);

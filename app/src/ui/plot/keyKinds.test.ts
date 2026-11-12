@@ -9,6 +9,7 @@ const target = (over: Partial<TimelineTargetDto> = {}): TimelineTargetDto => ({
   value: 10,
   status: 'upcoming',
   provisional: false,
+  relative: false,
   source: { issue: 'A-1', type: 'Epic', title: 'Bet', iconUrl: DATA_ICON },
   ...over,
 });
@@ -34,9 +35,15 @@ describe('targetKeyKinds', () => {
     expect(targetKeyKinds(target({ status: 'missed', provisional: true }))).toEqual(['missed', 'type:Epic']);
   });
 
-  it('splits upcoming into fixed vs relative by whether the value is an estimate', () => {
+  it('splits upcoming into fixed vs relative by target type', () => {
     expect(targetKeyKinds(target())).toEqual(['upcoming-fixed', 'type:Epic']);
-    expect(targetKeyKinds(target({ provisional: true }))).toEqual(['upcoming-relative', 'type:Epic']);
+    expect(targetKeyKinds(target({ relative: true, provisional: true }))).toEqual(['upcoming-relative', 'type:Epic']);
+  });
+
+  it('keeps a relative target whose baseline is already measured (not an estimate) under "relative"', () => {
+    // e.g. +10% over the Sep 30 value, due Dec 31: Sep 30 is recorded, so the
+    // value is final, but the target is still relative and still upcoming.
+    expect(targetKeyKinds(target({ relative: true, provisional: false }))).toEqual(['upcoming-relative', 'type:Epic']);
   });
 
   it('puts undated targets under "undated" plus their type', () => {
@@ -63,11 +70,11 @@ describe('summarizeKey', () => {
         targets: [
           target({ status: 'hit' }),
           target({ status: 'missed', source: story }),
-          target({ provisional: true }),
-          target({ provisional: true, source: story }),
+          target({ relative: true, provisional: true }),
+          target({ relative: true, source: story }),
           target({ source: story }),
         ],
-        undated: [target({ date: null, provisional: true, source: story })],
+        undated: [target({ date: null, relative: true, provisional: true, source: story })],
       }),
       node('b', { readings: [{ date: '2026-01-01', value: 1 }] }),
     ]);

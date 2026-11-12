@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
 import { within, userEvent, expect } from '@storybook/test';
 import { Dimmable, KeyHighlightProvider } from '../highlight.js';
@@ -32,11 +33,18 @@ const MARKS: Array<{ id: string; kinds: KeyKind[]; status: 'hit' | 'missed' | 'u
   { id: 'relative', kinds: ['upcoming-relative', 'type:Epic'], status: 'upcoming', provisional: true },
 ];
 
-function Harness({ summary }: { summary: KeySummary }) {
-  const highlight = useKeyHighlight();
+/** `next`, when given, adds a "Change data" button that swaps the summary (e.g. a filter change). */
+function Harness({ summary: initial, next }: { summary: KeySummary; next?: KeySummary }) {
+  const [summary, setSummary] = useState(initial);
+  const highlight = useKeyHighlight(summary);
   return (
     <KeyHighlightProvider active={highlight.active}>
       <div className="p-4 text-text">
+        {next && (
+          <button type="button" className="mb-2 text-xs underline" onClick={() => setSummary(next)}>
+            Change data
+          </button>
+        )}
         <PlotKey summary={summary} highlight={highlight} className="rounded border border-border" />
         <div className="mt-6 flex items-center gap-8">
           {MARKS.map((m) => (
@@ -139,5 +147,21 @@ export const HighlightAndPin: Story = {
     await userEvent.click(c.getByRole('button', { name: 'Clear highlight' }));
     await expect(c.getByTestId('active')).toHaveTextContent('none');
     await expect(c.queryByRole('button', { name: 'Clear highlight' })).toBeNull();
+  },
+};
+
+/** A pinned entry that disappears (e.g. filtered out) is unpinned, so nothing stays dimmed. */
+export const PinnedEntryDisappears: Story = {
+  args: { next: { ...FULL, types: FULL.types.filter((t) => t.type !== 'Epic') } },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Epic/ }));
+    await userEvent.unhover(c.getByRole('button', { name: /Epic/ }));
+    await expect(c.getByTestId('active')).toHaveTextContent('type:Epic');
+
+    await userEvent.click(c.getByRole('button', { name: 'Change data' }));
+    await expect(c.queryByRole('button', { name: /Epic/ })).toBeNull();
+    await expect(c.getByTestId('active')).toHaveTextContent('none');
+    await expect(opacityOf(c.getByTestId('mark-missed'))).toBe('');
   },
 };

@@ -8,9 +8,9 @@ import type { TimelineNodeDto, TimelineTargetDto } from '@domain/index.js';
  * Target kinds:
  *  - `hit` / `missed` — the target's status (a past-due relative target that is
  *    still an estimate keeps its hit/missed status; its error bar says "may change");
- *  - `upcoming-fixed` / `upcoming-relative` — upcoming targets split by whether the
- *    value is an estimate. A future relative target is always an estimate and a
- *    fixed target never is, so `provisional` cleanly separates the two;
+ *  - `upcoming-fixed` / `upcoming-relative` — upcoming targets split by target type
+ *    (`relative`). Not by `provisional`: a relative target whose baseline is already
+ *    recorded is no longer an estimate (no error bar) but is still relative;
  *  - `undated` — pending targets shown in the Undated lane (counted only there);
  *  - `type:<issue type>` — the source issue's type, for the per-type entries.
  */
@@ -34,7 +34,7 @@ export function targetKeyKinds(t: TimelineTargetDto): KeyKind[] {
       ? 'hit'
       : t.status === 'missed'
         ? 'missed'
-        : t.provisional
+        : t.relative
           ? 'upcoming-relative'
           : 'upcoming-fixed';
   return [status, typeKind(t.source.type)];
@@ -116,4 +116,14 @@ export function summarizeKey(nodes: readonly TimelineNodeDto[]): KeySummary {
     counts,
     types: [...types.values()].sort((a, b) => b.count - a.count || a.type.localeCompare(b.type)),
   };
+}
+
+/** Every kind the key bar lists an entry for, given its summary. */
+export function listedKeyKinds(summary: KeySummary): Set<KeyKind> {
+  const kinds = new Set<KeyKind>();
+  if (summary.recorded) kinds.add('recorded');
+  if (summary.projection) kinds.add('projection');
+  for (const [kind, count] of Object.entries(summary.counts)) if (count > 0) kinds.add(kind as KeyKind);
+  for (const t of summary.types) kinds.add(typeKind(t.type));
+  return kinds;
 }

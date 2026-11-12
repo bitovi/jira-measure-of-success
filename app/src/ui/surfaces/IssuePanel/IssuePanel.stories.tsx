@@ -148,6 +148,7 @@ const KPI_NODE: TimelineNodeDto = {
       value: 1_400_000,
       status: 'upcoming',
       provisional: false,
+      relative: false,
       source: { issue: 'OUT-12', type: 'Outcome', title: 'Grow Revenue', iconUrl: null },
     },
   ],

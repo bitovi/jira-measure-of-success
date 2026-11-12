@@ -1,12 +1,12 @@
 import type {
   CreatedKpi,
   KpiViewDto,
-  RecordValueInput,
   TimelineData,
   TimelineNodeDto,
   TimelineReadingDto,
   TimelineTargetDto,
 } from '../contracts';
+import type { RecordValueInput } from '../models/index';
 import { buildKpiTargets, type KpiTargetContribution } from './timelineTargets';
 
 /**

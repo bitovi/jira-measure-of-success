@@ -42,8 +42,8 @@ const POPULATED: TimelineData = {
         { date: '2026-07-06', value: 1_243_000 },
       ],
       targets: [
-        { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
       ],
       children: [
         node({
@@ -62,6 +62,7 @@ const POPULATED: TimelineData = {
               value: 11_500,
               status: 'upcoming',
               provisional: false,
+              relative: false,
               source: { ...src('INIT-48', 'Initiative', 'Expand Orders'), iconUrl: null },
             },
           ],
@@ -88,10 +89,10 @@ const PROJECTIONS: TimelineData = {
       unit: 'USD',
       readings: [{ date: '2026-06-01', value: 1_326_000 }],
       targets: [
-        { date: '2026-09-30', value: 1_339_000, status: 'upcoming', provisional: true, source: src('INIT-48', 'Initiative', '+1% 3mo after due') },
+        { date: '2026-09-30', value: 1_339_000, status: 'upcoming', provisional: true, relative: true, source: src('INIT-48', 'Initiative', '+1% 3mo after due') },
       ],
       undated: [
-        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
+        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, relative: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
       ],
     }),
   ],

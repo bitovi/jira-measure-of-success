@@ -116,7 +116,7 @@ export function KpiView({
 
   // Key bar (spec 08) — the same shared key as the Timeline, for this one KPI.
   const keySummary = useMemo(() => summarizeKey([node]), [node]);
-  const highlight = useKeyHighlight();
+  const highlight = useKeyHighlight(keySummary);
 
   // Recency-weighted forward projection of the recorded readings (null with < 2
   // readings — no trend to draw).

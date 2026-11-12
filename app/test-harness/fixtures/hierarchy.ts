@@ -244,6 +244,8 @@ export interface TimelineTargetFixture {
   value: number;
   /** true = a provisional estimate (baseline not yet baselined) */
   provisional?: boolean;
+  /** true = a percent/relative target; defaults to `provisional` (estimates are relative) */
+  relative?: boolean;
   source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 

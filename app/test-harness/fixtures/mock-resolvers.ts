@@ -323,6 +323,10 @@ export function getPanelList(issueId: string): PanelListData {
       own: issue.assignments,
       parentKpiIds: [...new Set((parent?.assignments ?? []).map((a) => a.kpiId))],
       catalog: catalogDto().map((c) => ({ ...c, currentValue: null })),
+      // The harness has no search-index lag: a targeted KPI outside the catalog is deleted.
+      deletedKpiIds: [
+        ...new Set([...issue.assignments, ...(parent?.assignments ?? [])].map((a) => a.kpiId)),
+      ].filter((id) => !CATALOG.some((k) => k.id === id)),
     },
   };
 }
@@ -412,13 +416,14 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
   for (const t of node.targets) {
     const src = { ...t.source, iconUrl: t.source.iconUrl ?? issueTypeIconUri(t.source.type) };
     if (t.date === null) {
-      undated.push({ date: null, value: t.value, status: 'upcoming', provisional: t.provisional ?? false, source: src });
+      undated.push({ date: null, value: t.value, status: 'upcoming', provisional: t.provisional ?? false, relative: t.relative ?? t.provisional ?? false, source: src });
     } else {
       dated.push({
         date: t.date,
         value: t.value,
         status: targetStatus({ date: t.date, value: t.value }, readings, node.direction, TODAY),
         provisional: t.provisional ?? false,
+        relative: t.relative ?? t.provisional ?? false,
         source: src,
       });
     }

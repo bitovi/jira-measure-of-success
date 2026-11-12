@@ -300,14 +300,30 @@ export interface MockJira {
   requestJira(route: unknown, init?: { method?: string; body?: unknown }): Promise<MockResponse>;
   /** requests that hit no mock handler (should stay empty) */
   unhandled: string[];
+  /** every non-GET request, in order (`METHOD path`) */
+  writes: string[];
+  /**
+   * Answer a request before the mock handlers do (return undefined to fall
+   * through) — e.g. to make a write fail.
+   */
+  intercept?: (method: string, path: string, body: unknown, raw: string) => { status: number; body?: unknown } | undefined;
 }
+
+export { respond as mockResponse };
 
 export function createMockJira(fixture: ScaleFixture): MockJira {
   const unhandled: string[] = [];
+  const writes: string[] = [];
+  const findIssue = (idOrKey: string) =>
+    fixture.issues.get(idOrKey) ?? [...fixture.issues.values()].find((i) => i.key === idOrKey);
+  let nextIssueId = 900_000;
 
   const handle = (method: string, raw: string, body: unknown): MockResponse => {
     const [path, query = ''] = raw.split('?');
     const params = new URLSearchParams(query);
+    if (method !== 'GET') writes.push(`${method} ${path}`);
+    const intercepted = mock.intercept?.(method, path, body, raw);
+    if (intercepted) return respond(intercepted.status, intercepted.body ?? {});
 
     if (method === 'GET' && path === '/rest/api/3/field') {
       return respond(200, [
@@ -367,6 +383,56 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       });
     }
 
+    if (prop && method === 'PUT') {
+      const issue = findIssue(decodeURIComponent(prop[1]));
+      if (!issue) return respond(404, { errorMessages: ['not found'] });
+      issue.properties[decodeURIComponent(prop[2])] = JSON.parse(String(body));
+      return respond(200);
+    }
+
+    if (method === 'POST' && path === '/rest/api/3/issue') {
+      const req = JSON.parse(String(body)) as {
+        fields: { summary: string };
+        properties?: Array<{ key: string; value: unknown }>;
+      };
+      const id = String(nextIssueId++);
+      const key = `${KPI_PROJECT.key}-${fixture.kpiIds.length + 1}`;
+      fixture.issues.set(id, {
+        id,
+        key,
+        type: 'KPI',
+        summary: req.fields.summary,
+        parentId: null,
+        due: null,
+        start: null,
+        kpiParentId: null,
+        properties: Object.fromEntries((req.properties ?? []).map((p) => [p.key, p.value])),
+      });
+      fixture.kpiIds.push(id);
+      return respond(201, { id, key });
+    }
+
+    if (method === 'POST' && path === '/rest/api/3/issueLink') {
+      const req = JSON.parse(String(body)) as { outwardIssue: { key: string }; inwardIssue: { key: string } };
+      const parent = findIssue(req.outwardIssue.key);
+      const child = findIssue(req.inwardIssue.key);
+      if (!parent || !child) return respond(404, { errorMessages: ['Issue does not exist'] });
+      child.kpiParentId = parent.id;
+      return respond(201);
+    }
+
+    if (single && method === 'DELETE') {
+      const issue = findIssue(decodeURIComponent(single[1]));
+      if (!issue) return respond(404, { errorMessages: ['not found'] });
+      fixture.issues.delete(issue.id);
+      fixture.kpiIds = fixture.kpiIds.filter((id) => id !== issue.id);
+      return respond(204);
+    }
+
+    if (method === 'PUT' && path === `/rest/api/3/app/field/${READING_FIELD_ID}/value`) {
+      return respond(204);
+    }
+
     if (method === 'GET' && path.startsWith('/rest/api/2/universal_avatar/')) {
       return respond(200, {}, 'image/svg+xml');
     }
@@ -375,9 +441,10 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     return respond(404, { errorMessages: [`[mockJira] unhandled ${method} ${path}`] });
   };
 
-  return {
+  const mock: MockJira = {
     fixture,
     unhandled,
+    writes,
     async requestJira(route, init) {
       if (fixture.options.latencyMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, fixture.options.latencyMs));
@@ -386,6 +453,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       return handle((init?.method ?? 'GET').toUpperCase(), raw, init?.body);
     },
   };
+  return mock;
 }
 
 /** `@forge/api` stand-ins that build routes like the real module (query params URI-encoded). */

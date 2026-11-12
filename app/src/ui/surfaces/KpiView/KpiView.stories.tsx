@@ -40,9 +40,9 @@ const REVENUE = node({
     { date: '2026-07-06', value: 1_243_000 },
   ],
   targets: [
-    { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-    { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-    { date: '2026-12-20', value: 1_500_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+    { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+    { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+    { date: '2026-12-20', value: 1_500_000, status: 'upcoming', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
   ],
 });
 
@@ -107,7 +107,7 @@ export const Undated: Story = {
       unit: 'USD',
       readings: [{ date: '2026-06-01', value: 1_326_000 }],
       undated: [
-        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
+        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, relative: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
       ],
     }),
   },

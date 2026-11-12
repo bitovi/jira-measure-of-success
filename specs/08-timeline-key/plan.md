@@ -62,8 +62,10 @@ always visible, with no hide/show.
 | Fixed targets, and relative targets already measured | Plain issue icon (no fade, no bar). |
 
 **Naming.** The key says **Upcoming (fixed)** and **Upcoming (relative)**, and "Provisional" is dropped
-from the UI. This is accurate: a future relative target is always an estimate, and a fixed target
-never is. So among upcoming targets, "relative" and "has an error bar" mean the same thing.
+from the UI. Upcoming targets are split by **target type** (`TimelineTargetDto.relative`), not by
+whether the value is an estimate: a relative target stops being an estimate (and loses its error bar)
+once its baseline is recorded, but it is still relative. The key's "Upcoming (relative)" sample shows
+the error bar because most upcoming relative targets are still estimates.
 The ≈ sign stays in tooltips, undated chips and the projection popup.
 
 **Edge case (accepted as is):** a past-due relative target with no value recorded on or after its due

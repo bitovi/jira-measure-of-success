@@ -123,6 +123,12 @@ export interface PanelBasis {
   parentKpiIds: string[];
   /** the KPI picker catalog, without `currentValue` (that needs readings) */
   catalog: CatalogEntryDto[];
+  /**
+   * Targeted KPI ids (own or parent's) that Jira confirmed no longer exist. A KPI
+   * merely missing from the catalog isn't enough — the search index lags new
+   * KPIs — so only these are shown as "KPI deleted".
+   */
+  deletedKpiIds?: string[];
 }
 
 /**
@@ -183,6 +189,12 @@ export interface TimelineTargetDto {
   status: TargetStatus;
   /** true = an estimate (baseline not yet baselined); rendered distinct (FR-23) */
   provisional: boolean;
+  /**
+   * true = a percent/relative change on a baseline, false = a fixed value. Not the
+   * same as `provisional`: a relative target stops being an estimate once its
+   * baseline is recorded, but it's still a relative target.
+   */
+  relative: boolean;
   source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 
@@ -240,17 +252,7 @@ export interface KpiSpaceStatus {
   state: KpiSpaceState;
 }
 
-/**
- * `recordValue` input: record a reading on a KPI, or with `value: null` delete
- * the reading at that date. The resolver returns nothing — readings are
- * last-write-wins per date, so the client applies the same edit to the series it
- * already holds (`applyReadingEdits`).
- */
-export interface RecordValueInput {
-  kpiId: string;
-  date: string;
-  value: number | null;
-}
+// `RecordValueInput` (the recordValue payload) is a Zod schema: see models/kpiReading.
 
 /** Input for creating a KPI (an issue in the KPI space). Nest by parentKpiId. */
 export interface CreateKpiInput {

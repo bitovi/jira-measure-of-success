@@ -174,12 +174,16 @@ export async function writeAssignments(issueId: string, assignments: Assignment[
     assignments,
     kpiIds: [...new Set(assignments.map((a) => a.kpiId))],
   });
-  await asUser()
+  const res = await asUser()
     .requestJira(route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(value),
     });
+  // Surface rejections (e.g. 403 when the user can view but not edit the issue):
+  // callers return the saved target and the client keeps it, so a swallowed
+  // failure would show an unsaved target as saved.
+  if (!res.ok) throw new Error(await jiraError(res, `save targets on issue ${issueId}`));
 }
 
 /**
@@ -592,7 +596,9 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
           ? route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
           : route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100`,
       );
-    if (!res.ok) break;
+    // Fail loudly rather than return a partial list: callers treat a KPI that's
+    // absent here as non-existent (catalog, timeline tree).
+    if (!res.ok) throw new Error(await jiraError(res, `list the KPIs in project ${projectKey}`));
     const data = (await res.json()) as {
       isLast?: boolean;
       nextPageToken?: string;
@@ -1039,7 +1045,20 @@ export async function createKpiIssue(projectId: string, input: CreateKpiInput): 
   }
   const created = (await res.json()) as { id: string; key: string };
   const parentKpiId = input.parentKpiId ?? null;
-  if (parentKpiId) await linkKpiParent(parentKpiId, created.key);
+  // The link can't ride in the create request: Jira silently drops
+  // `update.issuelinks` there (verified by the live E2E). So undo the create if
+  // the link fails. Otherwise an orphan root KPI is left behind, and retrying the
+  // (still open) modal would create a duplicate.
+  if (parentKpiId) {
+    try {
+      await linkKpiParent(parentKpiId, created.key);
+    } catch (err) {
+      await deleteIssue(created.key).catch(() => {
+        throw new Error(`${(err as Error).message}. ${created.key} was created without its parent; delete it in Jira.`);
+      });
+      throw err;
+    }
+  }
   return {
     id: String(created.id),
     kpiId: created.key,
@@ -1072,14 +1091,26 @@ export async function linkKpiParent(parentKpiKey: string, childKpiKey: string): 
   }
 }
 
-/** Persist a KPI's unit/direction as the `kpi-meta` entity property. */
-export async function writeKpiMeta(kpiIssueKey: string, meta: KpiMetaProperty): Promise<void> {
-  const value: unknown = KpiMetaProperty.parse(meta);
-  await asApp().requestJira(route`/rest/api/3/issue/${kpiIssueKey}/properties/${KPI_META_PROPERTY_KEY}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(value),
-  });
+/** Delete an issue (used to roll back a half-created KPI). */
+async function deleteIssue(issueKey: string): Promise<void> {
+  const res = await asApp().requestJira(route`/rest/api/3/issue/${issueKey}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(await jiraError(res, `delete issue ${issueKey}`));
+}
+
+/**
+ * Of the given issue keys, the ones Jira says no longer exist (404). Any other
+ * outcome — found, or a transient error — counts as "not deleted", so a hiccup
+ * never makes the panel offer to remove a target on a live KPI.
+ */
+export async function fetchDeletedIssueKeys(keys: string[]): Promise<string[]> {
+  const unique = [...new Set(keys)];
+  const deleted = await Promise.all(
+    unique.map(async (key) => {
+      const res = await asApp().requestJira(route`/rest/api/3/issue/${key}?fields=summary`);
+      return res.status === 404 ? key : null;
+    }),
+  );
+  return deleted.filter((k): k is string => k !== null);
 }
 
 /** Read a KPI's unit/direction from the `kpi-meta` entity property (null if unset). */

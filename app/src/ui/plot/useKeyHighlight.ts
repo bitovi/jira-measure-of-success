@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import type { KeyKind } from './keyKinds.js';
+import { listedKeyKinds, type KeyKind, type KeySummary } from './keyKinds.js';
 
 /**
  * Key-bar highlight state (spec 08). The surface owns it (`useKeyHighlight`): a
@@ -33,9 +33,18 @@ export interface KeyHighlight {
   clear: () => void;
 }
 
-export function useKeyHighlight(): KeyHighlight {
+/**
+ * `summary` is what the key bar currently lists. A pinned (or hovered) kind whose
+ * entry disappears — e.g. the project filter removes every Epic — is dropped, so
+ * the chart never stays dimmed with no pressed entry (or no bar) to clear it.
+ */
+export function useKeyHighlight(summary: KeySummary): KeyHighlight {
   const [hovered, setHovered] = useState<KeyKind | null>(null);
   const [pinned, setPinned] = useState<KeyKind | null>(null);
+  const listed = useMemo(() => listedKeyKinds(summary), [summary]);
+  // Adjusting state during render (not in an effect) avoids a frame of stale dimming.
+  if (pinned !== null && !listed.has(pinned)) setPinned(null);
+  if (hovered !== null && !listed.has(hovered)) setHovered(null);
   const togglePin = useCallback((kind: KeyKind) => setPinned((p) => (p === kind ? null : kind)), []);
   const clear = useCallback(() => setPinned(null), []);
   return useMemo(

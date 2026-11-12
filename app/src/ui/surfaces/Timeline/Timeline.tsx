@@ -274,7 +274,7 @@ export function Timeline({
   // Key bar (spec 08): counts follow the project filter and include collapsed
   // descendants, so expanding/collapsing rows never changes them.
   const keySummary = useMemo(() => summarizeKey(flattenNodes(filteredRoots)), [filteredRoots]);
-  const highlight = useKeyHighlight();
+  const highlight = useKeyHighlight(keySummary);
 
   const toggleCollapse = (id: string) =>
     setCollapsed((s) => {
