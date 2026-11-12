@@ -4,7 +4,9 @@ import Lozenge from '@atlaskit/lozenge';
 import Select from '@atlaskit/select';
 import {
   DEFAULT_KPI_LINK_TYPE,
+  defaultParentEnd,
   describeParentEnd,
+  findAppLinkType,
   isDirectionalLinkType,
   type IssueLinkTypeInfo,
   type KpiHierarchyStatus,
@@ -53,7 +55,8 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
   const [type, setType] = useState<IssueLinkTypeInfo | null>(initialType);
   const [parentEnd, setParentEnd] = useState<KpiParentEnd>(hierarchy.parentEnd);
   const badge = BADGE[hierarchy.state];
-  const appTypeExists = hierarchy.available.some(isAppType);
+  const appType = findAppLinkType(hierarchy.available);
+  const appTypeExists = appType !== null;
 
   const run = async (which: 'create' | 'save') => {
     setBusy(which);
@@ -83,6 +86,18 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
   const typeOptions: TypeOption[] = directional.map((t) => ({ label: t.name, value: t.id, type: t }));
   const unchanged =
     hierarchy.state === 'ready' && type?.id === hierarchy.linkTypeId && parentEnd === hierarchy.parentEnd;
+
+  // What the "Use / Create KPI Hierarchy" button applies (the resolver's
+  // provisionDefaultHierarchy): the app type, with the direction its labels imply.
+  const defaultEnd = defaultParentEnd(appType);
+  const defaultIsCurrent =
+    hierarchy.state === 'ready' && appType !== null && appType.id === hierarchy.linkTypeId && defaultEnd === hierarchy.parentEnd;
+  const defaultWarning =
+    hierarchy.state !== 'ready' || defaultIsCurrent
+      ? null
+      : appType !== null && appType.id === hierarchy.linkTypeId
+        ? `This button also resets the direction: KPIs already nested will be read the other way round — parents become children.`
+        : `Switching to “${DEFAULT_KPI_LINK_TYPE.name}”: KPIs already nested with ${hierarchy.linkType?.name} links will lose their nesting.`;
 
   return (
     <section className="mt-6 rounded-lg border border-border bg-surface">
@@ -128,7 +143,7 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
                 <Button
                   appearance="primary"
                   onClick={() => run('create')}
-                  isDisabled={busy !== null}
+                  isDisabled={busy !== null || defaultIsCurrent}
                   isLoading={busy === 'create'}
                 >
                   {appTypeExists
@@ -138,7 +153,9 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
               </div>
               <span className="text-xs text-text-subtle">
                 Reads “Revenue {DEFAULT_KPI_LINK_TYPE.outward} New Bookings” in Jira. Recommended.
+                {defaultIsCurrent && ' Already in use.'}
               </span>
+              {defaultWarning && <p className="mt-1 text-xs text-warning">{defaultWarning}</p>}
             </div>
 
             <div className="mt-5 border-t border-border pt-4">

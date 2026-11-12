@@ -48,15 +48,55 @@ export interface DisplayStateInput {
   direction: KpiDirection | null;
   /** the resolved target value, for met/missed comparison; null when no baseline */
   target: number | null;
+  /**
+   * true for a fixed-value (`absolute`) target. It has no baseline, so it's judged
+   * by the first reading ON or AFTER its target date (see `resultReading`).
+   */
+  fixedValue?: boolean;
 }
 
 const ms = (iso: IsoDate): number => new Date(iso).getTime();
+
+/**
+ * The reading a past target is judged by — one rule for the issue panel, the
+ * timeline marker and its tooltip.
+ *
+ *  - **Fixed value** (`absolute`): the first reading on or after the target date.
+ *    A reading on the date counts; one before it doesn't (the value could have
+ *    changed by the date).
+ *  - **% / amount change**: any reading after the baseline (due date) confirms —
+ *    or, for a target dated before its due date, on/after the target date — and
+ *    the value in effect at the target date is compared.
+ *
+ * `confirmed` is false when no reading qualifies (→ resultUnknown).
+ */
+export function resultReading(
+  readings: readonly DatedValue[],
+  targetDate: IsoDate,
+  dueDate: IsoDate | null,
+  fixedValue: boolean,
+): { confirmed: boolean; actual: number | null } {
+  const targetT = ms(targetDate);
+  if (fixedValue) {
+    let first: DatedValue | null = null;
+    for (const r of readings) {
+      const t = ms(r.date);
+      if (t >= targetT && (first === null || t <= ms(first.date))) first = r;
+    }
+    return first ? { confirmed: true, actual: first.value } : { confirmed: false, actual: null };
+  }
+  const actual = valueAt(readings, targetDate);
+  if (dueDate === null) return { confirmed: false, actual };
+  const dueT = ms(dueDate);
+  const confirmed = readings.some((r) => (targetT < dueT ? ms(r.date) >= targetT : ms(r.date) > dueT));
+  return { confirmed, actual };
+}
 
 export function displayState(input: DisplayStateInput): {
   state: DisplayState;
   warning: TargetWarning;
 } {
-  const { valueState, today, dueDate, targetDate, readings, direction, target } = input;
+  const { valueState, today, dueDate, targetDate, readings, direction, target, fixedValue = false } = input;
 
   // 8 — zero readings: no baseline, never a fabricated number.
   if (valueState === 'needsBaseline') {
@@ -82,14 +122,9 @@ export function displayState(input: DisplayStateInput): {
   }
 
   if (targetPassed) {
-    // 5/6/7 — the target date is in the past; try to judge the result. A
-    // confirming reading comes after the baseline (due date) — or, for a target
-    // dated before its due date, on/after the target date itself.
-    const hasConfirming = readings.some((r) =>
-      targetT! < dueT ? ms(r.date) >= targetT! : ms(r.date) > dueT,
-    );
-    const actual = valueAt(readings, targetDate!);
-    if (!hasConfirming || actual === null || target === null) {
+    // 5/6/7 — the target date is in the past; judge it by `resultReading`.
+    const { confirmed, actual } = resultReading(readings, targetDate!, dueDate, fixedValue);
+    if (!confirmed || actual === null || target === null) {
       return { state: 'resultUnknown', warning: 'unconfirmedResult' };
     }
     const met = direction === 'decrease' ? actual <= target : actual >= target;

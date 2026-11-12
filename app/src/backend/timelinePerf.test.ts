@@ -138,11 +138,12 @@ describe('getTimelineData at scale', () => {
 
     // Changed by spec 08 (targets carry `relative`); identical to the previous digest with it stripped.
     // Changed by spec 09 (same-level relative targets stack); identical to the previous digest with chains disabled.
+    // Changed by PR #3 review (marker status uses the shared displayState rule); identical to the previous digest with `status` stripped.
     // `detail` (the tooltip's bet + resolution) is left out so this still guards the rest of the output.
     const digest = createHash('sha256')
       .update(JSON.stringify(data, (key, value) => (key === 'detail' ? undefined : value)))
       .digest('hex');
-    expect(digest).toMatchInlineSnapshot(`"0e0631704229daa51ef39d7ce15e64cdc1261f0ee4308fc1b69e6b841dc2ed4b"`);
+    expect(digest).toMatchInlineSnapshot(`"d1eb83616cf65f687391c5f7297dc8cb1cb2e9ca27f449acf3b3db414fdbe0ad"`);
   });
 
   it('the contributions search asks for the kpi-assignments property and never reads it per issue', async () => {

@@ -167,101 +167,115 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
           />
         )}
 
-        {/* Date Rollup card */}
-        <section className="mt-6 rounded-lg border border-border bg-surface">
-          <header className="flex items-center gap-2 border-b border-border px-5 py-3">
-            <h2 className="text-base font-semibold">Date Rollup</h2>
-          </header>
-          <div className="px-5 py-4">
-            <p className="mb-4 text-sm text-text-subtle">
-              Levels are read at runtime from the site's issue-type configuration — nothing is
-              hard-coded.
+        {/* Date Rollup card. Without the site's levels (the issue-type lookup failed) there's
+            nothing to configure, and saving would overwrite the stored settings, so explain
+            instead — the KPI space and hierarchy cards above still work. */}
+        {levels.length === 0 ? (
+          <section className="mt-6 rounded-lg border border-border bg-surface">
+            <header className="flex items-center gap-2 border-b border-border px-5 py-3">
+              <h2 className="text-base font-semibold">Date Rollup</h2>
+            </header>
+            <p className="px-5 py-4 text-sm text-text-subtle">
+              Couldn’t read this site’s issue types, so date rollup settings can’t be shown. Your saved
+              settings are unchanged. Reload the page to try again.
             </p>
-
-            {/* Which fields hold each level's own dates */}
-            {dateFields && (
-              <div className="mb-6 border-b border-border pb-6">
-                <h3 className="text-sm font-medium">Date fields</h3>
-                <p className="mb-3 mt-0.5 text-sm text-text-subtle">
-                  Which Jira fields hold each level's start and end dates.
-                </p>
-                <DateFieldsTable
-                  levels={levels}
-                  fields={dateFields.fields}
-                  value={fields}
-                  onChange={setLevelFields}
-                />
-              </div>
-            )}
-
-            {/* Whose dates win between a parent and its children */}
-            <h3 className="text-sm font-medium">Parent vs. children</h3>
-            <p className="mb-2 mt-0.5 text-sm text-text-subtle">
-              Which dates are prioritized between a parent and its children?
-            </p>
-            <div className="flex flex-col gap-2">
-              <div className="py-2 text-sm font-medium">{levelLabel(levels[0])}</div>
-              {levels.slice(0, -1).map((lvl, i) => {
-                const level = levelKey(lvl.level);
-                const child = levels[i + 1];
-                const labels = labelsFor(lvl.name, child.name);
-                return (
-                  <div key={level} className="flex flex-row" style={{ paddingLeft: i * 32 }}>
-                    <div className="mb-4 w-6 flex-none rounded-bl-lg border-b-2 border-l-2 border-border">
-                      &nbsp;
-                    </div>
-                    <div className="flex w-full flex-col">
-                      <Select<SelectOption>
-                        aria-label={`Due date rollup for ${levelLabel(lvl)} and ${levelLabel(child)}`}
-                        options={METHOD_ORDER.map((m) => ({ label: labels[m], value: m }))}
-                        value={{
-                          label: labels[methods[level] ?? DEFAULT_ROLLUP_METHOD],
-                          value: methods[level] ?? DEFAULT_ROLLUP_METHOD,
-                        }}
-                        onChange={(o) => o && setMethod(level, o.value as RollupMethod)}
-                        isSearchable={false}
-                      />
-                      <div className="p-2 pt-4 text-sm font-medium">{levelLabel(child)}</div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Rollup depth cap (Feature 03, FR-19) */}
-            <div className="mt-6 border-t border-border pt-4">
-              <label className="text-sm font-medium" htmlFor="rollup-depth-cap">
-                Rollup depth limit
-              </label>
-              <p className="mb-2 mt-0.5 text-sm text-text-subtle">
-                How many levels below an issue due-date rollup may descend. Lower is faster on large
-                hierarchies; unlimited is most accurate.{' '}
-                <span className="text-text">Recommended: cap on large sites.</span>
+          </section>
+        ) : (
+          <section className="mt-6 rounded-lg border border-border bg-surface">
+            <header className="flex items-center gap-2 border-b border-border px-5 py-3">
+              <h2 className="text-base font-semibold">Date Rollup</h2>
+            </header>
+            <div className="px-5 py-4">
+              <p className="mb-4 text-sm text-text-subtle">
+                Levels are read at runtime from the site's issue-type configuration — nothing is
+                hard-coded.
               </p>
-              <div className="sm:w-72">
-                <Select<SelectOption>
-                  inputId="rollup-depth-cap"
-                  options={DEPTH_CAP_OPTIONS}
-                  value={DEPTH_CAP_OPTIONS.find((o) => o.value === (depthCap === null ? '' : String(depthCap)))}
-                  onChange={(o) => {
-                    if (!o) return;
-                    setDepthCap(o.value === '' ? null : Number(o.value));
-                    setSaveState('idle');
-                  }}
-                  isSearchable={false}
-                />
+
+              {/* Which fields hold each level's own dates */}
+              {dateFields && (
+                <div className="mb-6 border-b border-border pb-6">
+                  <h3 className="text-sm font-medium">Date fields</h3>
+                  <p className="mb-3 mt-0.5 text-sm text-text-subtle">
+                    Which Jira fields hold each level's start and end dates.
+                  </p>
+                  <DateFieldsTable
+                    levels={levels}
+                    fields={dateFields.fields}
+                    value={fields}
+                    onChange={setLevelFields}
+                  />
+                </div>
+              )}
+
+              {/* Whose dates win between a parent and its children */}
+              <h3 className="text-sm font-medium">Parent vs. children</h3>
+              <p className="mb-2 mt-0.5 text-sm text-text-subtle">
+                Which dates are prioritized between a parent and its children?
+              </p>
+              <div className="flex flex-col gap-2">
+                <div className="py-2 text-sm font-medium">{levelLabel(levels[0])}</div>
+                {levels.slice(0, -1).map((lvl, i) => {
+                  const level = levelKey(lvl.level);
+                  const child = levels[i + 1];
+                  const labels = labelsFor(lvl.name, child.name);
+                  return (
+                    <div key={level} className="flex flex-row" style={{ paddingLeft: i * 32 }}>
+                      <div className="mb-4 w-6 flex-none rounded-bl-lg border-b-2 border-l-2 border-border">
+                        &nbsp;
+                      </div>
+                      <div className="flex w-full flex-col">
+                        <Select<SelectOption>
+                          aria-label={`Due date rollup for ${levelLabel(lvl)} and ${levelLabel(child)}`}
+                          options={METHOD_ORDER.map((m) => ({ label: labels[m], value: m }))}
+                          value={{
+                            label: labels[methods[level] ?? DEFAULT_ROLLUP_METHOD],
+                            value: methods[level] ?? DEFAULT_ROLLUP_METHOD,
+                          }}
+                          onChange={(o) => o && setMethod(level, o.value as RollupMethod)}
+                          isSearchable={false}
+                        />
+                        <div className="p-2 pt-4 text-sm font-medium">{levelLabel(child)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Rollup depth cap (Feature 03, FR-19) */}
+              <div className="mt-6 border-t border-border pt-4">
+                <label className="text-sm font-medium" htmlFor="rollup-depth-cap">
+                  Rollup depth limit
+                </label>
+                <p className="mb-2 mt-0.5 text-sm text-text-subtle">
+                  How many levels below an issue due-date rollup may descend. Lower is faster on large
+                  hierarchies; unlimited is most accurate.{' '}
+                  <span className="text-text">Recommended: cap on large sites.</span>
+                </p>
+                <div className="sm:w-72">
+                  <Select<SelectOption>
+                    inputId="rollup-depth-cap"
+                    options={DEPTH_CAP_OPTIONS}
+                    value={DEPTH_CAP_OPTIONS.find((o) => o.value === (depthCap === null ? '' : String(depthCap)))}
+                    onChange={(o) => {
+                      if (!o) return;
+                      setDepthCap(o.value === '' ? null : Number(o.value));
+                      setSaveState('idle');
+                    }}
+                    isSearchable={false}
+                  />
+                </div>
               </div>
             </div>
-          </div>
-          <footer className="flex items-center justify-end gap-3 border-t border-border px-5 py-3">
-            {saveState === 'saved' && <span className="text-sm text-success">Saved.</span>}
-            {saveState === 'error' && <span className="text-sm text-danger">Save failed.</span>}
-            <Button onClick={resetDefaults}>Reset to defaults</Button>
-            <Button appearance="primary" onClick={doSave} isDisabled={saveState === 'saving'}>
-              {saveState === 'saving' ? 'Saving…' : 'Save settings'}
-            </Button>
-          </footer>
-        </section>
+            <footer className="flex items-center justify-end gap-3 border-t border-border px-5 py-3">
+              {saveState === 'saved' && <span className="text-sm text-success">Saved.</span>}
+              {saveState === 'error' && <span className="text-sm text-danger">Save failed.</span>}
+              <Button onClick={resetDefaults}>Reset to defaults</Button>
+              <Button appearance="primary" onClick={doSave} isDisabled={saveState === 'saving'}>
+                {saveState === 'saving' ? 'Saving…' : 'Save settings'}
+              </Button>
+            </footer>
+          </section>
+        )}
       </div>
     </div>
   );

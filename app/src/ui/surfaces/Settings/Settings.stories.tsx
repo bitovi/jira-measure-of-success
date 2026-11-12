@@ -119,6 +119,21 @@ export const ErrorState: Story = {
   },
 };
 
+/**
+ * The issue-type lookup failed (empty level list): the Date Rollup card explains
+ * and has no Save button; the KPI space and hierarchy cards still render.
+ */
+export const LevelsUnavailable: Story = {
+  args: { useSettings: stub({ levels: [], config: { dueDateRollup: { '1': 'childrenOnly' } } }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText(/Couldn’t read this site’s issue types/)).toBeInTheDocument();
+    await expect(c.queryByRole('button', { name: /Save settings/i })).not.toBeInTheDocument();
+    await expect(c.getByRole('heading', { name: 'KPI Space' })).toBeInTheDocument();
+    await expect(c.getByRole('heading', { name: 'KPI Hierarchy' })).toBeInTheDocument();
+  },
+};
+
 /** Interaction: "Save settings" persists the current per-level config. */
 const saveSpy = fn(async (_c: RollupConfig) => {});
 export const SaveInteraction: Story = {

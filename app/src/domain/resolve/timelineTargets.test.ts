@@ -33,10 +33,10 @@ function contribution(over: Partial<KpiTargetContribution['source']>, a: Assignm
 
 describe('buildKpiTargets', () => {
   it('maps an absolute target with source info + status (not provisional)', () => {
-    // Recorded 120 by the 2026-06-30 target (increase KPI) → hit.
+    // Recorded 120 on the 2026-06-30 target date (increase KPI) → hit.
     const { dated, undated } = buildKpiTargets(
       [contribution({}, assignment({ kpiId: 'revenue', target: 100, timing: { start: null, due: absolute('2026-06-30') } }))],
-      [{ date: '2026-06-01', value: 120 }],
+      [{ date: '2026-06-30', value: 120 }],
       'increase',
       TODAY,
     );
@@ -48,10 +48,41 @@ describe('buildKpiTargets', () => {
         status: 'hit',
         provisional: false,
         relative: false,
-        detail: expect.objectContaining({ target: 100, targetType: 'absolute', displayState: 'resultUnknown', actual: 120 }),
+        detail: expect.objectContaining({ target: 100, targetType: 'absolute', displayState: 'met', actual: 120 }),
         source: { issue: 'INIT-48', type: 'Initiative', title: 'Multi-store support', iconUrl: null },
       },
     ]);
+  });
+
+  describe('a fixed target: the marker and its tooltip judge it the same way', () => {
+    const fixed = (readings: Array<{ date: string; value: number }>) =>
+      buildKpiTargets(
+        [contribution({}, assignment({ kpiId: 'revenue', target: 100, timing: { start: null, due: absolute('2026-06-30') } }))],
+        readings,
+        'increase',
+        TODAY,
+      ).dated[0];
+
+    it('a reading ON the target date judges it', () => {
+      expect(fixed([{ date: '2026-06-30', value: 120 }])).toMatchObject({ status: 'hit', detail: { displayState: 'met', actual: 120 } });
+      expect(fixed([{ date: '2026-06-30', value: 80 }])).toMatchObject({ status: 'missed', detail: { displayState: 'missed', actual: 80 } });
+    });
+
+    it('a reading only BEFORE the target date can\'t judge it (both say so)', () => {
+      expect(fixed([{ date: '2026-06-01', value: 120 }])).toMatchObject({
+        status: 'upcoming',
+        detail: { displayState: 'resultUnknown', actual: null },
+      });
+    });
+
+    it('the first reading AFTER the target date judges it, not the one in effect on it', () => {
+      const readings = [
+        { date: '2026-06-01', value: 120 },
+        { date: '2026-07-05', value: 90 },
+        { date: '2026-07-10', value: 130 },
+      ];
+      expect(fixed(readings)).toMatchObject({ status: 'missed', detail: { displayState: 'missed', actual: 90 } });
+    });
   });
 
   it('keeps the bet and its resolution on the marker for the tooltip', () => {
