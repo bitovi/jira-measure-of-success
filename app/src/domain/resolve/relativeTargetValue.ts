@@ -1,6 +1,6 @@
 import type { Assignment, IsoDate, TargetType } from '../models/index';
 import type { DatedValue } from './targetStatus';
-import { baselineAt, type BaselineState } from './baseline';
+import { stackedBaselineAt, type BaselineState, type StackStep } from './baseline';
 
 /**
  * Relative target VALUE resolution — Feature 03, requirements §5.3 / FR-9…FR-11.
@@ -28,12 +28,21 @@ export interface ResolvedTargetValue {
   state: BaselineState;
   /** true unless the baseline is official (`state === 'baselined'`) */
   provisional: boolean;
+  /** earlier same-level targets stacked onto a carried baseline (spec 09); absent when none */
+  stackedFrom?: StackStep[];
+  /** with `stackedFrom`: the carried latest reading the steps were stacked onto ("from 1,000 now") */
+  unstackedBaseline?: number;
 }
 
 export interface RelativeTargetValueContext {
   /** the contributing issue's effective due date, or null when pending */
   dueDate: IsoDate | null;
   readings: readonly DatedValue[];
+  /**
+   * This target's stacking chain (spec 09): other dated targets on the same KPI
+   * at the same hierarchy level. Only used while the baseline is carried.
+   */
+  steps?: readonly StackStep[];
 }
 
 /** True for target kinds measured against the KPI's value at the due date. */
@@ -64,7 +73,7 @@ export function resolveRelativeTargetValue(
   }
 
   // percent / relative: a change on the baseline value at the due date.
-  const baseline = baselineAt(ctx.readings, ctx.dueDate);
+  const baseline = stackedBaselineAt(ctx.readings, ctx.dueDate, ctx.steps);
   const change = assignment.target ?? 0;
 
   if (baseline.value === null) {
@@ -85,5 +94,8 @@ export function resolveRelativeTargetValue(
     baselineFrom: baseline.from,
     state: baseline.state,
     provisional: baseline.state !== 'baselined',
+    ...(baseline.stackedFrom.length && baseline.unstackedValue !== null
+      ? { stackedFrom: baseline.stackedFrom, unstackedBaseline: baseline.unstackedValue }
+      : {}),
   };
 }

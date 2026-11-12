@@ -2,6 +2,7 @@ import type { Assignment, IsoDate, KpiDirection } from '../models/index';
 import type { DatedValue } from './targetStatus';
 import { valueAt } from './targetStatus';
 import { resolveRelativeTargetValue, type ResolvedTargetValue } from './relativeTargetValue';
+import type { StackStep } from './baseline';
 import { displayState, type DisplayState, type TargetWarning } from './displayState';
 import { freezeIfDone } from './freeze';
 
@@ -26,6 +27,8 @@ export interface PanelTargetInput {
   /** the contributing issue is resolved/closed (for freeze) */
   closed: boolean;
   today: IsoDate;
+  /** this target's stacking chain (spec 09); omit for no stacking */
+  steps?: readonly StackStep[];
 }
 
 export interface ResolvedPanelTarget {
@@ -38,9 +41,9 @@ export interface ResolvedPanelTarget {
 }
 
 export function resolvePanelTarget(input: PanelTargetInput): ResolvedPanelTarget {
-  const { assignment, dueDate, targetDate, readings, direction, closed, today } = input;
+  const { assignment, dueDate, targetDate, readings, direction, closed, today, steps } = input;
 
-  const resolvedValue = resolveRelativeTargetValue(assignment, { dueDate, readings });
+  const resolvedValue = resolveRelativeTargetValue(assignment, { dueDate, readings, steps });
   const { state, warning } = displayState({
     valueState: resolvedValue.state,
     today,

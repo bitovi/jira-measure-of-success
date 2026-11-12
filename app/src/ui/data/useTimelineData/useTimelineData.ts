@@ -10,16 +10,19 @@ import type {
   TimelineData,
   TimelineTargetsData,
 } from '@domain/index.js';
+import { KPI_HIERARCHY_NOT_SET_UP } from '@domain/index.js';
 import { deriveTimelineView } from './timelineView.js';
 
 /**
  * A mutation failure, as the save modals show it. Mutations reject, and the
- * modal turns the rejection into this with `toActionError`. `space-not-set-up` is the
- * specific backend guard (`KPI space is not set up …`) that the UI renders with
- * an "Open Settings" affordance; everything else is `generic`.
+ * modal turns the rejection into this with `toActionError`. `space-not-set-up` and
+ * `hierarchy-not-set-up` are the specific backend guards (`KPI space is not set
+ * up …` / `KPI hierarchy is not set up …`) that the UI renders with an "Open
+ * Settings" affordance; everything else is `generic`.
  */
 export type TimelineActionError =
   | { kind: 'space-not-set-up'; message: string }
+  | { kind: 'hierarchy-not-set-up'; message: string }
   | { kind: 'generic'; message: string };
 
 const SPACE_NOT_SET_UP = 'KPI space is not set up';
@@ -27,6 +30,7 @@ const SPACE_NOT_SET_UP = 'KPI space is not set up';
 export function toActionError(e: unknown): TimelineActionError {
   const message = e instanceof Error ? e.message : String(e);
   if (message.includes(SPACE_NOT_SET_UP)) return { kind: 'space-not-set-up', message };
+  if (message.includes(KPI_HIERARCHY_NOT_SET_UP)) return { kind: 'hierarchy-not-set-up', message };
   return { kind: 'generic', message };
 }
 

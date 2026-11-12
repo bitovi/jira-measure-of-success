@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent,
 import Select, { type StylesConfig } from '@atlaskit/select';
 import Textfield from '@atlaskit/textfield';
 import type { DueTiming, TargetType } from '@domain/index.js';
-import { isIsoDate, type TargetDraft } from '../../targetText.js';
+import { isIsoDate, type TargetDraft } from '@ui/targetText.js';
 import { panelMenuProps } from '../../useMenuRoom.js';
 
 type SelectOption = { label: string; value: string };

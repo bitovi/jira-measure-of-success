@@ -1,10 +1,12 @@
 import type { IsoDate, KpiDirection } from '../models/index';
 import type { Assignment } from '../models/assignment';
-import type { TimelineTargetDto } from '../contracts';
-import { resolveRelativeTargetDate, type RelativeTargetContext } from './relativeTargetDate';
-import { isBaselineRelative, resolveRelativeTargetValue } from './relativeTargetValue';
+import type { TargetDetailDto, TimelineTargetDto } from '../contracts';
+import { resolveRelativeTargetDate } from './relativeTargetDate';
+import { isBaselineRelative } from './relativeTargetValue';
+import { resolvePanelTarget } from './panelTarget';
 import { baselineDueEndpoint } from './panelLoad';
 import { targetStatus, type DatedValue } from './targetStatus';
+import { contributionContext, resolveStackSteps, stackChain } from './stackSteps';
 
 /**
  * Timeline target aggregation — turns the KPI targets authored on contributing
@@ -32,10 +34,14 @@ export interface TargetSourceIssue {
   title: string;
   /** issue type icon URL (Jira `issuetype.iconUrl`), when available */
   iconUrl: string | null;
-  /** the issue's own due date — anchor for `issueDueDate` relative timing */
+  /** the issue's effective due date — anchor for `issueDueDate` relative timing */
   due: IsoDate | null;
-  /** the parent's key + own due — anchor for `parentDueDate`; absent at the root */
-  parent?: { key: string; due: IsoDate | null };
+  /** true when `due` was rolled up from descendants (shown as "Rolled-up due date") */
+  dueRolledUp?: boolean;
+  /** the parent's key + effective due — anchor for `parentDueDate`; absent at the root */
+  parent?: { key: string; due: IsoDate | null; dueRolledUp?: boolean };
+  /** Jira `issuetype.hierarchyLevel` — targets stack only within a level (spec 09); null/absent = unknown */
+  hierarchyLevel?: number | null;
 }
 
 /** One issue's assignment targeting a given KPI, plus that issue's source info. */
@@ -59,26 +65,51 @@ export function buildKpiTargets(
   const dated: TimelineTargetDto[] = [];
   const undated: TimelineTargetDto[] = [];
 
+  // Pass 1: every dated target as a stacking step (spec 09). Pass 2 resolves each
+  // target with the other steps at its hierarchy level.
+  const steps = resolveStackSteps(contributions);
+
   for (const { assignment, source } of contributions) {
     if (assignment.target === null) continue;
 
-    const ctx: RelativeTargetContext = {
-      issue: { issueKey: source.key, due: { date: source.due, source: 'own' } },
-    };
-    if (source.parent) {
-      ctx.parent = { issueKey: source.parent.key, due: { date: source.parent.due, source: 'own' } };
-    }
-
+    const ctx = contributionContext(source);
     const resolvedDate = resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
 
     // The baseline anchor — the same rule the issue panel uses (FR-4).
-    const dueDate = baselineDueEndpoint(assignment, ctx, resolvedDate.date).date;
+    const dueEndpoint = baselineDueEndpoint(assignment, ctx, resolvedDate.date);
+    const dueDate = dueEndpoint.date;
 
-    const resolvedValue = resolveRelativeTargetValue(assignment, { dueDate, readings });
+    // The same resolution the issue panel's card shows, kept for the marker tooltip.
+    const resolved = resolvePanelTarget({
+      assignment,
+      dueDate,
+      targetDate: resolvedDate.date,
+      readings,
+      direction,
+      // The timeline doesn't carry the source issue's done status yet, so it never
+      // freezes. Harmless today (nothing reads `frozen`); Follow-up F1 adds it.
+      closed: false,
+      today,
+      steps: stackChain(steps, { issueKey: source.key, level: source.hierarchyLevel }),
+    });
+    const resolvedValue = resolved.resolvedValue;
     if (resolvedValue.value === null) continue; // percent/relative with no baseline yet → skip
 
     const src = { issue: source.key, type: source.type, title: source.title, iconUrl: source.iconUrl };
     const relative = isBaselineRelative(assignment.targetType);
+    const detail: TargetDetailDto = {
+      target: assignment.target,
+      targetType: assignment.targetType,
+      dueTiming: assignment.timing.due,
+      start: assignment.timing.start,
+      targetDate: resolvedDate,
+      resolvedValue,
+      displayState: resolved.displayState,
+      warning: resolved.warning,
+      dueDate,
+      dueDateRolledUp: dueEndpoint.source === 'children',
+      actual: resolved.actual,
+    };
 
     if (resolvedDate.pending || resolvedDate.date === null) {
       undated.push({
@@ -87,6 +118,7 @@ export function buildKpiTargets(
         status: 'upcoming',
         provisional: resolvedValue.provisional,
         relative,
+        detail,
         source: src,
       });
       continue;
@@ -98,6 +130,7 @@ export function buildKpiTargets(
       status: targetStatus({ date: resolvedDate.date, value: resolvedValue.value }, readings, direction, today),
       provisional: resolvedValue.provisional,
       relative,
+      detail,
       source: src,
     });
   }

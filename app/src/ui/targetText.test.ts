@@ -16,6 +16,7 @@ import {
   parseTarget,
   pillFor,
   previewRow,
+  stackedNote,
 } from './targetText.js';
 
 /** Number of Stores, +10%, 3 months after a (rolled-up) due date — the mock's gallery bet. */
@@ -220,5 +221,48 @@ describe('drafts', () => {
     expect(isWrongWay(previewRow(kpi, { ...draft, value: '-100' }, '2027-01-15', false), 1200)).toBe(true);
     const costs = { ...kpi, direction: 'decrease' as const };
     expect(isWrongWay(previewRow(costs, draft, '2027-01-15', false), 1200)).toBe(true);
+  });
+});
+
+describe('stacked on earlier targets (spec 09)', () => {
+  const step = (issueKey: string, issueType: string, date: string, change = 1) =>
+    ({ issueKey, issueType, level: 3, date, targetType: 'percent' as const, change });
+  const stacked = (steps: ReturnType<typeof step>[]) =>
+    row({
+      resolvedValue: {
+        value: 280.5,
+        baseline: 255,
+        baselineDate: '2027-01-15',
+        baselineFrom: '2026-06-30',
+        state: 'provisional',
+        provisional: true,
+        stackedFrom: steps,
+        unstackedBaseline: 250,
+      },
+    });
+
+  test('"from … now" is the latest reading, not the stacked baseline', () => {
+    expect(text(stacked([step('INIT-1', 'Initiative', '2026-10-31')]))).toContain('from 250 now');
+  });
+
+  test('names the issue type when every stacked target shares it', () => {
+    const r = stacked([step('INIT-1', 'Initiative', '2026-10-31'), step('INIT-2', 'Initiative', '2027-01-31', 2)]);
+    expect(stackedNote(r.resolvedValue, r.unit)).toEqual({
+      text: 'Stacked on 2 earlier Initiative targets',
+      steps: ['INIT-1 +1% on Oct 31, 2026', 'INIT-2 +2% on Jan 31, 2027'],
+    });
+  });
+
+  test('singular, and "at this level" when the level mixes types', () => {
+    expect(stackedNote(stacked([step('INIT-1', 'Initiative', '2026-10-31')]).resolvedValue, 'stores')?.text).toBe(
+      'Stacked on 1 earlier Initiative target',
+    );
+    const mixed = stacked([step('MS-1', 'Milestone', '2026-10-31'), step('INC-2', 'Increment', '2026-11-30')]);
+    expect(stackedNote(mixed.resolvedValue, 'stores')?.text).toBe('Stacked on 2 earlier targets at this level');
+  });
+
+  test('nothing when nothing stacked', () => {
+    expect(stackedNote(row({}).resolvedValue, 'stores')).toBeNull();
+    expect(stackedNote(null, 'stores')).toBeNull();
   });
 });

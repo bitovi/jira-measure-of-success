@@ -1,9 +1,10 @@
-import type { Assignment, DueTiming, IsoDate, KpiDirection, TargetType } from './models/index';
+import type { Assignment, DueTiming, IsoDate, KpiDirection, KpiHierarchyLink, KpiParentEnd, TargetType } from './models/index';
 import type { ResolvedEndpoint } from './resolve/effectiveTiming';
 import type { TargetStatus } from './resolve/targetStatus';
-import type { BaselineState } from './resolve/baseline';
+import type { BaselineState, StackStep } from './resolve/baseline';
 import type { DisplayState, TargetWarning } from './resolve/displayState';
 import type { KpiTargetContribution } from './resolve/timelineTargets';
+import type { IssueLinkTypeInfo } from './resolve/kpiLinks';
 
 /**
  * Resolver payload contracts — the `invoke(...)` seam between Custom UI and the
@@ -34,6 +35,10 @@ export interface ResolvedTargetValueDto {
   baselineFrom: string | null;
   state: BaselineState;
   provisional: boolean;
+  /** earlier same-level targets stacked onto a carried baseline (spec 09); absent when none */
+  stackedFrom?: StackStep[];
+  /** with `stackedFrom`: the carried latest reading the steps were stacked onto */
+  unstackedBaseline?: number;
 }
 
 export interface PanelRowDto {
@@ -57,7 +62,10 @@ export interface PanelRowDto {
   displayState: DisplayState | null;
   /** the warning to surface, if any (stale baseline / unconfirmed result / needs baseline) */
   warning: TargetWarning;
-  /** compute-on-read freeze: closed issue + past due date (FR-16) */
+  /**
+   * compute-on-read freeze: closed issue + past due date (FR-16). Not shown by any
+   * UI and not saved — see Follow-up F1 in specs/09-stacked-targets/plan.md.
+   */
   frozen: boolean;
   /** the contributing issue's effective due date (the baseline anchor); null when pending */
   dueDate: string | null;
@@ -182,6 +190,26 @@ export interface PanelParts {
 // Rollup. Relative target dates are authored per-assignment on the Issue panel.)
 
 // ── Timeline ────────────────────────────────────────────────────────────────
+/**
+ * What the issue panel's target card is built from, for one timeline marker: the
+ * bet (type, amount, timing) and its resolution. The marker tooltip feeds it to
+ * the same presentation rules as the card, so the two read alike.
+ */
+export type TargetDetailDto = Pick<
+  PanelRowDto,
+  | 'target'
+  | 'targetType'
+  | 'dueTiming'
+  | 'start'
+  | 'targetDate'
+  | 'resolvedValue'
+  | 'displayState'
+  | 'warning'
+  | 'dueDate'
+  | 'dueDateRolledUp'
+  | 'actual'
+>;
+
 export interface TimelineTargetDto {
   /** null = pending/undated (Feature 03, FR-24) — rendered in the Undated lane */
   date: string | null;
@@ -195,6 +223,8 @@ export interface TimelineTargetDto {
    * baseline is recorded, but it's still a relative target.
    */
   relative: boolean;
+  /** the bet + resolution behind this marker, for the tooltip; absent on hand-built targets */
+  detail?: TargetDetailDto;
   source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 
@@ -251,6 +281,32 @@ export interface KpiSpaceStatus {
   name: string | null;
   state: KpiSpaceState;
 }
+
+// ── KPI hierarchy link (resolve/kpiLinks) ───────────────────────────────
+// KPIs nest via an issue link type. Link types are global to the site; an admin
+// either has the app create its own `KPI Hierarchy` type or picks an existing
+// directional one (and which end is the parent).
+export type KpiHierarchyState =
+  | 'unset' // no link type chosen yet — KPIs can't be nested
+  | 'missing' // the chosen link type was deleted from the site
+  | 'unavailable' // the site's link types couldn't be read (e.g. issue linking is disabled)
+  | 'ready';
+
+export interface KpiHierarchyStatus {
+  state: KpiHierarchyState;
+  /** the configured type, resolved against the site (null unless 'ready') */
+  linkType: IssueLinkTypeInfo | null;
+  /** stored type id (set for 'ready' and 'missing') */
+  linkTypeId: string | null;
+  parentEnd: KpiParentEnd;
+  /** every link type on the site, for the picker */
+  available: IssueLinkTypeInfo[];
+  /** why the state is 'unavailable' */
+  message?: string;
+}
+
+/** The `saveKpiHierarchy` payload — validated with the `KpiHierarchyLink` schema. */
+export type SaveKpiHierarchyInput = KpiHierarchyLink;
 
 // `RecordValueInput` (the recordValue payload) is a Zod schema: see models/kpiReading.
 

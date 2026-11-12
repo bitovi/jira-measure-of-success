@@ -12,6 +12,7 @@ import { fmtVal } from './scale.js';
 import type { HoverState } from './hover.js';
 import { dimStyle, useIsDimmed } from './useKeyHighlight.js';
 import { targetKeyKinds } from './keyKinds.js';
+import { TargetTooltipBody } from './targetTooltip.js';
 
 /**
  * Recorded values + the projected trend are drawn in a neutral color so green
@@ -265,7 +266,7 @@ export function TargetMarker({
     target.status === 'hit' ? 'Target hit' : target.status === 'missed' ? 'Target missed' : 'Upcoming';
 
   const track = (e: React.MouseEvent) =>
-    setTip({ clientX: e.clientX, clientY: e.clientY, flipX: e.clientX > window.innerWidth - 240 });
+    setTip({ clientX: e.clientX, clientY: e.clientY, flipX: e.clientX > window.innerWidth - 420 });
 
   const issueKey = target.source.issue;
   const href = siteUrl ? `${siteUrl}/browse/${issueKey}` : `/browse/${issueKey}`;
@@ -303,7 +304,7 @@ export function TargetMarker({
       </a>
       {tip && (
         <div
-          className="pointer-events-none fixed z-50 max-w-[240px] whitespace-normal rounded border border-border bg-surface px-2 py-1 text-[11px] text-text shadow-md"
+          className="pointer-events-none fixed z-50 w-max max-w-[400px] whitespace-normal rounded border border-border bg-surface px-2.5 py-2 text-xs text-text shadow-md"
           style={{
             left: tip.flipX ? undefined : tip.clientX + 14,
             right: tip.flipX ? window.innerWidth - tip.clientX + 14 : undefined,
@@ -311,33 +312,7 @@ export function TargetMarker({
           }}
           role="tooltip"
         >
-          <div>
-            <span className="font-semibold tabular-nums">
-              Target {target.provisional ? '≈ ' : ''}{fmtVal(target.value)} {node.unit}
-            </span>
-            <span className="text-text-subtle"> · {statusLabel}</span>
-          </div>
-          <div className="text-text-subtle">Due {target.date}</div>
-          {target.provisional && (
-            <div className="text-text-subtle">
-              Relative target — ≈ until the KPI&apos;s value at the due date is recorded
-            </div>
-          )}
-          <div className="mt-0.5 flex items-center gap-1">
-            <span className="text-text-subtle">Set on</span>
-            {target.source.iconUrl && (
-              <img
-                src={target.source.iconUrl}
-                alt={target.source.type}
-                title={target.source.type}
-                width={14}
-                height={14}
-                className="h-3.5 w-3.5 flex-none"
-              />
-            )}
-            <span className="font-semibold">{target.source.title}</span>
-          </div>
-          <div className="mt-0.5 text-text-subtle">Click to open in Jira (new tab)</div>
+          <TargetTooltipBody target={target} node={node} />
         </div>
       )}
     </>

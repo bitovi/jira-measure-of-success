@@ -63,12 +63,21 @@ import {
   fetchChildrenForIds,
   fetchSubtreeTimingNodesForRoots,
   fetchIconDataUrl,
+  fetchHierarchyLevels,
 } from './jira.js';
 import { dateFieldSelection } from '../domain/index.js';
 
 describe('createKpiIssue', () => {
+  const HIER = { linkTypeId: '10500', parentEnd: 'inward' as const };
   beforeEach(() => {
     requestJira.mockClear();
+  });
+
+  it('refuses to nest (before creating anything) when no hierarchy link type is configured', async () => {
+    await expect(
+      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, null),
+    ).rejects.toThrow(/^KPI hierarchy is not set up/);
+    expect(requestJira).not.toHaveBeenCalled();
   });
 
   it('throws (not a silent half-create) when Jira rejects the issue POST', async () => {
@@ -76,7 +85,7 @@ describe('createKpiIssue', () => {
     // return a KPI with an undefined key.
     postResult = { ok: false, status: 400, json: async () => ({ errorMessages: ['boom'] }) };
     await expect(
-      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: 'increase', parentKpiId: 'KPI-1' }),
+      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: 'increase', parentKpiId: 'KPI-1' }, HIER),
     ).rejects.toThrow('Jira 400 while trying to create KPI issue "Revenue": boom');
 
     // No property write should have been attempted after the failed create.
@@ -93,7 +102,7 @@ describe('createKpiIssue', () => {
       unit: ' $ ',
       direction: 'increase',
       parentKpiId: 'KPI-1',
-    });
+    }, HIER);
 
     expect(created).toEqual({
       id: '10050',
@@ -111,12 +120,17 @@ describe('createKpiIssue', () => {
     };
     expect(createBody.fields.summary).toBe('Revenue');
     expect(createBody.properties).toEqual([{ key: 'kpi-meta', value: { unit: '$', direction: 'increase' } }]);
-    // The nest is the only follow-up request: the Parent issue link.
+    // The nest is the only follow-up request: a link of the configured type, parent on its configured end.
     expect(posts.map(([r]) => String(r))).toEqual(['/rest/api/3/issue', '/rest/api/3/issueLink']);
+    expect(JSON.parse((posts[1][1] as { body: string }).body)).toEqual({
+      type: { id: '10500' },
+      inwardIssue: { key: 'KPI-1' },
+      outwardIssue: { key: 'KPI-7' },
+    });
     expect(requestJira.mock.calls.some(([, o]) => o?.method === 'PUT')).toBe(false);
   });
 
-  describe('when the Parent link fails', () => {
+  describe('when the hierarchy link fails', () => {
     const linkFails = (deleteResult: { ok: boolean; status: number }) =>
       requestJira.mockImplementation(async (route, options) => {
         const url = String(route);
@@ -131,7 +145,7 @@ describe('createKpiIssue', () => {
     it('deletes the just-created issue (no orphan root KPI, no duplicate on retry) and rethrows', async () => {
       linkFails({ ok: true, status: 204 });
       await expect(
-        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }),
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER),
       ).rejects.toThrow('Jira 404 while trying to link KPI "KPI-7" under "KPI-1": No issue KPI-1');
       const del = requestJira.mock.calls.find(([, o]) => o?.method === 'DELETE');
       expect(String(del?.[0])).toBe('/rest/api/3/issue/KPI-7');
@@ -140,7 +154,7 @@ describe('createKpiIssue', () => {
     it('says the KPI was left behind when the rollback fails too', async () => {
       linkFails({ ok: false, status: 403 });
       await expect(
-        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }),
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER),
       ).rejects.toThrow('KPI-7 was created without its parent; delete it in Jira.');
     });
   });
@@ -364,6 +378,35 @@ describe('fetchIssuesByIds / fetchChildrenForIds batching', () => {
     expect(result.get('1')).toMatchObject({ ownStart: '2026-02-01', ownDueDate: '2026-09-30' });
     expect(result.get('2')).toMatchObject({ ownStart: '2026-03-01', ownDueDate: '2026-05-31' });
   });
+
+  it("reads a level's date fields for EVERY issue type at that level", async () => {
+    // Milestone and Increment share hierarchy level 2; Settings saved the level once.
+    const fieldsAt = (name: string) => ({
+      issuetype: { name, hierarchyLevel: 2 },
+      duedate: '2026-12-31',
+      customfield_10015: '2026-01-01',
+      customfield_20001: '2026-02-01',
+      customfield_20002: '2026-09-30',
+    });
+    requestJira.mockImplementation(async () => ({
+      ok: true,
+      json: async () => ({
+        issues: [
+          { id: '1', key: 'MS-1', fields: fieldsAt('Milestone') },
+          { id: '2', key: 'INC-2', fields: fieldsAt('Increment') },
+        ],
+      }),
+    }));
+
+    const selection = dateFieldSelection({
+      dateFields: { '2': { start: 'customfield_20001', due: 'customfield_20002' } },
+    });
+    const result = await fetchIssuesByIds(['1', '2'], selection);
+
+    for (const id of ['1', '2']) {
+      expect(result.get(id)).toMatchObject({ hierarchyLevel: 2, ownStart: '2026-02-01', ownDueDate: '2026-09-30' });
+    }
+  });
 });
 
 describe('fetchSubtreeTimingNodesForRoots', () => {
@@ -459,3 +502,31 @@ describe('fetchSubtreeTimingNodesForRoots', () => {
   });
 });
 
+
+describe('fetchHierarchyLevels', () => {
+  const savedImpl = requestJira.getMockImplementation();
+  afterEach(() => {
+    if (savedImpl) requestJira.mockImplementation(savedImpl);
+  });
+
+  it('groups every issue type by level, top → leaf, deduping repeated names', async () => {
+    requestJira.mockImplementation(async () => ({
+      ok: true,
+      json: async () => [
+        { name: 'Bug', hierarchyLevel: 0 },
+        { name: 'Story', hierarchyLevel: 0 },
+        { name: 'Epic', hierarchyLevel: 1 },
+        { name: 'Epic', hierarchyLevel: 1 }, // a team-managed project's own Epic
+        { name: 'Increment', hierarchyLevel: 2 },
+        { name: 'Milestone', hierarchyLevel: 2 },
+        { name: 'Sub-task', hierarchyLevel: -1 },
+      ],
+    }));
+    expect(await fetchHierarchyLevels()).toEqual([
+      { level: 2, name: 'Increment', issueTypeNames: ['Increment', 'Milestone'] },
+      { level: 1, name: 'Epic', issueTypeNames: ['Epic'] },
+      { level: 0, name: 'Story', issueTypeNames: ['Story', 'Bug'] },
+      { level: -1, name: 'Sub-task', issueTypeNames: ['Sub-task'] },
+    ]);
+  });
+});

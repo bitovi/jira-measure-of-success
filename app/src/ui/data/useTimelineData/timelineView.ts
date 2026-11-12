@@ -4,6 +4,7 @@ import {
   applyTargetContributions,
   clearResolving,
   insertCreatedKpi,
+  withAddedContributions,
   type AddedTarget,
   type CreatedKpi,
   type RecordValueInput,
@@ -51,15 +52,17 @@ export function deriveTimelineView(state: TimelineLoadState): TimelineView {
   for (const kpi of state.created ?? []) tree = insertCreatedKpi(tree, kpi);
   tree = applyReadingEditsToTree(tree, state.readingEdits ?? []);
 
+  const added = state.addedTargets ?? [];
   let view: TimelineView;
   // No KPIs loaded → nothing for targets to attach to, so there is nothing to wait for.
   if (skeleton.roots.length === 0) view = { data: tree, targetsPending: false, targetsError: null };
   else if (contributions) {
-    view = { data: applyTargetContributions(tree, contributions), targetsPending: false, targetsError: null };
+    // Saved targets join the contributions, so they stack with the rest of their level (spec 09).
+    const merged = withAddedContributions(contributions, added);
+    return { data: applyTargetContributions(tree, merged), targetsPending: false, targetsError: null };
   } else if (targetsError) view = { data: clearResolving(tree), targetsPending: false, targetsError };
   else view = { data: tree, targetsPending: true, targetsError: null };
 
-  const added = state.addedTargets ?? [];
   if (added.length === 0 || !view.data) return view;
   let data = view.data;
   for (const target of added) data = applyAddedTarget(data, target);

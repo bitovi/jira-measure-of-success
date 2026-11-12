@@ -104,7 +104,7 @@ As a delivery lead, I want to override a single inherited field without detachin
 As a delivery lead, I want to associate an existing KPI with this issue and set its target, so that this issue contributes to that KPI.
 
 1. Given a KPI defined in the catalog and not yet on this issue, When I open the "Associate a measurement" control, Then I can pick it from a list of catalog KPIs (mock select).
-2. Given a KPI appears on the parent but not this issue ("on parent, not tracked here"), When I choose **+ Track this**, Then an assignment for that KPI is created on this issue with inheritance enabled (mock "+ Track this").
+2. Given a KPI appears on the parent but not this issue ("on parent, not tracked here"), When I choose **+ Track this**, Then that KPI is pre-selected in the "Set a KPI target" form and its target value is focused; nothing is saved until I set a target (v1 targets are independent, Q11 — there is no inherited value to create) (mock "+ Track this").
 3. Given I have selected a KPI, When I enter a target value and a target date and confirm, Then a new assignment is created and appears in the appropriate group.
 4. Given I create an assignment, When it is saved, Then it persists across reloads (Brief Phase 2 AC).
 

@@ -46,7 +46,7 @@ The hard, novel parts this feature must get right:
 **v1 scope decisions (simplifications)**
 - Target value type is **Absolute value** or **Percent change** only (stored `absolute` / `delta`). **No** absolute-amount delta. The label family reserves **Amount change** and **Rate of change** as future siblings.
 - The percent baseline is **fixed = value at the due date** — not a user-configurable choice (an earlier "Measured from" picker was dropped as confusing; §9-Q1).
-- The baseline value uses **measured readings only** — **flat-carry / interpolate**, **no trend extrapolation**, and **other work items' future targets are ignored** (§5.3).
+- The baseline value uses **measured readings only** — **flat-carry / interpolate**, **no trend extrapolation**, and **other work items' future targets are ignored, except earlier targets at the same hierarchy level on the same KPI, which stack on a carried baseline** (§5.3, [09 stacked targets](../09-stacked-targets/plan.md)).
 
 **Non-goals**
 - Summing/aggregating child contributions into a parent (still explicitly out — see initial reqs §8-Q11; children are distinct metrics).
@@ -112,10 +112,10 @@ Mock: [issue-panel.html](./issue-panel.html).
 
 ### 5.3 Baselining the value (baselined vs provisional)
 
-The baseline is the KPI value **at the due date**. It has exactly **two** states, driven only by **measured readings** (other work items' future targets are **ignored**):
+The baseline is the KPI value **at the due date**. It has exactly **two** states, driven by **measured readings**. Other work items' future targets are **ignored**, except earlier targets at the **same hierarchy level** on the same KPI, which stack on a carried baseline ([09 stacked targets](../09-stacked-targets/plan.md); KPI tree and KPI View only for now, the issue panel stays flat):
 
 - **FR-9 — Baselined (official).** When a reading **covers** the due date, the baseline is official: **measured** (a reading lands on the due date) or **interpolated** between the two readings that **bracket** it. Rendered as `baselined {value}` (no `≈`), status pill **Baselined**. Target value = `baseline × (1 + percent)`.
-- **FR-9a — Provisional (carried).** When **no** reading covers the due date, the baseline value = the **last recorded reading**, flat-carried (**no trend extrapolation** — that's a future *Rate of change* type). Rendered as `baseline (provisional from {last-reading date}) ≈ {value}`. This one carried value appears in **three date contexts**, distinguished by the status pill / date row, not by the value math:
+- **FR-9a — Provisional (carried).** When **no** reading covers the due date, the baseline value = the **last recorded reading**, flat-carried (**no trend extrapolation** — that's a future *Rate of change* type), with any earlier same-level targets dated after that reading stacked on top ([09 stacked targets](../09-stacked-targets/plan.md)). Rendered as `baseline (provisional from {last-reading date}) ≈ {value}`. This one carried value appears in **three date contexts**, distinguished by the status pill / date row, not by the value math:
   - **Projected** — due date is in the **future** (no reading after it yet). Target date shown with `~`.
   - **Provisional** — **no due date** at all (pending rollup). Target date shown as **pending / TBD**.
   - **Needs measurement** — due date **has passed but no reading exists after it**, so it can't be interpolated; the carried value is **stale**. Adds a ⚠ *"Due date passed with no measurement — baseline may be stale. Record a value."* warning.
@@ -136,6 +136,7 @@ The baseline is the KPI value **at the due date**. It has exactly **two** states
 ### 5.6 Freezing relative → fixed
 
 - **FR-16 — Freeze condition.** When the contributing issue is **closed** (resolved) **AND** its rolled-up due date is **in the past**, the relative target is converted to a **frozen absolute target**: the due date and the baseline value are captured from actuals, the percent is applied once, and the result is stored as a fixed `{ date, value }`.
+  - *Status: not implemented beyond a compute-on-read `frozen` flag that nothing displays or saves. Dates of Done issues are still recalculated on every load. Saving a frozen end date and skipping frozen issues in stacking and rollup is [09 Follow-up F1](../09-stacked-targets/plan.md#f1--frozen-targets-save-finished-work-skip-it-in-stacking-and-rollup).*
 - **FR-17 — Freeze is a snapshot, not a lock.** Freezing stops re-rollup and re-projection (stabilizing history and cutting cost) but the target remains editable. (§9-Q5: automatic on read vs. an explicit write / background job; and how a frozen target is visually distinguished.)
 - **FR-18 — Pre-freeze uses live values.** Before the freeze condition holds, everything stays relative and recomputes at read time (§5.2/§5.3).
 
@@ -251,7 +252,7 @@ Verified against the code (`app/src/ui/surfaces/IssuePanel/IssuePanel.tsx`, `app
 
 - **Q1 — Baseline choice. RESOLVED (v1): fixed = value at the due date.** The percent is always measured from the KPI's value at the due date; no user-configurable baseline.
 - **Q2 — Provisional anchor for undated targets. RESOLVED (v1): today.** The "no due date yet" estimate assumes **due today** (last value × (1+percent)), labeled *Provisional* / date *TBD*.
-- **Q3 — Baseline model. RESOLVED (v1): flat-carry + interpolate, no trend.** Baseline = value at the due date: **measured** if a reading lands on it, **interpolated** if bracketed, else the **last reading flat-carried** (`≈`). **No** slope/trend extrapolation — a trend model is a future *Rate of change* target type. Measured readings only; other work items' targets ignored.
+- **Q3 — Baseline model. RESOLVED (v1): flat-carry + interpolate, no trend.** Baseline = value at the due date: **measured** if a reading lands on it, **interpolated** if bracketed, else the **last reading flat-carried** (`≈`). **No** slope/trend extrapolation — a trend model is a future *Rate of change* target type. Measured readings only; other work items' targets ignored, except earlier same-level targets, which stack on a carried baseline ([09 stacked targets](../09-stacked-targets/plan.md)).
 - **Q4 — Offset units.** Keep **months** only, or also weeks/quarters? *Recommend: months only (matches existing `offsetMonths`).*
 - **Q5 — Freeze mechanics.** Freeze **lazily on read** (pure, no write) vs. an **explicit write / background reconciliation** (durable, but needs a job + write path)? And how is a frozen target shown? *Recommend: compute-on-read semantics in v1 (a target *presents* as frozen when the condition holds) — no new write path; mark "final" in the UI.*
 - **Q6 — Depth-cap default.** Default to **no cap** (correct but potentially slow) or cap at **Epic** out of the box? *Recommend: no cap by default, with a prominent Settings recommendation to cap on large sites.*

@@ -11,19 +11,25 @@ import {
   type DateFieldDefaults,
   isValidProjectKey,
   labelsFor,
+  levelKey,
+  levelLabel,
+  levelSetting,
   normalizeProjectKey,
   resolveConfig,
+  type HierarchyLevel,
   type KpiSpaceStatus,
   type RollupConfig,
   type RollupMethod,
 } from '@domain/index.js';
 import { DateFieldsTable } from './components/DateFieldsTable/index.js';
+import { KpiHierarchyCard } from './components/KpiHierarchyCard/index.js';
 
 /**
  * Settings — Date Rollup (global admin page). Two areas: which date fields each
  * level reads (ST-5), then one parent-vs-children dropdown per discovered
- * hierarchy level (ST-1/ST-2/ST-3). Level names are read at runtime — nothing is
- * hardcoded. Mock: specs/00-mocks/settings.html.
+ * hierarchy level (ST-1/ST-2/ST-3). Levels are read at runtime — nothing is
+ * hardcoded — and settings are keyed by hierarchy level, so they apply to every
+ * issue type at a level (e.g. Milestone AND Increment). Mock: specs/00-mocks/settings.html.
  *
  * Data comes from an INJECTABLE loader hook (`useSettings`) — see usePanelData.ts.
  */
@@ -45,17 +51,17 @@ const METHOD_ORDER: RollupMethod[] = [
 
 type SelectOption = { label: string; value: string };
 
-/** Every level's start/due field ids, filled in from the site defaults. */
+/** Every level's start/due field ids (by level key), filled in from the site defaults. */
 function resolveDateFields(
   stored: RollupConfig['dateFields'],
-  levels: string[],
+  levels: HierarchyLevel[],
   defaults: DateFieldDefaults,
 ): Record<string, DateFieldDefaults> {
   return Object.fromEntries(
-    levels.map((level) => [
-      level,
-      { start: stored?.[level]?.start ?? defaults.start, due: stored?.[level]?.due ?? defaults.due },
-    ]),
+    levels.map((level) => {
+      const choice = levelSetting(stored, { name: level.name, hierarchyLevel: level.level });
+      return [levelKey(level.level), { start: choice?.start ?? defaults.start, due: choice?.due ?? defaults.due }];
+    }),
   );
 }
 
@@ -75,8 +81,20 @@ function toStoredDateFields(
 }
 
 export function Settings({ useSettings = useSettingsData }: { useSettings?: UseSettings }) {
-  const { levels, config, dateFields, space, pending, error, save, saveSpaceKey, createSpace } =
-    useSettings();
+  const {
+    levels,
+    config,
+    dateFields,
+    space,
+    pending,
+    error,
+    save,
+    saveSpaceKey,
+    createSpace,
+    hierarchy,
+    saveHierarchy,
+    createHierarchyLinkType,
+  } = useSettings();
   const [methods, setMethods] = useState<Record<string, RollupMethod>>({});
   const [fields, setFields] = useState<Record<string, DateFieldDefaults>>({});
   const [depthCap, setDepthCap] = useState<number | null>(null);
@@ -139,6 +157,15 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
       </header>
       <div className="mx-auto max-w-3xl p-6">
         {space && <KpiSpaceCard space={space} onSaveKey={saveSpaceKey} onCreate={createSpace} />}
+        {hierarchy && (
+          <KpiHierarchyCard
+            // Remount on outside changes (e.g. "Create space" also sets up nesting) so the form resyncs.
+            key={`${hierarchy.state}:${hierarchy.linkTypeId}:${hierarchy.parentEnd}`}
+            hierarchy={hierarchy}
+            onSave={saveHierarchy}
+            onCreate={createHierarchyLinkType}
+          />
+        )}
 
         {/* Date Rollup card */}
         <section className="mt-6 rounded-lg border border-border bg-surface">
@@ -173,10 +200,11 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
               Which dates are prioritized between a parent and its children?
             </p>
             <div className="flex flex-col gap-2">
-              <div className="py-2 text-sm font-medium">{levels[0]}</div>
-              {levels.slice(0, -1).map((level, i) => {
+              <div className="py-2 text-sm font-medium">{levelLabel(levels[0])}</div>
+              {levels.slice(0, -1).map((lvl, i) => {
+                const level = levelKey(lvl.level);
                 const child = levels[i + 1];
-                const labels = labelsFor(level, child);
+                const labels = labelsFor(lvl.name, child.name);
                 return (
                   <div key={level} className="flex flex-row" style={{ paddingLeft: i * 32 }}>
                     <div className="mb-4 w-6 flex-none rounded-bl-lg border-b-2 border-l-2 border-border">
@@ -184,7 +212,7 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
                     </div>
                     <div className="flex w-full flex-col">
                       <Select<SelectOption>
-                        aria-label={`Due date rollup for ${level} and ${child}`}
+                        aria-label={`Due date rollup for ${levelLabel(lvl)} and ${levelLabel(child)}`}
                         options={METHOD_ORDER.map((m) => ({ label: labels[m], value: m }))}
                         value={{
                           label: labels[methods[level] ?? DEFAULT_ROLLUP_METHOD],
@@ -193,7 +221,7 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
                         onChange={(o) => o && setMethod(level, o.value as RollupMethod)}
                         isSearchable={false}
                       />
-                      <div className="p-2 pt-4 text-sm font-medium">{child}</div>
+                      <div className="p-2 pt-4 text-sm font-medium">{levelLabel(child)}</div>
                     </div>
                   </div>
                 );

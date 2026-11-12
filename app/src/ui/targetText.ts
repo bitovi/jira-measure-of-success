@@ -149,6 +149,8 @@ export function estimate(row: PanelRowDto, currentValue: number | null): Estimat
 
   const locked = !onBaseline || (rv !== null && !rv.provisional);
   const value = rv?.value ?? (onBaseline ? null : row.target);
+  // "from … now/on" is the reading itself, not the baseline with earlier targets stacked on (spec 09).
+  const reading = rv?.unstackedBaseline ?? rv?.baseline ?? null;
   const tail: EstimatePart[] = [];
   const from = (n: number | null, post: string, hint: string) => {
     if (n !== null) tail.push({ pre: 'from ', num: fmtEst(n, unit), post, hint });
@@ -170,12 +172,12 @@ export function estimate(row: PanelRowDto, currentValue: number | null): Estimat
       else tail.push(...nowPart(currentValue, unit));
       break;
     case 'needsMeasurement':
-      if (onBaseline && rv?.baselineFrom) from(rv.baseline, ` on ${fmtShortDate(rv.baselineFrom, targetDate)}`, 'Latest reading — taken before the due date');
-      else if (onBaseline) from(rv?.baseline ?? null, ' now', 'Latest reading');
+      if (onBaseline && rv?.baselineFrom) from(reading, ` on ${fmtShortDate(rv.baselineFrom, targetDate)}`, 'Latest reading — taken before the due date');
+      else if (onBaseline) from(reading, ' now', 'Latest reading');
       else tail.push(...nowPart(currentValue, unit));
       break;
     default:
-      if (onBaseline) from(rv?.baseline ?? null, ' now', rv?.baselineFrom ? `Latest reading, ${fmtDate(rv.baselineFrom)}` : 'Latest reading');
+      if (onBaseline) from(reading, ' now', rv?.baselineFrom ? `Latest reading, ${fmtDate(rv.baselineFrom)}` : 'Latest reading');
       else tail.push(...nowPart(currentValue, unit));
   }
   if (state === 'provisional' && dependsOnDueDate(row)) tail.push(noDueDatePart(row));
@@ -203,6 +205,34 @@ function noDueDatePart(row: Pick<PanelRowDto, 'targetType' | 'dueTiming'>): Esti
 
 function nowPart(currentValue: number | null, unit: string): EstimatePart[] {
   return currentValue === null ? [] : [{ num: fmtEst(currentValue, unit), post: ' now', hint: 'Latest reading' }];
+}
+
+// ── stacked on (spec 09) ─────────────────────────────────────────────────────
+export interface StackedNote {
+  /** `Stacked on 2 earlier Initiative targets` */
+  text: string;
+  /** one line per step: `INIT-12 +1% on Apr 30, 2027` */
+  steps: string[];
+}
+
+/**
+ * The line under the estimate when earlier same-level targets were stacked onto
+ * the baseline. Names the issue type when every stacked target shares one.
+ */
+export function stackedNote(rv: ResolvedTargetValueDto | null, unit: string): StackedNote | null {
+  const steps = rv?.stackedFrom ?? [];
+  if (steps.length === 0) return null;
+  const types = [...new Set(steps.map((s) => s.issueType))];
+  const n = steps.length;
+  const noun = `target${n === 1 ? '' : 's'}`;
+  const text =
+    types.length === 1
+      ? `Stacked on ${n} earlier ${types[0]} ${noun}`
+      : `Stacked on ${n} earlier ${noun} at this level`;
+  return {
+    text,
+    steps: steps.map((s) => `${s.issueKey} ${betAmount(s.targetType, s.change, unit)} on ${fmtDate(s.date)}`),
+  };
 }
 
 /** The estimate as plain text (aria / tests). */

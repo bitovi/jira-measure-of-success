@@ -1,15 +1,16 @@
 import Select from '@atlaskit/select';
-import type { DateFieldDefaults, DateFieldOption } from '@domain/index.js';
+import { levelKey, levelLabel, type DateFieldDefaults, type DateFieldOption, type HierarchyLevel } from '@domain/index.js';
 
 type SelectOption = { label: string; value: string };
 
 export interface DateFieldsTableProps {
-  /** hierarchy levels (issue-type names), top → leaf */
-  levels: string[];
+  /** hierarchy levels, top → leaf */
+  levels: HierarchyLevel[];
   /** every pickable date/datetime field on the site */
   fields: DateFieldOption[];
-  /** each level's current start/due field ids */
+  /** each level's current start/due field ids, by `levelKey` */
   value: Record<string, DateFieldDefaults>;
+  /** `level` is the changed level's `levelKey` */
   onChange(level: string, next: DateFieldDefaults): void;
 }
 
@@ -20,7 +21,8 @@ const COLUMNS = [
 
 /**
  * Which Jira date fields each hierarchy level's own start / end dates are read
- * from — one row per level (e.g. Initiative → Target start / Target end).
+ * from — one row per level (e.g. Initiative → Target start / Target end). A row
+ * applies to every issue type at its level, so it lists them all.
  */
 export function DateFieldsTable({ levels, fields, value, onChange }: DateFieldsTableProps) {
   const options: SelectOption[] = fields.map((f) => ({ label: f.name, value: f.id }));
@@ -41,16 +43,18 @@ export function DateFieldsTable({ levels, fields, value, onChange }: DateFieldsT
         </tr>
       </thead>
       <tbody>
-        {levels.map((level) => {
+        {levels.map((lvl) => {
+          const level = levelKey(lvl.level);
+          const label = levelLabel(lvl);
           const current = value[level];
           if (!current) return null;
           return (
             <tr key={level}>
-              <td className="py-1 pr-3 font-medium">{level}</td>
+              <td className="py-1 pr-3 font-medium">{label}</td>
               {COLUMNS.map((c) => (
                 <td key={c.endpoint} className="py-1 pl-3">
                   <Select<SelectOption>
-                    aria-label={`${level} ${c.label.toLowerCase()} date field`}
+                    aria-label={`${label} ${c.label.toLowerCase()} date field`}
                     spacing="compact"
                     options={options}
                     value={optionFor(current[c.endpoint])}

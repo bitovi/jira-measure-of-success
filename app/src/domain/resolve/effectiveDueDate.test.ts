@@ -11,7 +11,7 @@ function node(
   ownDueDate: string | null,
   childIds: string[] = [],
 ): HierarchyNode {
-  return { id, issueKey: id.toUpperCase(), issueTypeName, ownDueDate, childIds };
+  return { id, issueKey: id.toUpperCase(), issueTypeName, hierarchyLevel: null, ownDueDate, childIds };
 }
 
 function graph(...nodes: HierarchyNode[]): Map<string, HierarchyNode> {

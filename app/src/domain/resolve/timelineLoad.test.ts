@@ -4,6 +4,7 @@ import {
   applyTargetContributions,
   clearResolving,
   insertCreatedKpi,
+  withAddedContributions,
   type TargetContributionsByKpi,
 } from './timelineLoad';
 import type { CreatedKpi, TimelineData, TimelineNodeDto } from '../contracts';
@@ -199,5 +200,30 @@ describe('applyAddedTarget', () => {
   it('ignores a target for a KPI that is not in the tree', () => {
     const added = { assignment: assignment({ kpiId: 'KPI-404', timing: absolute('2026-09-30') }), source: source('X', null) };
     expect(applyAddedTarget(merged, added)).toBe(merged);
+  });
+});
+
+describe('withAddedContributions (spec 09)', () => {
+  const pct = (key: string, due: string) => ({
+    assignment: assignment({ targetType: 'percent', target: 10, timing: relative(1) }),
+    source: { ...source(key, due), hierarchyLevel: 1 },
+  });
+  const loaded: TargetContributionsByKpi = { 'KPI-1': [pct('A', '2027-03-31'), pct('B', '2027-06-30')] };
+
+  it('replaces the same issue’s contribution and adds new ones', () => {
+    const reset = { assignment: assignment({ target: 50, timing: absolute('2027-05-15') }), source: { ...source('A', null), hierarchyLevel: 1 } };
+    const merged = withAddedContributions(loaded, [reset]);
+    expect(merged['KPI-1'].map((c) => [c.source.key, c.assignment.target])).toEqual([['B', 10], ['A', 50]]);
+    expect(loaded['KPI-1']).toHaveLength(2);
+    expect(withAddedContributions(loaded, [])).toBe(loaded);
+  });
+
+  it('a saved target stacks with the rest of its level', () => {
+    const data: TimelineData = { today: '2026-07-01', roots: [node({ readings: [{ date: '2027-01-01', value: 100 }] })] };
+    const added = { assignment: assignment({ target: 200, timing: absolute('2027-05-15') }), source: { ...source('C', null), hierarchyLevel: 1 } };
+    const built = applyTargetContributions(data, withAddedContributions(loaded, [added]));
+    const b = built.roots[0].targets.find((t) => t.source.issue === 'B')!;
+    // A's +10% (Apr 30), then C resets to 200 (May 15), then B's own +10%.
+    expect(b.value).toBeCloseTo(220, 6);
   });
 });

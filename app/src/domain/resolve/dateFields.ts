@@ -1,9 +1,11 @@
-import type { DateFieldChoice, IsoDate, RollupConfig } from '../models/index';
+import type { DateFieldChoice, IsoDate, IssueTypeRef, RollupConfig } from '../models/index';
+import { levelSetting } from '../models/index';
 
 /**
- * Per-level date-field selection — which Jira field holds each issue type's own
- * start / due date (e.g. an Initiative read from "Target start"/"Target end",
- * a Story from "Start date"/"Due date"). Pure: the backend supplies the site's
+ * Per-level date-field selection — which Jira field holds each hierarchy
+ * level's own start / due date (e.g. the Initiative level read from "Target
+ * start"/"Target end", the Story level from "Start date"/"Due date"). Choices
+ * apply to EVERY issue type at the level. Pure: the backend supplies the site's
  * defaults and reads the returned field ids off each issue.
  */
 
@@ -38,8 +40,8 @@ export const FALLBACK_DATE_FIELD_DEFAULTS: DateFieldDefaults = {
 export interface DateFieldSelection {
   /** every field id any level reads — request these from Jira */
   fieldIds: string[];
-  /** the start/due field ids for one issue type */
-  forType(issueTypeName: string): DateFieldDefaults;
+  /** the start/due field ids for an issue type (looked up by its hierarchy level) */
+  forType(issueType: IssueTypeRef): DateFieldDefaults;
 }
 
 export function dateFieldSelection(
@@ -47,10 +49,10 @@ export function dateFieldSelection(
   defaults: DateFieldDefaults = FALLBACK_DATE_FIELD_DEFAULTS,
 ): DateFieldSelection {
   const choices: Record<string, DateFieldChoice> = config?.dateFields ?? {};
-  const forType = (issueTypeName: string): DateFieldDefaults => ({
-    start: choices[issueTypeName]?.start ?? defaults.start,
-    due: choices[issueTypeName]?.due ?? defaults.due,
-  });
+  const forType = (issueType: IssueTypeRef): DateFieldDefaults => {
+    const choice = levelSetting(choices, issueType);
+    return { start: choice?.start ?? defaults.start, due: choice?.due ?? defaults.due };
+  };
   const ids = new Set<string>([defaults.start, defaults.due]);
   for (const c of Object.values(choices)) {
     if (c.start) ids.add(c.start);
@@ -69,12 +71,12 @@ export function toIsoDay(value: unknown): IsoDate | null {
   return m ? m[1] : null;
 }
 
-/** Read an issue's own start/due from its raw `fields` using the selection for its type. */
+/** Read an issue's own start/due from its raw `fields` using the selection for its type's level. */
 export function readOwnDates(
   fields: Record<string, unknown> | undefined,
-  issueTypeName: string,
+  issueType: IssueTypeRef,
   selection: DateFieldSelection,
 ): { ownStart: IsoDate | null; ownDue: IsoDate | null } {
-  const { start, due } = selection.forType(issueTypeName);
+  const { start, due } = selection.forType(issueType);
   return { ownStart: toIsoDay(fields?.[start]), ownDue: toIsoDay(fields?.[due]) };
 }

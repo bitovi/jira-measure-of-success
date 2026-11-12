@@ -3,6 +3,7 @@ import {
   buildAxis,
   initialScrollLeft,
   initialViewQuarterStart,
+  PAD_R,
   QUARTER_PX,
   scrollShiftForAxisChange,
 } from './axis';
@@ -37,6 +38,31 @@ describe('initialScrollLeft', () => {
   it('never goes negative', () => {
     const axis = buildAxis([], '2026-07-10');
     expect(initialScrollLeft(axis, '2026-07-10')).toBeGreaterThanOrEqual(0);
+  });
+
+  it('leaves room to the right so the current quarter can actually reach the left edge', () => {
+    // Regression: readings Q2–Q3 2026, today Nov 11 → data axis Q1 2026..Q1 2027
+    // (1100px) in an ~800px viewport. Without viewStart the strip ends one
+    // quarter after Q4, so scrollLeft was clamped to ~300 instead of 660.
+    const today = '2026-11-11';
+    const viewport = 815;
+    const minWidth = viewport - PAD_R;
+    const dates = ['2026-04-20', '2026-09-15'];
+    const viewStart = initialViewQuarterStart(today);
+    const axis = buildAxis(dates, today, { minWidth, viewStart });
+    const left = initialScrollLeft(axis, today);
+    expect(left).toBe(3 * QUARTER_PX); // Q1, Q2, Q3 hidden → Q4 2026 at the left edge
+    const maxScroll = axis.plotWidth + PAD_R - viewport;
+    expect(left).toBeLessThanOrEqual(maxScroll);
+  });
+
+  it('does not add scroll room when the whole strip already fits', () => {
+    const today = '2026-11-11';
+    const fits = buildAxis(['2026-10-01'], today, {
+      minWidth: 1500,
+      viewStart: initialViewQuarterStart(today),
+    });
+    expect(fits.plotWidth).toBe(1500);
   });
 });
 

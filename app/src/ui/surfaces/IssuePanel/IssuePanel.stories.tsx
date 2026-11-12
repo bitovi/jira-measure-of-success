@@ -230,6 +230,29 @@ export const AllGroups: Story = {
     const root = (await c.findAllByText('Costs')).find((el) => el.style.paddingLeft !== '');
     await expect(nested.style.paddingLeft).toBe('12px');
     await expect(root?.style.paddingLeft).toBe('0px');
+    // each option names its unit, so a total is typed in the right one
+    await expect(c.getByRole('option', { name: 'Costs (USD)' })).toBeInTheDocument();
+    await expect(c.getByRole('option', { name: '# of Orders (count)' })).toBeInTheDocument();
+  },
+};
+
+/** "+ Track this" pre-fills the form with that KPI and focuses the value — it does NOT save. */
+const trackSaveSpy = fn();
+export const TrackThisPrefillsForm: Story = {
+  args: { usePanel: stub({ data: ALL_GROUPS, save: trackSaveSpy }) },
+  play: async ({ canvasElement }) => {
+    trackSaveSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Track this' }));
+    await expect(trackSaveSpy).not.toHaveBeenCalled();
+    const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
+    // picked in the select, and previewed
+    await expect(form.getAllByText('Costs')).toHaveLength(2);
+    await expect(form.getByText('Preview')).toBeInTheDocument();
+    await waitFor(() => expect(form.getByLabelText('Target value')).toHaveFocus());
+    await userEvent.type(form.getByLabelText('Target value'), '-5');
+    await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
+    await expect(trackSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ kpiId: 'costs', target: -5, targetType: 'percent' }));
   },
 };
 
@@ -569,6 +592,8 @@ export const FormPreview: Story = {
     await expect(form.queryByText('Preview')).not.toBeInTheDocument();
     await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
     await userEvent.click(await form.findByText('Number of Stores'));
+    // the picked KPI keeps showing its unit next to the name
+    await expect(form.getByText(/^\s*\(count\)$/)).toBeInTheDocument();
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '+2');
     const preview = within(form.getByRole('group', { name: 'Number of Stores' }));
     await expect(preview.getByText('+2%')).toBeInTheDocument();

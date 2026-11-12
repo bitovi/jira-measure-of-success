@@ -8,7 +8,7 @@ function node(
   ownDue: string | null,
   childIds: string[] = [],
 ): TimingNode {
-  return { id, issueKey: id.toUpperCase(), issueTypeName, ownStart: null, ownDue, childIds };
+  return { id, issueKey: id.toUpperCase(), issueTypeName, hierarchyLevel: null, ownStart: null, ownDue, childIds };
 }
 
 function config(map: Record<string, RollupMethod>, depthCap?: number | null): RollupConfig {

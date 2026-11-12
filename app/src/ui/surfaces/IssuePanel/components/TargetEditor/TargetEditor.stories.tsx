@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
 import { expect, userEvent, waitFor, within } from '@storybook/test';
-import type { TargetDraft } from '../../targetText.js';
+import type { TargetDraft } from '@ui/targetText.js';
 import { TargetEditor } from './TargetEditor.js';
 
 /** The bet editor: `[ amount ][ % change | more | total ]` + `[ months | date ][ months after due date | on a date ]`. */

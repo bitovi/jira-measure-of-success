@@ -1,5 +1,5 @@
 import type { IsoDate, RollupConfig, RollupMethod } from '../models/index';
-import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD } from '../models/index';
+import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD, levelSetting } from '../models/index';
 
 /**
  * Effective due-date resolution — Brief §6.1.
@@ -15,6 +15,8 @@ export interface HierarchyNode {
   id: string;
   issueKey: string;
   issueTypeName: string;
+  /** Jira `issuetype.hierarchyLevel` — the key rollup settings are looked up by */
+  hierarchyLevel: number | null;
   ownDueDate: IsoDate | null;
   childIds: string[];
 }
@@ -31,7 +33,10 @@ const MAX_DEPTH = 10;
 const PENDING: EffectiveDueDate = { date: null, source: 'pending' };
 
 function methodFor(node: HierarchyNode, config: RollupConfig): RollupMethod {
-  const configured = config.dueDateRollup[node.issueTypeName];
+  const configured = levelSetting(config.dueDateRollup, {
+    name: node.issueTypeName,
+    hierarchyLevel: node.hierarchyLevel,
+  });
   if (configured) return configured;
   return node.childIds.length === 0 ? LEAF_ROLLUP_METHOD : DEFAULT_ROLLUP_METHOD;
 }

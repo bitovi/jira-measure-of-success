@@ -1,6 +1,7 @@
 import {
   encodeReadingValue,
   type Assignment,
+  type IssueLinkTypeInfo,
   type KpiDirection,
   type RollupConfig,
 } from '../../domain/index';
@@ -48,6 +49,18 @@ export const DEFAULT_SCALE: ScaleOptions = {
 
 export const KPI_PROJECT = { key: 'KPI', id: '10000', name: 'KPIs (KPI)' };
 export const RANK_FIELD_ID = 'customfield_10019';
+/** The app-created hierarchy link type (labels per DEFAULT_KPI_LINK_TYPE: parent on the inward end). */
+export const KPI_HIERARCHY_LINK_TYPE = {
+  id: '10500',
+  name: 'KPI Hierarchy',
+  inward: 'is a child KPI of',
+  outward: 'is the parent KPI of',
+};
+const SITE_LINK_TYPES = [
+  { id: '10000', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+  { id: '10003', name: 'Relates', inward: 'relates to', outward: 'relates to' },
+  KPI_HIERARCHY_LINK_TYPE,
+];
 export const READING_FIELD_ID = 'customfield_10837';
 const WORK_PROJECTS = ['APP', 'WEB', 'OPS'];
 
@@ -59,7 +72,7 @@ export interface FixtureIssue {
   parentId: string | null;
   due: string | null;
   start: string | null;
-  /** KPI-space only: parent KPI via a `Parent` issue link */
+  /** KPI-space only: parent KPI via a KPI Hierarchy issue link */
   kpiParentId?: string | null;
   rank?: string;
   properties: Record<string, unknown>;
@@ -74,6 +87,8 @@ export interface ScaleFixture {
   contributorIds: string[];
   readingChanges: Map<string, Array<{ created: number; to: string }>>;
   kvs: Map<string, unknown>;
+  /** the site's issue link types (global in Jira) */
+  linkTypes: IssueLinkTypeInfo[];
 }
 
 const DAY = 86_400_000;
@@ -188,8 +203,10 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
   const kvs = new Map<string, unknown>([
     ['kpi:space', { key: KPI_PROJECT.key, projectId: KPI_PROJECT.id, name: KPI_PROJECT.name }],
     ['kpi:config:rollup', options.rollup],
+    ['kpi:hierarchy', { linkTypeId: KPI_HIERARCHY_LINK_TYPE.id, parentEnd: 'inward' }],
   ]);
-  return { options, issues, childrenOf, kpiIds, contributorIds, readingChanges, kvs };
+  const linkTypes = SITE_LINK_TYPES.map((t) => ({ ...t }));
+  return { options, issues, childrenOf, kpiIds, contributorIds, readingChanges, kvs, linkTypes };
 }
 
 /** One target per epic, cycling absolute / relative-to-own-due / relative-to-parent-due / percent. */
@@ -245,17 +262,46 @@ const ICON_ID: Record<FixtureIssue['type'], number> = {
   Story: 10303,
   Subtask: 10304,
 };
+/** Jira `issuetype.hierarchyLevel` per fixture type (KPI is a base-level type). */
+const HIERARCHY_LEVEL: Record<FixtureIssue['type'], number> = {
+  KPI: 0,
+  Initiative: 2,
+  Epic: 1,
+  Story: 0,
+  Subtask: -1,
+};
 
-function issueJson(issue: FixtureIssue, fields: string[], properties: string[]): Record<string, unknown> {
+/** How the fixture's KPI parent links read back: the configured type, parent on the configured end. */
+interface FixtureLinkShape {
+  type: IssueLinkTypeInfo;
+  parentEnd: 'inward' | 'outward';
+}
+
+function kpiLinkShape(fixture: ScaleFixture): FixtureLinkShape {
+  const cfg = fixture.kvs.get('kpi:hierarchy') as { linkTypeId?: string; parentEnd?: string } | undefined;
+  const type = fixture.linkTypes.find((t) => t.id === cfg?.linkTypeId) ?? KPI_HIERARCHY_LINK_TYPE;
+  return { type, parentEnd: cfg?.parentEnd === 'outward' ? 'outward' : 'inward' };
+}
+
+function issueJson(
+  issue: FixtureIssue,
+  fields: string[],
+  properties: string[],
+  link: FixtureLinkShape,
+): Record<string, unknown> {
   const all: Record<string, unknown> = {
     summary: issue.summary,
-    issuetype: { name: issue.type, iconUrl: `${ICON_BASE}/${ICON_ID[issue.type]}?size=medium` },
+    issuetype: {
+      name: issue.type,
+      hierarchyLevel: HIERARCHY_LEVEL[issue.type],
+      iconUrl: `${ICON_BASE}/${ICON_ID[issue.type]}?size=medium`,
+    },
     duedate: issue.due,
     customfield_10015: issue.start,
     status: { statusCategory: { key: 'indeterminate' } },
     parent: issue.parentId ? { id: issue.parentId } : undefined,
     issuelinks: issue.kpiParentId
-      ? [{ type: { name: 'Parent' }, outwardIssue: { id: issue.kpiParentId } }]
+      ? [{ type: link.type, [link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue']: { id: issue.kpiParentId } }]
       : [],
     [RANK_FIELD_ID]: issue.rank ?? null,
   };
@@ -343,7 +389,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const page = matched.slice(offset, offset + maxResults);
       const more = offset + maxResults < matched.length;
       return respond(200, {
-        issues: page.map((i) => issueJson(i, fields, properties)),
+        issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture))),
         isLast: !more,
         ...(more ? { nextPageToken: String(offset + maxResults) } : {}),
       });
@@ -357,7 +403,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!issue) return respond(404, { errorMessages: ['not found'] });
       const fields = (params.get('fields') ?? '').split(',').filter(Boolean);
       const properties = (params.get('properties') ?? '').split(',').filter(Boolean);
-      return respond(200, issueJson(issue, fields, properties));
+      return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture)));
     }
 
     const prop = /^\/rest\/api\/3\/issue\/([^/]+)\/properties\/([^/]+)$/.exec(path);
@@ -413,12 +459,32 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     }
 
     if (method === 'POST' && path === '/rest/api/3/issueLink') {
-      const req = JSON.parse(String(body)) as { outwardIssue: { key: string }; inwardIssue: { key: string } };
-      const parent = findIssue(req.outwardIssue.key);
-      const child = findIssue(req.inwardIssue.key);
+      const req = JSON.parse(String(body)) as {
+        type: { id?: string };
+        outwardIssue: { key: string };
+        inwardIssue: { key: string };
+      };
+      if (!fixture.linkTypes.some((t) => t.id === req.type?.id)) {
+        return respond(404, { errorMessages: [`No issue link type with id '${req.type?.id}' found.`] });
+      }
+      const cfg = fixture.kvs.get('kpi:hierarchy') as { parentEnd?: string } | undefined;
+      const parentOnOutward = cfg?.parentEnd === 'outward';
+      const parent = findIssue(parentOnOutward ? req.outwardIssue.key : req.inwardIssue.key);
+      const child = findIssue(parentOnOutward ? req.inwardIssue.key : req.outwardIssue.key);
       if (!parent || !child) return respond(404, { errorMessages: ['Issue does not exist'] });
       child.kpiParentId = parent.id;
       return respond(201);
+    }
+
+    if (method === 'GET' && path === '/rest/api/3/issueLinkType') {
+      return respond(200, { issueLinkTypes: fixture.linkTypes });
+    }
+
+    if (method === 'POST' && path === '/rest/api/3/issueLinkType') {
+      const req = JSON.parse(String(body)) as Omit<IssueLinkTypeInfo, 'id'>;
+      const created = { id: String(10_600 + fixture.linkTypes.length), ...req };
+      fixture.linkTypes.push(created);
+      return respond(201, created);
     }
 
     if (single && method === 'DELETE') {

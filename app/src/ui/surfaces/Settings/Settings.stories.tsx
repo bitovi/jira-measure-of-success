@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn, within, userEvent, expect, waitFor } from '@storybook/test';
-import type { DateFieldCatalog, RollupConfig } from '@domain/index.js';
+import type { DateFieldCatalog, HierarchyLevel, KpiHierarchyStatus, RollupConfig } from '@domain/index.js';
 import { Settings } from './Settings.js';
 import type { SettingsController, UseSettings } from '@ui/data/useSettingsData/index.js';
 
@@ -9,7 +9,13 @@ import type { SettingsController, UseSettings } from '@ui/data/useSettingsData/i
  * shape deterministically (default / custom / shallow / single-level / loading /
  * error). The `*.test.tsx` sibling replays them as assertions.
  */
-const LEVELS = ['Outcome', 'Initiative', 'Increment', 'Epic', 'Story'];
+const lvl = (level: number, ...issueTypeNames: string[]): HierarchyLevel => ({
+  level,
+  name: issueTypeNames[0],
+  issueTypeNames,
+});
+/** Milestone and Increment share level 2 — settings are per level, not per type. */
+const LEVELS = [lvl(4, 'Outcome'), lvl(3, 'Initiative'), lvl(2, 'Milestone', 'Increment'), lvl(1, 'Epic'), lvl(0, 'Story')];
 
 const DATE_FIELDS: DateFieldCatalog = {
   fields: [
@@ -20,6 +26,15 @@ const DATE_FIELDS: DateFieldCatalog = {
     { id: 'customfield_10023', name: 'Target start' },
   ],
   defaults: { start: 'customfield_10015', due: 'duedate' },
+};
+
+const KPI_HIERARCHY = { id: '10500', name: 'KPI Hierarchy', inward: 'is a child KPI of', outward: 'is the parent KPI of' };
+const HIERARCHY: KpiHierarchyStatus = {
+  state: 'ready',
+  linkType: KPI_HIERARCHY,
+  linkTypeId: KPI_HIERARCHY.id,
+  parentEnd: 'inward',
+  available: [{ id: '10000', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' }, KPI_HIERARCHY],
 };
 
 function stub(over: Partial<SettingsController>): UseSettings {
@@ -37,6 +52,9 @@ function stub(over: Partial<SettingsController>): UseSettings {
     createSpace:
       over.createSpace ??
       (async (key) => ({ key, projectId: `p-${key}`, name: `KPIs (${key})`, state: 'ready' })),
+    hierarchy: over.hierarchy === undefined ? HIERARCHY : over.hierarchy,
+    saveHierarchy: over.saveHierarchy ?? (async () => HIERARCHY),
+    createHierarchyLinkType: over.createHierarchyLinkType ?? (async () => HIERARCHY),
   });
 }
 
@@ -53,10 +71,12 @@ export const Default: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     await expect(c.getByText('Date Rollup')).toBeInTheDocument();
+    await expect(c.getByRole('heading', { name: 'KPI Hierarchy' })).toBeInTheDocument();
     await expect(c.getByText('Date fields')).toBeInTheDocument();
     await expect(c.getByText('Parent vs. children')).toBeInTheDocument();
     // each level appears once in the fields table and once in the rollup tree
     await expect(c.getAllByText('Outcome')).toHaveLength(2);
+    await expect(c.getAllByText('Milestone / Increment')).toHaveLength(2);
     await expect(c.getAllByText('Story')).toHaveLength(2);
   },
 };
@@ -65,20 +85,20 @@ export const CustomConfig: Story = {
   args: {
     useSettings: stub({
       levels: LEVELS,
-      config: { dueDateRollup: { Outcome: 'childrenOnly', Initiative: 'parentOnly' } },
+      config: { dueDateRollup: { '4': 'childrenOnly', '3': 'parentOnly' } },
     }),
   },
 };
 
 export const ShallowHierarchy: Story = {
-  args: { useSettings: stub({ levels: ['Epic', 'Story'], config: { dueDateRollup: {} } }) },
+  args: { useSettings: stub({ levels: [lvl(1, 'Epic'), lvl(0, 'Story')], config: { dueDateRollup: {} } }) },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getAllByText('Epic')).toHaveLength(2);
   },
 };
 
 export const SingleLevel: Story = {
-  args: { useSettings: stub({ levels: ['Task'], config: { dueDateRollup: {} } }) },
+  args: { useSettings: stub({ levels: [lvl(0, 'Task')], config: { dueDateRollup: {} } }) },
   play: async ({ canvasElement }) => {
     // the only level is the leaf → it has no children to roll up, only its name shows
     await expect(within(canvasElement).getAllByText('Task')).toHaveLength(2);
@@ -137,7 +157,49 @@ export const DateFieldInteraction: Story = {
     await userEvent.click(c.getByRole('button', { name: /Save settings/i }));
     await waitFor(() =>
       expect(saveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ dateFields: { Initiative: { due: 'customfield_10022' } } }),
+        expect.objectContaining({ dateFields: { '3': { due: 'customfield_10022' } } }),
+      ),
+    );
+  },
+};
+
+/** Interaction: a level shared by several issue types is configured once, for all of them. */
+export const SharedLevelDateFields: Story = {
+  args: { useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} }, save: saveSpy }) },
+  play: async ({ canvasElement }) => {
+    saveSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('combobox', { name: 'Milestone / Increment start date field' }));
+    await userEvent.click(await c.findByText('Target start'));
+    await userEvent.click(c.getByRole('button', { name: /Save settings/i }));
+    await waitFor(() =>
+      expect(saveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ dateFields: { '2': { start: 'customfield_10023' } } }),
+      ),
+    );
+  },
+};
+
+/** A config saved before level keys (by issue-type name) shows on its level and re-saves by level. */
+export const LegacyNameKeyedConfig: Story = {
+  args: {
+    useSettings: stub({
+      levels: LEVELS,
+      config: { dueDateRollup: { Milestone: 'childrenOnly' }, dateFields: { Milestone: { due: 'customfield_10022' } } },
+      save: saveSpy,
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    saveSpy.mockClear();
+    const c = within(canvasElement);
+    await expect(c.getByText('Target end')).toBeInTheDocument();
+    await userEvent.click(c.getByRole('button', { name: /Save settings/i }));
+    await waitFor(() =>
+      expect(saveSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dueDateRollup: expect.objectContaining({ '2': 'childrenOnly' }),
+          dateFields: { '2': { due: 'customfield_10022' } },
+        }),
       ),
     );
   },
@@ -150,7 +212,7 @@ export const StoredDateFields: Story = {
       levels: LEVELS,
       config: {
         dueDateRollup: {},
-        dateFields: { Outcome: { start: 'customfield_10023', due: 'customfield_10022' } },
+        dateFields: { '4': { start: 'customfield_10023', due: 'customfield_10022' } },
       },
       save: saveSpy,
     }),
@@ -173,7 +235,7 @@ export const DateFieldsUnavailable: Story = {
   args: {
     useSettings: stub({
       levels: LEVELS,
-      config: { dueDateRollup: {}, dateFields: { Epic: { due: 'customfield_10022' } } },
+      config: { dueDateRollup: {}, dateFields: { '1': { due: 'customfield_10022' } } },
       dateFields: null,
       save: saveSpy,
     }),
@@ -186,7 +248,7 @@ export const DateFieldsUnavailable: Story = {
     await userEvent.click(c.getByRole('button', { name: /Save settings/i }));
     await waitFor(() =>
       expect(saveSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ dateFields: { Epic: { due: 'customfield_10022' } } }),
+        expect.objectContaining({ dateFields: { '1': { due: 'customfield_10022' } } }),
       ),
     );
   },
@@ -213,7 +275,8 @@ export const SpaceReady: Story = {
   },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(c.getByText('Connected')).toBeInTheDocument();
+    // the KPI Space card and the KPI Hierarchy card are both connected
+    await expect(c.getAllByText('Connected')).toHaveLength(2);
     await expect(c.getByText('KPIs (KPI)')).toBeInTheDocument();
   },
 };

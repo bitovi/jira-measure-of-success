@@ -583,6 +583,32 @@ export const AddKpiFailed: Story = {
 };
 
 /**
+ * Nesting before an admin has chosen the KPI hierarchy link type: the modal
+ * explains it and offers "Open Settings" instead of a raw Jira link error.
+ */
+export const AddChildKpiHierarchyNotSetUp: Story = {
+  args: {
+    useData: stub({
+      data: POPULATED,
+      createKpi: async () => {
+        throw new Error('KPI hierarchy is not set up — choose how KPIs nest in Settings first.');
+      },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Add child KPI' })[0]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Sub Metric');
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    const alert = within(await dialog.findByRole('alert'));
+    await expect(alert.getByText('KPI nesting isn’t set up')).toBeInTheDocument();
+    await expect(alert.getByRole('button', { name: /Open Settings/i })).toBeInTheDocument();
+    await expect(dialog.getByLabelText('KPI name')).toHaveValue('Sub Metric');
+  },
+};
+
+/**
  * Interaction: a row's add-child (+) button nests the new KPI under that KPI.
  * The button is hover-revealed but remains findable by accessible name.
  */
