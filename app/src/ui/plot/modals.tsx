@@ -5,6 +5,7 @@ import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle } from '@atlaski
 import Textfield from '@atlaskit/textfield';
 import type { TimelineNodeDto, TimelineReadingDto, TimelineTargetDto } from '@domain/index.js';
 import { fmtVal } from './scale.js';
+import { errorMessage, useModalSave } from './useModalSave.js';
 
 /**
  * The record / edit / projection modals shared by the KPI Timeline and the KPI
@@ -13,6 +14,24 @@ import { fmtVal } from './scale.js';
  * duplicated per surface. Built on `@atlaskit/modal-dialog` (portal, focus trap,
  * Escape/blanket close); each modal is mounted by its parent only while open.
  */
+
+/** A save failed — shown at the top of the modal body, like a Jira form error. */
+export function ModalError({ error, onDismiss }: { error: unknown; onDismiss: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="mb-3 flex items-start gap-3 rounded-lg border border-danger bg-surface px-3 py-2 text-sm"
+    >
+      <div className="flex-1">
+        <p className="font-semibold text-danger">Couldn’t save your change</p>
+        <p className="mt-0.5 text-text-subtle">{errorMessage(error)}</p>
+      </div>
+      <Button appearance="subtle" spacing="compact" aria-label="Dismiss" onClick={onDismiss}>
+        <CrossIcon label="" size="small" />
+      </Button>
+    </div>
+  );
+}
 
 /** Small caption under a modal title — the KPI the modal acts on. */
 export function ModalSubtitle({ children }: { children: ReactNode }) {
@@ -107,22 +126,30 @@ export function RecordModal({
   defaultDate: string;
   today: string;
   onCancel: () => void;
-  onRecord: (date: string, value: number) => void;
+  /** Resolves once saved (the caller then closes the modal); a rejection is shown in the modal. */
+  onRecord: (date: string, value: number) => void | Promise<void>;
 }) {
   const [date, setDate] = useState(defaultDate);
   const [value, setValue] = useState('');
   const valueRef = useRef<HTMLInputElement>(null);
+  const { saving, error, clearError, run } = useModalSave();
   const isFutureDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && date > today;
 
   const submit = () => {
     const num = Number(value.replace(/,/g, ''));
-    if (value.trim() === '' || Number.isNaN(num)) return;
+    if (saving || value.trim() === '' || Number.isNaN(num)) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
-    onRecord(date, num);
+    void run(() => onRecord(date, num));
   };
 
   return (
-    <Modal onClose={onCancel} width={380} autoFocus={valueRef}>
+    <Modal
+      onClose={onCancel}
+      width={380}
+      autoFocus={valueRef}
+      shouldCloseOnEscapePress={!saving}
+      shouldCloseOnOverlayClick={!saving}
+    >
       <ModalHeader>
         <ModalTitle>Record a value</ModalTitle>
       </ModalHeader>
@@ -130,12 +157,14 @@ export function RecordModal({
         <ModalSubtitle>
           {node.name} · {node.unit}
         </ModalSubtitle>
+        {error !== null && <ModalError error={error} onDismiss={clearError} />}
         <div className="flex flex-col gap-3">
           <ModalField label="Date" htmlFor="record-date">
             <Textfield
               id="record-date"
               type="date"
               value={date}
+              isDisabled={saving}
               onChange={(e: FormEvent<HTMLInputElement>) => setDate(e.currentTarget.value)}
             />
           </ModalField>
@@ -151,16 +180,17 @@ export function RecordModal({
               ref={valueRef}
               value={value}
               placeholder="e.g. 1,300,000"
+              isDisabled={saving}
               onChange={(e: FormEvent<HTMLInputElement>) => setValue(e.currentTarget.value)}
             />
           </ModalField>
         </div>
       </ModalBody>
       <ModalFooter>
-        <Button appearance="subtle" onClick={onCancel}>
+        <Button appearance="subtle" onClick={onCancel} isDisabled={saving}>
           Cancel
         </Button>
-        <Button appearance="primary" onClick={submit}>
+        <Button appearance="primary" onClick={submit} isLoading={saving}>
           Record
         </Button>
       </ModalFooter>
@@ -183,20 +213,36 @@ export function EditReadingModal({
   node: TimelineNodeDto;
   reading: TimelineReadingDto;
   onCancel: () => void;
-  onSave: (value: number) => void;
-  onDelete: () => void;
+  /** Resolve once saved (the caller then closes the modal); a rejection is shown in the modal. */
+  onSave: (value: number) => void | Promise<void>;
+  onDelete: () => void | Promise<void>;
 }) {
   const [value, setValue] = useState(String(reading.value));
   const valueRef = useRef<HTMLInputElement>(null);
+  const { saving, error, clearError, run } = useModalSave();
+  // Which button started the save, so only that one spins.
+  const [action, setAction] = useState<'save' | 'delete'>('save');
 
   const submit = () => {
     const num = Number(value.replace(/,/g, ''));
-    if (value.trim() === '' || Number.isNaN(num)) return;
-    onSave(num);
+    if (saving || value.trim() === '' || Number.isNaN(num)) return;
+    setAction('save');
+    void run(() => onSave(num));
+  };
+  const remove = () => {
+    if (saving) return;
+    setAction('delete');
+    void run(onDelete);
   };
 
   return (
-    <Modal onClose={onCancel} width={380} autoFocus={valueRef}>
+    <Modal
+      onClose={onCancel}
+      width={380}
+      autoFocus={valueRef}
+      shouldCloseOnEscapePress={!saving}
+      shouldCloseOnOverlayClick={!saving}
+    >
       <ModalHeader>
         <ModalTitle>Edit value</ModalTitle>
       </ModalHeader>
@@ -204,26 +250,38 @@ export function EditReadingModal({
         <ModalSubtitle>
           {node.name} · {node.unit} · {reading.date}
         </ModalSubtitle>
+        {error !== null && <ModalError error={error} onDismiss={clearError} />}
         <ModalField label="Value" htmlFor="edit-reading-value">
           <Textfield
             id="edit-reading-value"
             ref={valueRef}
             value={value}
             placeholder="e.g. 1,300,000"
+            isDisabled={saving}
             onChange={(e: FormEvent<HTMLInputElement>) => setValue(e.currentTarget.value)}
           />
         </ModalField>
       </ModalBody>
       <ModalFooter>
         <div className="mr-auto">
-          <Button appearance="danger" onClick={onDelete}>
+          <Button
+            appearance="danger"
+            onClick={remove}
+            isDisabled={saving && action !== 'delete'}
+            isLoading={saving && action === 'delete'}
+          >
             Delete
           </Button>
         </div>
-        <Button appearance="subtle" onClick={onCancel}>
+        <Button appearance="subtle" onClick={onCancel} isDisabled={saving}>
           Cancel
         </Button>
-        <Button appearance="primary" onClick={submit}>
+        <Button
+          appearance="primary"
+          onClick={submit}
+          isDisabled={saving && action !== 'save'}
+          isLoading={saving && action === 'save'}
+        >
           Save
         </Button>
       </ModalFooter>

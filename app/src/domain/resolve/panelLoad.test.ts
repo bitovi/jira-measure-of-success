@@ -107,6 +107,44 @@ describe('assemblePanel', () => {
     expect(cleared.rows).toHaveLength(3);
     expect(cleared.rows.every((r) => r.resolving === undefined)).toBe(true);
   });
+
+  describe('a target on a KPI that is no longer in the catalog (deleted KPI)', () => {
+    const orphaned: PanelBasis = {
+      ...basis,
+      own: [assignment('KPI-1', ownDue), assignment('KPI-9', ownDue)],
+      parentKpiIds: ['KPI-9', 'KPI-8'],
+    };
+
+    it.each([
+      ['Phase 1 only', null],
+      ['with Phase 2', values],
+    ])('%s: keeps the bet, flags it missing, and never resolves values', (_label, phase2) => {
+      const row = assemblePanel(orphaned, phase2).rows.find((r) => r.kpiId === 'KPI-9')!;
+      expect(row).toMatchObject({
+        kpiMissing: true,
+        name: 'KPI-9',
+        unit: '',
+        direction: null,
+        relationship: 'shared',
+        target: 10,
+        targetType: 'percent',
+        dueTiming: ownDue,
+        resolvedValue: null,
+        displayState: null,
+      });
+      expect(row.resolving).toBeUndefined();
+    });
+
+    it('known KPIs are not flagged', () => {
+      const signups = assemblePanel(orphaned, values).rows.find((r) => r.kpiId === 'KPI-1')!;
+      expect(signups.kpiMissing).toBeUndefined();
+    });
+
+    it("doesn't offer to track a parent's target on a deleted KPI", () => {
+      const panel = assemblePanel(orphaned, values);
+      expect(panel.rows.some((r) => r.kpiId === 'KPI-8')).toBe(false);
+    });
+  });
 });
 
 describe('needsParentDue', () => {

@@ -9,6 +9,7 @@ import {
   normalizeProjectKey,
   projectKeyOfIssueKey,
   readingsFromChangelog,
+  type AddedTarget,
   type AddTargetInput,
   type Assignment,
   type CatalogEntryDto,
@@ -16,7 +17,9 @@ import {
   type KpiSpaceStatus,
   type PanelData,
   type PanelListData,
+  type PanelParts,
   type PanelValuesData,
+  type RecordValueInput,
   type ResolvedEndpoint,
   type TargetContributionsByKpi,
   type TargetSourceIssue,
@@ -34,6 +37,7 @@ import {
   fetchSubtreeTimingNodes,
   fetchSubtreeTimingNodesForRoots,
   fetchTargetContributions,
+  fetchTargetSourceIssue,
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
@@ -177,7 +181,8 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
 
   const [issue, space] = await Promise.all([issueP, spaceP]);
   if (isKpiIssue(issue.issueKey, space.key)) {
-    const [timeline, kpiIssues] = await Promise.all([buildTimelineData(), kpiIssuesP]);
+    const [{ skeleton, contributions }, kpiIssues] = await Promise.all([buildTimelineParts(), kpiIssuesP]);
+    const timeline = applyTargetContributions(skeleton, contributions);
     const node = findTimelineNodeByIssueKey(timeline.roots, issue.issueKey);
     if (node) {
       return {
@@ -187,7 +192,8 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
           catalog: buildKpiCatalog(kpiIssues),
           issueDueDate: null,
           issueDueRolledUp: false,
-          kpiView: { node, today: timeline.today },
+          // The raw targets ride along so recording a value can rebuild the markers client-side.
+          kpiView: { node, today: timeline.today, contributions: contributions[node.kpiId] ?? [] },
         },
       };
     }
@@ -262,8 +268,14 @@ async function buildPanelValues(issueId: string): Promise<PanelValuesData> {
  * client uses for the progressive load.
  */
 async function buildPanelData(issueId: string): Promise<PanelData> {
-  const [list, values] = await Promise.all([buildPanelList(issueId), buildPanelValues(issueId)]);
+  const { list, values } = await buildPanelParts(issueId);
   return list.panel ?? assemblePanel(list.basis, values);
+}
+
+/** Both phases of the panel, unassembled — what save/remove return (see PanelParts). */
+async function buildPanelParts(issueId: string): Promise<PanelParts> {
+  const [list, values] = await Promise.all([buildPanelList(issueId), buildPanelValues(issueId)]);
+  return { list, values };
 }
 
 /**
@@ -304,14 +316,14 @@ define('saveAssignment', async ({ payload }) => {
   if (idx >= 0) next[idx] = assignment;
   else next.push(assignment);
   await writeAssignments(issueId, next);
-  return buildPanelData(issueId);
+  return buildPanelParts(issueId);
 });
 
 define('removeAssignment', async ({ payload }) => {
   const { issueId, kpiId } = payload as { issueId: string; kpiId: string };
   const existing = await fetchAssignments(issueId);
   await writeAssignments(issueId, existing.filter((a) => a.kpiId !== kpiId));
-  return buildPanelData(issueId);
+  return buildPanelParts(issueId);
 });
 
 define('getHierarchyLevels', async () => fetchHierarchyLevels());
@@ -514,30 +526,35 @@ async function buildTargetContributionsByKpi(): Promise<TimelineTargetsData> {
   return { contributions: byKpi };
 }
 
+/** Both timeline phases, run at once and left unmerged. */
+async function buildTimelineParts(): Promise<{ skeleton: TimelineData; contributions: TargetContributionsByKpi }> {
+  const [skeleton, targets] = await Promise.all([buildTimelineSkeleton(), buildTargetContributionsByKpi()]);
+  return { skeleton, contributions: targets.contributions };
+}
+
 /**
- * The complete timeline (skeleton + targets) — what mutations return. Both
- * phases run at once, then the same `applyTargetContributions` the client uses
- * for progressive loading merges them, so the two paths can't drift apart.
+ * The complete timeline (skeleton + targets) in one call. Merged with the same
+ * `applyTargetContributions` the client uses for progressive loading, so the
+ * two paths can't drift apart.
  */
 async function buildTimelineData(): Promise<TimelineData> {
-  const [skeleton, targets] = await Promise.all([buildTimelineSkeleton(), buildTargetContributionsByKpi()]);
-  return applyTargetContributions(skeleton, targets.contributions);
+  const { skeleton, contributions } = await buildTimelineParts();
+  return applyTargetContributions(skeleton, contributions);
 }
 
 define('getTimelineSkeleton', async () => buildTimelineSkeleton());
 define('getTimelineTargets', async () => buildTargetContributionsByKpi());
 define('getTimelineData', async () => buildTimelineData());
 
+// Returns nothing: readings are last-write-wins per date, so the client applies
+// the same edit to the series it already holds (applyReadingEdits) instead of
+// waiting on a rebuilt timeline or panel.
 define('recordValue', async ({ payload }) => {
-  const { kpiId, date, value } = payload as {
-    kpiId: string;
-    date: string;
-    value: number | null;
-  };
+  const { kpiId, date, value } = payload as RecordValueInput;
   // Readings are KPI-global (storage-model.md): kpiId identifies the KPI issue
   // whose reading-field changelog holds the series. value=null tombstones a date.
   await writeReading(kpiId, date, value);
-  return buildTimelineData();
+  return null;
 });
 
 // Type-ahead issue search for the Add Target picker (Jira's issue-picker
@@ -550,9 +567,13 @@ define('searchIssues', async ({ payload }) => {
 // Add a target to a KPI, held as an assignment (due on an absolute date) on the
 // chosen contributing work issue. One assignment per (issue, KPI) — updates in
 // place if the issue already targets this KPI. Mirrors the harness `addTarget`.
+//
+// Returns just the saved contribution, not a rebuilt timeline: the client already
+// holds the KPI's readings, so it builds the marker itself. A rebuild would also
+// re-discover targets through the `kpiIds` search index, which lags this write.
 define('addTarget', async ({ payload, context }) => {
   const input = payload as AddTargetInput;
-  const existing = await fetchAssignments(input.issueId);
+  const issue = await fetchTargetSourceIssue(input.issueId);
   const assignment: Assignment = {
     kpiId: input.kpiId,
     inheritFromParent: false,
@@ -565,38 +586,37 @@ define('addTarget', async ({ payload, context }) => {
     updatedBy: (context as { accountId?: string })?.accountId ?? 'app',
     updatedAt: Date.now(),
   };
-  const idx = existing.findIndex((a) => a.kpiId === input.kpiId);
-  const next = [...existing];
+  const idx = issue.assignments.findIndex((a) => a.kpiId === input.kpiId);
+  const next = [...issue.assignments];
   if (idx >= 0) next[idx] = assignment;
   else next.push(assignment);
-  await writeAssignments(input.issueId, next);
-  return buildTimelineData();
+  // The marker's icon is inlined (see buildTargetContributionsByKpi) alongside the write.
+  const [, iconByUrl] = await Promise.all([
+    writeAssignments(input.issueId, next),
+    inlineIssueTypeIcons([issue.typeIconUrl]),
+  ]);
+  const added: AddedTarget = {
+    assignment,
+    source: {
+      key: issue.key,
+      type: issue.typeName,
+      title: issue.summary,
+      iconUrl: (issue.typeIconUrl && iconByUrl.get(issue.typeIconUrl)) ?? issue.typeIconUrl,
+      due: issue.due,
+    },
+  };
+  return added;
 });
 
-/**
- * Jira's JQL index lags issue creation by ~1–2s, so an immediate re-enumeration
- * misses the just-created KPI — leaving the timeline unchanged until a manual
- * refresh. Poll the lightweight KPI-space enumeration until the new key is
- * indexed (bounded) so the timeline built afterwards reliably includes it.
- */
-async function waitForKpiIndexed(projectKey: string, kpiKey: string): Promise<void> {
-  const attempts = 6;
-  const delayMs = 400;
-  for (let i = 0; i < attempts; i += 1) {
-    const issues = await fetchKpiSpaceIssues(projectKey);
-    if (issues.some((issue) => issue.key === kpiKey)) return;
-    if (i < attempts - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-}
-
+// Returns just the new KPI (see CreatedKpi): it has no readings or targets, so the
+// client splices it into its tree — no waiting on Jira's search index to list it
+// and no full timeline rebuild.
 define('createKpi', async ({ payload }) => {
   const input = payload as CreateKpiInput;
   const space = await readResolvedKpiSpaceConfig();
   if (!space.key || !space.projectId)
     throw new Error('KPI space is not set up — configure it in Settings first.');
-  const createdKey = await createKpiIssue(space.projectId, input);
-  await waitForKpiIndexed(space.key, createdKey);
-  return buildTimelineData();
+  return createKpiIssue(space.projectId, input);
 });
 
 export const handler = resolver.getDefinitions();

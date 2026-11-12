@@ -41,6 +41,8 @@ import {
  * The estimate updates live while editing. Width-responsive via a container query.
  *
  * `preview` renders the same card read-only (the "Set a KPI target" preview).
+ * A `kpiMissing` row (its KPI issue was deleted) shows the bet read-only with a
+ * "KPI deleted" lozenge and a notice; Remove is the only action.
  */
 export function TargetCard({
   row: savedRow,
@@ -89,8 +91,10 @@ export function TargetCard({
   }, [editing]);
 
   // While Phase 2 (readings + rolled-up dates) loads, the status and its nudge are unknown.
-  const pill = row.resolving ? null : pillFor(row);
-  const nudge = row.resolving ? null : nudgeFor(row);
+  // A target on a deleted KPI has neither: it can only be removed.
+  const missing = !!row.kpiMissing;
+  const pill = row.resolving || missing ? null : pillFor(row);
+  const nudge = row.resolving || missing ? null : nudgeFor(row);
   const saved = draftFromRow(row);
   const amount = betAmount(row.targetType, row.target, row.unit);
   const when = betWhen(row.dueTiming);
@@ -126,6 +130,7 @@ export function TargetCard({
               </span>
             </Lozenge>
           )}
+          {missing && <Lozenge appearance="removed">KPI deleted</Lozenge>}
         </span>
         {!preview && (
           <DropdownMenu<HTMLButtonElement>
@@ -149,14 +154,16 @@ export function TargetCard({
             )}
           >
             <DropdownItemGroup>
-              <DropdownItem
-                onClick={() => {
-                  refocusFromMenu.current = true;
-                  startEdit('amount');
-                }}
-              >
-                Edit
-              </DropdownItem>
+              {!missing && (
+                <DropdownItem
+                  onClick={() => {
+                    refocusFromMenu.current = true;
+                    startEdit('amount');
+                  }}
+                >
+                  Edit
+                </DropdownItem>
+              )}
               <DropdownItem onClick={() => setConfirmingRemove(true)}>Remove</DropdownItem>
             </DropdownItemGroup>
           </DropdownMenu>
@@ -171,7 +178,7 @@ export function TargetCard({
             : '[@container(min-width:460px)]:flex [@container(min-width:460px)]:items-baseline [@container(min-width:460px)]:justify-between [@container(min-width:460px)]:gap-4'
         }
       >
-        {preview ? (
+        {preview || missing ? (
           <div className="py-1">
             <Bet amount={amount} when={when} />
           </div>
@@ -211,7 +218,7 @@ export function TargetCard({
             />
           </div>
         )}
-        {!editing && (
+        {!editing && !missing && (
           <Estimate
             row={row}
             currentValue={currentValue}
@@ -227,6 +234,21 @@ export function TargetCard({
             <span className="ml-auto">
               <Button appearance="subtle" spacing="compact" onClick={onRecord}>
                 Record a value
+              </Button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {missing && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded bg-[var(--ds-background-neutral,#091e420f)] px-2 py-1 text-xs leading-4 text-text-subtle">
+          <span className="py-1">
+            This KPI was deleted or moved out of the KPI space, so this target can’t be tracked.
+          </span>
+          {!preview && (
+            <span className="ml-auto">
+              <Button appearance="subtle" spacing="compact" onClick={() => setConfirmingRemove(true)}>
+                Remove target
               </Button>
             </span>
           )}

@@ -5,7 +5,7 @@ import { niceTicks, type TimelineNodeDto, type TimelineReadingDto } from '@domai
  *
  * The ONE genuine difference between the two surfaces is the vertical scale:
  * - `bandScale` — the Timeline's per-row scale: squeeze the value domain into
- *   20–80% of a short (60px) row, NO ticks/labels.
+ *   25–75% of a short (60px) row, NO ticks/labels.
  * - `niceScale` — the KPI View's tall (~600px) scale: a linear "nice" tick
  *   scale WITH gridline values + labels.
  * Both return a `yOf(value) → px` mapper, so the shared plot components
@@ -72,8 +72,9 @@ export function domainFor(node: TimelineNodeDto): { min: number; max: number } |
 }
 
 /**
- * Timeline scale: value → y within a short row, padded to 20–80% of `plotH`.
- * No ticks (a 60px row can't hold labels).
+ * Timeline scale: value → y within a short row, padded to 25–75% of `plotH`
+ * (15px of a 60px row) so an estimate target's error bar (`ERROR_BAR_H`, 24px)
+ * at the row's min/max still fits. No ticks (a 60px row can't hold labels).
  */
 export function bandScale(node: TimelineNodeDto, plotH: number): (v: number) => number {
   return bandScaleOf(domainFor(node), plotH);
@@ -84,7 +85,7 @@ export function bandScaleOf(dom: { min: number; max: number } | null, plotH: num
   return (v: number): number => {
     if (!dom) return plotH / 2;
     const frac = (v - dom.min) / (dom.max - dom.min);
-    return plotH * 0.2 + (1 - frac) * plotH * 0.6;
+    return plotH * 0.25 + (1 - frac) * plotH * 0.5;
   };
 }
 

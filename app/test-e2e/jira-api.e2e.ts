@@ -132,14 +132,16 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     expect(project?.issueTypeNames).toContain(KPI_ISSUE_TYPE);
   });
 
-  it('createKpiIssue → creates a root KPI (+ writeKpiMeta)', async () => {
+  it('createKpiIssue → creates a root KPI (kpi-meta set in the create request)', async () => {
     expect(ctx.projectId, 'requires createKpiProject to have succeeded').toBeTruthy();
-    ctx.rootKey = await createKpiIssue(ctx.projectId!, {
+    const created = await createKpiIssue(ctx.projectId!, {
       name: 'E2E Revenue',
       unit: '$',
       direction: 'increase',
     });
+    ctx.rootKey = created.issueKey;
     expect(ctx.rootKey).toBeTruthy();
+    expect(created).toMatchObject({ kpiId: ctx.rootKey, name: 'E2E Revenue', unit: '$', parentKpiId: null });
   });
 
   it('fetchKpiMeta → round-trips unit/direction', async () => {
@@ -150,12 +152,14 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
 
   it('createKpiIssue → nests a child KPI via a Parent link', async () => {
     expect(ctx.rootKey, 'requires createKpiIssue (root) to have succeeded').toBeTruthy();
-    ctx.childKey = await createKpiIssue(ctx.projectId!, {
-      name: 'E2E Regional Revenue',
-      unit: '$',
-      direction: 'increase',
-      parentKpiId: ctx.rootKey,
-    });
+    ctx.childKey = (
+      await createKpiIssue(ctx.projectId!, {
+        name: 'E2E Regional Revenue',
+        unit: '$',
+        direction: 'increase',
+        parentKpiId: ctx.rootKey,
+      })
+    ).issueKey;
     expect(ctx.childKey).toBeTruthy();
   });
 

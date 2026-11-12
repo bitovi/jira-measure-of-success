@@ -86,10 +86,17 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
       actual: null,
     } satisfies Partial<PanelRowDto>;
     if (!a) {
+      // Don't offer to track a parent's target on a KPI that no longer exists.
+      if (!def) return;
       rows.push({ ...head, target: null, targetType: null, targetDate: null, dueTiming: null, start: null, relationship, ...empty });
       return;
     }
     const bet = { target: a.target, targetType: a.targetType, dueTiming: a.timing.due, start: a.timing.start, relationship };
+    if (!def) {
+      // A deleted KPI has no readings, so Phase 2 can't resolve anything for it.
+      rows.push({ ...head, ...bet, targetDate: null, ...empty, kpiMissing: true });
+      return;
+    }
     if (!values) {
       rows.push({ ...head, ...bet, targetDate: null, ...empty, resolving: true });
       return;

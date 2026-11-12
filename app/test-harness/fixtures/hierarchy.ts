@@ -166,7 +166,16 @@ export const ISSUES: FixtureIssue[] = [
     parentId: '10090',
     ownStart: '2026-02-01',
     ownDue: '2026-05-31',
-    assignments: [],
+    // Points at a KPI issue that was deleted from the KPI space (not in CATALOG),
+    // so the panel shows the "KPI deleted" card.
+    assignments: [
+      assignment({
+        kpiId: 'KPI-404',
+        target: 50,
+        targetType: 'absolute',
+        timing: { start: null, due: relDue({ mode: 'absolute', absolute: '2026-05-31' }) },
+      }),
+    ],
   },
 ];
 

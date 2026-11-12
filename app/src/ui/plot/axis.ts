@@ -12,7 +12,9 @@ import { ms } from './scale.js';
  * (always including `today` so the today line stays on-canvas), snapped outward
  * to whole quarters with a pad quarter on each side. When the range fits the
  * viewport there's no horizontal scroll; a genuinely wide range still scrolls
- * as an overflow fallback.
+ * as an overflow fallback. When the data range is NARROWER than the viewport,
+ * `minWidth` appends future quarters (same QUARTER_PX columns) so the plot fills
+ * the available width instead of leaving empty space on the right.
  */
 export interface Axis {
   quarters: Array<{ startMs: number; label: string }>;
@@ -57,13 +59,20 @@ function quarterIndex(msVal: number): number {
  * ∪ dated targets, from one KPI or the union across a tree); `today` is always
  * folded in. With no dates the axis falls back to a previous→next quarter window
  * around today (matching the old centered behavior for the empty case).
+ *
+ * `minWidth` (px, usually the visible plot width) fills the viewport: extra
+ * quarters are appended on the right until the columns cover it, and
+ * `plotWidth` becomes exactly `minWidth` so the plot never overflows (the last
+ * column may be partially visible). Only the right edge grows, so positions and
+ * `domainStart` are unaffected (extend-only rule).
  */
 export function buildAxis(
   dates: string[],
   today: string,
-  opts: { padQuarters?: number } = {},
+  opts: { padQuarters?: number; minWidth?: number } = {},
 ): Axis {
   const pad = opts.padQuarters ?? 1;
+  const minWidth = Math.max(0, opts.minWidth ?? 0);
   const todayMs = ms(today);
   const times = dates.map(ms).filter((t) => Number.isFinite(t));
   times.push(todayMs);
@@ -72,7 +81,8 @@ export function buildAxis(
 
   const firstQ = addQuarters(quarterStartMs(minT), -pad);
   const lastQ = addQuarters(quarterStartMs(maxT), pad);
-  const count = Math.max(1, quarterIndex(lastQ) - quarterIndex(firstQ) + 1);
+  const dataCount = Math.max(1, quarterIndex(lastQ) - quarterIndex(firstQ) + 1);
+  const count = Math.max(dataCount, Math.ceil(minWidth / QUARTER_PX));
 
   const quarters = Array.from({ length: count }, (_, i) => {
     const startMs = addQuarters(firstQ, i);
@@ -81,7 +91,7 @@ export function buildAxis(
 
   const domainStart = firstQ;
   const domainEnd = addQuarters(firstQ, count);
-  const plotWidth = count * QUARTER_PX;
+  const plotWidth = Math.max(dataCount * QUARTER_PX, minWidth);
   // Piecewise per quarter: every quarter column is exactly QUARTER_PX wide, so a
   // date's pixel offset depends only on its own quarter's position — adding
   // quarters on the right never moves anything, and adding N on the left moves

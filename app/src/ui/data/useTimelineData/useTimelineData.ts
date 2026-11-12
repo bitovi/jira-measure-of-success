@@ -1,17 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import { call } from '@ui/bridge.js';
 import type {
+  AddedTarget,
   AddTargetInput,
+  CreatedKpi,
   CreateKpiInput,
   IssuePickerItem,
+  RecordValueInput,
   TimelineData,
   TimelineTargetsData,
 } from '@domain/index.js';
 import { deriveTimelineView } from './timelineView.js';
 
 /**
- * A mutation (record / createKpi) failure, surfaced as inline, dismissible
- * state rather than an unhandled promise rejection. `space-not-set-up` is the
+ * A mutation failure, as the save modals show it. Mutations reject, and the
+ * modal turns the rejection into this with `toActionError`. `space-not-set-up` is the
  * specific backend guard (`KPI space is not set up …`) that the UI renders with
  * an "Open Settings" affordance; everything else is `generic`.
  */
@@ -21,7 +24,7 @@ export type TimelineActionError =
 
 const SPACE_NOT_SET_UP = 'KPI space is not set up';
 
-function toActionError(e: unknown): TimelineActionError {
+export function toActionError(e: unknown): TimelineActionError {
   const message = e instanceof Error ? e.message : String(e);
   if (message.includes(SPACE_NOT_SET_UP)) return { kind: 'space-not-set-up', message };
   return { kind: 'generic', message };
@@ -42,18 +45,20 @@ export interface TimelineController {
   retryTargets(): void;
   /** Initial-load failure — drives the full-screen "Failed to load" state. */
   error: string | null;
-  /** Mutation (record / createKpi) failure — drives the inline banner. */
-  actionError: TimelineActionError | null;
-  /** Dismiss the current mutation error. */
-  clearActionError(): void;
-  /** Record a value at a date. Pass `null` to delete (tombstone) that date. */
-  record(kpiId: string, date: string, value: number | null): void;
-  /** create a KPI (root or nested under parentKpiId) */
-  createKpi(input: CreateKpiInput): void;
+  /**
+   * Record a value at a date; `null` deletes (tombstones) that date. Resolves
+   * once saved and on the timeline; rejects with the failure.
+   */
+  record(kpiId: string, date: string, value: number | null): Promise<void>;
+  /**
+   * Create a KPI (root or nested under parentKpiId). Resolves once it's saved
+   * and on the timeline; rejects with the failure (see `toActionError`).
+   */
+  createKpi(input: CreateKpiInput): Promise<void>;
   /** Type-ahead search for a contributing issue (Add Target picker). */
   searchIssues(query: string): Promise<IssuePickerItem[]>;
-  /** Add a target for a KPI, held on the chosen contributing issue. */
-  addTarget(input: AddTargetInput): void;
+  /** Add a target for a KPI, held on the chosen contributing issue. Resolves/rejects like `createKpi`. */
+  addTarget(input: AddTargetInput): Promise<void>;
 }
 
 export type UseTimeline = () => TimelineController;
@@ -106,11 +111,11 @@ export const useTimelineData: UseTimeline = () => {
   const [skeleton, setSkeleton] = useState<TimelineData | null>(null);
   const [contributions, setContributions] = useState<TimelineTargetsData['contributions'] | null>(null);
   const [targetsError, setTargetsError] = useState<string | null>(null);
-  // A complete timeline returned by a mutation. It already includes targets, so
-  // it supersedes the progressive pieces (see deriveTimelineView).
-  const [full, setFull] = useState<TimelineData | null>(null);
+  // KPIs, values and targets saved this session, laid over whatever is loaded (deriveTimelineView).
+  const [created, setCreated] = useState<CreatedKpi[]>([]);
+  const [readingEdits, setReadingEdits] = useState<RecordValueInput[]>([]);
+  const [addedTargets, setAddedTargets] = useState<AddedTarget[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<TimelineActionError | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -141,8 +146,8 @@ export const useTimelineData: UseTimeline = () => {
   }, [targetsRequest]);
 
   const view = useMemo(
-    () => deriveTimelineView({ skeleton, contributions, targetsError, full }),
-    [skeleton, contributions, targetsError, full],
+    () => deriveTimelineView({ skeleton, contributions, targetsError, created, readingEdits, addedTargets }),
+    [skeleton, contributions, targetsError, created, readingEdits, addedTargets],
   );
 
   const retryTargets = () => {
@@ -151,33 +156,24 @@ export const useTimelineData: UseTimeline = () => {
   };
 
   const record = async (kpiId: string, date: string, value: number | null) => {
-    try {
-      setActionError(null);
-      setFull(await call<TimelineData>('recordValue', { kpiId, date, value }));
-    } catch (e) {
-      setActionError(toActionError(e));
-    }
+    const edit: RecordValueInput = { kpiId, date, value };
+    await call('recordValue', edit);
+    setReadingEdits((prev) => [...prev, edit]);
   };
 
   const createKpi = async (input: CreateKpiInput) => {
-    try {
-      setActionError(null);
-      setFull(await call<TimelineData>('createKpi', input));
-    } catch (e) {
-      setActionError(toActionError(e));
-    }
+    const kpi = await call<CreatedKpi>('createKpi', input);
+    setCreated((prev) => [...prev, kpi]);
   };
 
   const searchIssues = (query: string) =>
     call<IssuePickerItem[]>('searchIssues', { query });
 
   const addTarget = async (input: AddTargetInput) => {
-    try {
-      setActionError(null);
-      setFull(await call<TimelineData>('addTarget', input));
-    } catch (e) {
-      setActionError(toActionError(e));
-    }
+    const added = await call<AddedTarget>('addTarget', input);
+    const sameTarget = (t: AddedTarget) =>
+      t.assignment.kpiId === added.assignment.kpiId && t.source.key === added.source.key;
+    setAddedTargets((prev) => [...prev.filter((t) => !sameTarget(t)), added]);
   };
 
   return {
@@ -187,11 +183,9 @@ export const useTimelineData: UseTimeline = () => {
     targetsError: view.targetsError,
     retryTargets,
     error,
-    actionError,
-    clearActionError: () => setActionError(null),
-    record: (kpiId, date, value) => void record(kpiId, date, value),
-    createKpi: (input) => void createKpi(input),
+    record,
+    createKpi,
     searchIssues,
-    addTarget: (input) => void addTarget(input),
+    addTarget,
   };
 };

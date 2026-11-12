@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { call } from '@ui/bridge.js';
-import type { Assignment, PanelData, PanelListData, PanelValuesData } from '@domain/index.js';
+import type { Assignment, PanelData, PanelListData, PanelParts, PanelValuesData, RecordValueInput } from '@domain/index.js';
 import { derivePanelView } from './panelView.js';
 
 /**
@@ -30,17 +30,18 @@ export interface PanelController {
   error: string | null;
   /** true while a save/remove mutation is in flight */
   busy: boolean;
-  /** the last save/remove/record failed (the panel keeps its previous data) */
+  /** the last save/remove failed (the panel keeps its previous data) */
   actionError: string | null;
   dismissActionError(): void;
   save(assignment: Assignment): void;
   remove(kpiId: string): void;
   /**
-   * Record (or, with value=null, delete) a reading on a KPI — used by the KPI
-   * View (Feature 04) when this issue IS a KPI. Refreshes the panel afterwards
-   * so `data.kpiView` re-renders with the new series.
+   * Record (or, with value=null, delete) a reading on a KPI — from the KPI View
+   * (Feature 04) when this issue IS a KPI, or a target card's "Record a value".
+   * Resolves once saved and applied to the panel (no reload); rejects with the
+   * failure, which the record modal shows.
    */
-  record(kpiId: string, date: string, value: number | null): void;
+  record(kpiId: string, date: string, value: number | null): Promise<void>;
 }
 
 export type UsePanel = (issueId: string) => PanelController;
@@ -100,9 +101,10 @@ export const usePanelData: UsePanel = (issueId) => {
   const [list, setList] = useState<PanelListData | null>(null);
   const [values, setValues] = useState<PanelValuesData | null>(null);
   const [valuesError, setValuesError] = useState<string | null>(null);
-  // A complete panel returned by a mutation. It supersedes the progressive
-  // pieces (see derivePanelView).
-  const [full, setFull] = useState<PanelData | null>(null);
+  // The parts a save/remove returned. They supersede the initial load (see derivePanelView).
+  const [mutated, setMutated] = useState<PanelParts | null>(null);
+  // Values recorded this session, applied over the loaded readings.
+  const [readingEdits, setReadingEdits] = useState<RecordValueInput[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -111,7 +113,8 @@ export const usePanelData: UsePanel = (issueId) => {
   useEffect(() => {
     if (loadedFor.current === issueId) return;
     loadedFor.current = issueId;
-    setFull(null);
+    setMutated(null);
+    setReadingEdits([]);
     setBusy(false);
     setActionError(null);
     setRequests(startRequests(issueId));
@@ -150,22 +153,22 @@ export const usePanelData: UsePanel = (issueId) => {
   }, [requests.values]);
 
   const view = useMemo(
-    () => derivePanelView({ list, values, valuesError, full }),
-    [list, values, valuesError, full],
+    () => derivePanelView({ list, values, valuesError, mutated, readingEdits }),
+    [list, values, valuesError, mutated, readingEdits],
   );
 
   const retryValues = () => setRequests((r) => ({ ...r, values: requestValues(issueId) }));
 
   // Run a mutation for the CURRENT issue. If the issue changes while it's in
   // flight, its result (or failure) belongs to the old issue and is dropped.
-  const runAction = async (load: () => Promise<PanelData>) => {
+  const runAction = async (load: () => Promise<PanelParts>) => {
     const forIssue = issueId;
     const stillCurrent = () => loadedFor.current === forIssue;
     setBusy(true);
     setActionError(null);
     try {
       const next = await load();
-      if (stillCurrent()) setFull(next);
+      if (stillCurrent()) setMutated(next);
     } catch (e: unknown) {
       if (stillCurrent()) setActionError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -173,15 +176,16 @@ export const usePanelData: UsePanel = (issueId) => {
     }
   };
 
-  const mutate = (key: string, payload: unknown) => runAction(() => call<PanelData>(key, payload));
+  const mutate = (key: string, payload: unknown) => runAction(() => call<PanelParts>(key, payload));
 
-  // Recording a reading returns TimelineData (KPI-global), so ignore its result
-  // and re-fetch the panel to refresh `kpiView` with the new series.
-  const record = (kpiId: string, date: string, value: number | null) =>
-    runAction(async () => {
-      await call('recordValue', { kpiId, date, value });
-      return call<PanelData>('getPanelData', { issueId });
-    });
+  // The record modal shows progress and failure itself, so this doesn't touch
+  // `busy`/`actionError` — it saves, then applies the value locally.
+  const record = async (kpiId: string, date: string, value: number | null) => {
+    const forIssue = issueId;
+    const edit: RecordValueInput = { kpiId, date, value };
+    await call('recordValue', edit);
+    if (loadedFor.current === forIssue) setReadingEdits((prev) => [...prev, edit]);
+  };
 
   return {
     data: view.data,
@@ -195,6 +199,6 @@ export const usePanelData: UsePanel = (issueId) => {
     dismissActionError: () => setActionError(null),
     save: (assignment) => void mutate('saveAssignment', { issueId, assignment }),
     remove: (kpiId) => void mutate('removeAssignment', { issueId, kpiId }),
-    record: (kpiId, date, value) => void record(kpiId, date, value),
+    record,
   };
 };

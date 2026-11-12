@@ -70,6 +70,12 @@ export interface PanelRowDto {
    * line, status pill, dates) are still loading — spec 07 progressive panel.
    */
   resolving?: boolean;
+  /**
+   * true when the target points at a KPI that's no longer in the catalog (the
+   * KPI issue was deleted or moved out of the KPI space). The row keeps the
+   * stored bet so it can be removed, but has no values, status or record action.
+   */
+  kpiMissing?: boolean;
 }
 
 export interface CatalogEntryDto {
@@ -147,6 +153,22 @@ export interface KpiViewDto {
   node: TimelineNodeDto;
   /** ISO "today" for the axis marker + status classification */
   today: string;
+  /**
+   * The raw targets behind `node`'s markers, so the client can rebuild them
+   * (`buildKpiTargets`) after recording a value — a marker's status and a
+   * relative target's value depend on the readings.
+   */
+  contributions?: KpiTargetContribution[];
+}
+
+/**
+ * The issue panel's save/remove result: the same two pieces as the progressive
+ * load, so the client keeps assembling the panel itself (and can lay recorded
+ * values over it) instead of receiving a finished one.
+ */
+export interface PanelParts {
+  list: PanelListData;
+  values: PanelValuesData;
 }
 
 // ── Settings preview ────────────────────────────────────────────────────────
@@ -218,6 +240,18 @@ export interface KpiSpaceStatus {
   state: KpiSpaceState;
 }
 
+/**
+ * `recordValue` input: record a reading on a KPI, or with `value: null` delete
+ * the reading at that date. The resolver returns nothing — readings are
+ * last-write-wins per date, so the client applies the same edit to the series it
+ * already holds (`applyReadingEdits`).
+ */
+export interface RecordValueInput {
+  kpiId: string;
+  date: string;
+  value: number | null;
+}
+
 /** Input for creating a KPI (an issue in the KPI space). Nest by parentKpiId. */
 export interface CreateKpiInput {
   name: string;
@@ -226,6 +260,28 @@ export interface CreateKpiInput {
   /** parent KPI to nest under; null/omitted = a root KPI */
   parentKpiId?: string | null;
 }
+
+/**
+ * `createKpi` result: just the new KPI, not a rebuilt timeline. A new KPI has no
+ * readings or targets, so the client splices it into the tree it already has —
+ * no wait for Jira's search index to catch up and no full rebuild.
+ */
+export interface CreatedKpi {
+  id: string;
+  kpiId: string;
+  issueKey: string;
+  name: string;
+  unit: string;
+  direction: KpiDirection | null;
+  parentKpiId: string | null;
+}
+
+/**
+ * `addTarget` result: the saved target as a raw contribution (assignment + its
+ * source issue, icon already inlined). The client turns it into a marker with
+ * the KPI readings it already holds.
+ */
+export type AddedTarget = KpiTargetContribution;
 
 // ── Add target (issue picker) ────────────────────────────────────────────────
 /**

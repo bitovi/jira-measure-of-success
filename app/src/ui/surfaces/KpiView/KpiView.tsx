@@ -9,7 +9,13 @@ import {
   axisDatesOf,
   buildAxis,
   computeHover,
+  Dimmable,
   EditReadingModal,
+  KeyHighlightProvider,
+  PlotKey,
+  summarizeKey,
+  undatedKeyKinds,
+  useKeyHighlight,
   fmtVal,
   niceScale,
   PAD_R,
@@ -21,6 +27,7 @@ import {
   RecordModal,
   Sparkline,
   TargetMarker,
+  useClientWidth,
   type HoverState,
 } from '@ui/plot/index.js';
 import { projectSeries, type TimelineNodeDto, type TimelineReadingDto, type TimelineTargetDto } from '@domain/index.js';
@@ -51,8 +58,11 @@ export function KpiView({
 }: {
   node: TimelineNodeDto;
   today: string;
-  /** record (or, with value=null, delete) a reading on this KPI */
-  onRecord: (kpiId: string, date: string, value: number | null) => void;
+  /**
+   * Record (or, with value=null, delete) a reading on this KPI. Resolves once
+   * saved; the modal stays open (saving) until then and shows a rejection.
+   */
+  onRecord: (kpiId: string, date: string, value: number | null) => void | Promise<void>;
   onOpenIssue?: (issueKey: string) => void | Promise<void>;
   onOpenIssueNewTab?: (issueKey: string) => void | Promise<void>;
   loadSiteUrl?: () => Promise<string>;
@@ -69,8 +79,13 @@ export function KpiView({
   }, [loadSiteUrl]);
 
   // Shared fit-to-range date axis + a nice-tick VALUE scale (the one genuine
-  // difference from the Timeline row — see @ui/plot/scale.ts).
-  const axis = useMemo(() => buildAxis(axisDatesOf(node), today), [node, today]);
+  // difference from the Timeline row — see @ui/plot/scale.ts). Padded with
+  // future quarters to fill the visible plot width.
+  const [measurePlot, plotViewportW] = useClientWidth<HTMLDivElement>();
+  const axis = useMemo(
+    () => buildAxis(axisDatesOf(node), today, { minWidth: plotViewportW - PAD_R }),
+    [node, today, plotViewportW],
+  );
   const scale = useMemo(() => niceScale(node, CHART_H, 5, SCALE_PAD), [node]);
   const yOf = scale.yOf;
   const todayX = axis.xOf(today);
@@ -99,12 +114,16 @@ export function KpiView({
     return past[past.length - 1] ?? null;
   }, [datedTargets, today]);
 
+  // Key bar (spec 08) — the same shared key as the Timeline, for this one KPI.
+  const keySummary = useMemo(() => summarizeKey([node]), [node]);
+  const highlight = useKeyHighlight();
+
   // Recency-weighted forward projection of the recorded readings (null with < 2
   // readings — no trend to draw).
   const projection = useMemo(() => projectSeries(node.readings), [node.readings]);
 
-  const record = (date: string, value: number | null) => {
-    onRecord(node.kpiId, date, value);
+  const record = async (date: string, value: number | null) => {
+    await onRecord(node.kpiId, date, value);
     setAdding(null);
     setEditing(null);
   };
@@ -149,7 +168,7 @@ export function KpiView({
         ) : (
           <span className="text-lg font-semibold">{node.name}</span>
         )}
-        <span className="text-sm text-text-subtle">· {node.unit}</span>
+        <span className="text-sm text-text-subtle">· {node.unit || '—'}</span>
         {node.direction && (
           <span
             className={`inline-flex items-center text-sm ${node.direction === 'increase' ? 'text-success' : 'text-danger'}`}
@@ -180,151 +199,138 @@ export function KpiView({
         </div>
       </div>
 
-      {/* Chart: sticky value-axis gutter + a scrolling quarter plot */}
-      <div className="overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="flex">
-          {/* Sticky Y-axis gutter — tick labels stay put while the plot scrolls. */}
-          <div
-            className="relative flex-none border-r border-border bg-surface"
-            style={{ width: GUTTER_W, height: CHART_H }}
-          >
-            {scale.ticks.map((t) => (
-              <div
-                key={t.value}
-                className="absolute right-2 -translate-y-1/2 text-[11px] tabular-nums text-text-subtle"
-                style={{ top: t.y }}
-              >
-                {t.label}
-              </div>
-            ))}
-          </div>
-
-          {/* Scrolling plot column. */}
-          <div className="min-w-0 flex-1 overflow-x-auto">
+      <KeyHighlightProvider active={highlight.active}>
+        {/* Chart: key bar on top, then a sticky value-axis gutter + a scrolling quarter plot */}
+        <div className="overflow-hidden rounded-lg border border-border bg-surface">
+          <PlotKey summary={keySummary} highlight={highlight} className="border-b border-border" />
+          <div className="flex">
+            {/* Sticky Y-axis gutter — tick labels stay put while the plot scrolls. */}
             <div
-              className="relative cursor-pointer"
-              style={{ width: axis.plotWidth + PAD_R, height: CHART_H }}
-              onClick={onPlotClick}
-              onMouseMove={(e) => setHover(computeHover(node, axis, e, projection))}
-              onMouseLeave={() => setHover(null)}
+              className="relative flex-none border-r border-border bg-surface"
+              style={{ width: GUTTER_W, height: CHART_H }}
             >
-              {/* horizontal nice-tick gridlines */}
               {scale.ticks.map((t) => (
                 <div
                   key={t.value}
-                  className="pointer-events-none absolute left-0 right-0 h-px bg-border"
+                  className="absolute right-2 -translate-y-1/2 text-[11px] tabular-nums text-text-subtle"
                   style={{ top: t.y }}
-                />
+                >
+                  {t.label}
+                </div>
               ))}
-              {/* vertical quarter gridlines + labels along the bottom */}
-              {axis.quarters.map((q) => {
-                const left = axis.xOf(new Date(q.startMs).toISOString().slice(0, 10));
-                return (
-                  <div key={q.startMs}>
-                    <div
-                      className="pointer-events-none absolute top-0 bottom-0 w-px bg-border"
-                      style={{ left }}
-                    />
-                    <div
-                      className="pointer-events-none absolute bottom-1 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                      style={{ left }}
-                    >
-                      {q.label}
-                    </div>
-                  </div>
-                );
-              })}
-              {/* today line */}
+            </div>
+
+            {/* Scrolling plot column. */}
+            <div ref={measurePlot} className="min-w-0 flex-1 overflow-x-auto">
               <div
-                className="pointer-events-none absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80"
-                style={{ left: todayX }}
-              />
-
-              {/* dashed recency-weighted projection of the recorded trend */}
-              {projection && (
-                <ProjectionLine projection={projection} axis={axis} yOf={yOf} plotH={CHART_H} />
-              )}
-
-              {/* recorded-value sparkline */}
-              {node.readings.length === 0 ? (
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-text-subtle">
-                  No values recorded yet — click a past date to add one.
-                </span>
-              ) : (
-                <Sparkline readings={node.readings} axis={axis} yOf={yOf} plotH={CHART_H} />
-              )}
-
-              {/* clickable reading dots */}
-              {node.readings.map((r, i) => (
-                <ReadingDot
-                  key={i}
-                  reading={r}
-                  node={node}
-                  axis={axis}
-                  y={yOf(r.value)}
-                  onEdit={setEditing}
+                className="relative cursor-pointer"
+                style={{ width: axis.plotWidth + PAD_R, height: CHART_H }}
+                onClick={onPlotClick}
+                onMouseMove={(e) => setHover(computeHover(node, axis, e, projection))}
+                onMouseLeave={() => setHover(null)}
+              >
+                {/* horizontal nice-tick gridlines */}
+                {scale.ticks.map((t) => (
+                  <div
+                    key={t.value}
+                    className="pointer-events-none absolute left-0 right-0 h-px bg-border"
+                    style={{ top: t.y }}
+                  />
+                ))}
+                {/* vertical quarter gridlines + labels along the bottom */}
+                {axis.quarters.map((q) => {
+                  const left = axis.xOf(new Date(q.startMs).toISOString().slice(0, 10));
+                  return (
+                    <div key={q.startMs}>
+                      <div
+                        className="pointer-events-none absolute top-0 bottom-0 w-px bg-border"
+                        style={{ left }}
+                      />
+                      <div
+                        className="pointer-events-none absolute bottom-1 overflow-hidden whitespace-nowrap pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                        style={{ left, maxWidth: Math.max(0, axis.plotWidth + PAD_R - left) }}
+                      >
+                        {q.label}
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* today line — solid brand blue (red is reserved for "missed") */}
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0 w-0 border-l-2 border-brand opacity-60"
+                  style={{ left: todayX - 1 }}
                 />
-              ))}
 
-              {/* target markers (dated only; undated render as a list below) */}
-              {datedTargets.map((t, i) => (
-                <TargetMarker
-                  key={i}
-                  target={t}
-                  node={node}
-                  axis={axis}
-                  y={yOf(t.value)}
-                  onOpenIssueNewTab={onOpenIssueNewTab}
-                  siteUrl={siteUrl}
-                />
-              ))}
+                {/* dashed recency-weighted projection of the recorded trend */}
+                {projection && (
+                  <ProjectionLine projection={projection} axis={axis} yOf={yOf} plotH={CHART_H} />
+                )}
 
-              {/* hover crosshair + floating value tooltip */}
-              {hover && <PlotCrosshair x={hover.x} />}
-              {hover && <PlotTooltip hover={hover} />}
+                {/* recorded-value sparkline */}
+                {node.readings.length === 0 ? (
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-text-subtle">
+                    No values recorded yet — click a past date to add one.
+                  </span>
+                ) : (
+                  <Sparkline readings={node.readings} axis={axis} yOf={yOf} plotH={CHART_H} />
+                )}
+
+                {/* clickable reading dots */}
+                {node.readings.map((r, i) => (
+                  <ReadingDot
+                    key={i}
+                    reading={r}
+                    node={node}
+                    axis={axis}
+                    y={yOf(r.value)}
+                    onEdit={setEditing}
+                  />
+                ))}
+
+                {/* target markers (dated only; undated render as a list below) */}
+                {datedTargets.map((t, i) => (
+                  <TargetMarker
+                    key={i}
+                    target={t}
+                    node={node}
+                    axis={axis}
+                    y={yOf(t.value)}
+                    onOpenIssueNewTab={onOpenIssueNewTab}
+                    siteUrl={siteUrl}
+                  />
+                ))}
+
+                {/* hover crosshair + floating value tooltip */}
+                {hover && <PlotCrosshair x={hover.x} />}
+                {hover && <PlotTooltip hover={hover} />}
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Undated targets — a compact list below the chart (chips → projection). */}
-      {node.undated.length > 0 && (
-        <div className="mt-3">
-          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-subtle">
-            Undated targets
+        {/* Undated targets — a compact list below the chart (chips → projection). */}
+        {node.undated.length > 0 && (
+          <div className="mt-3">
+            <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-text-subtle">
+              Undated targets
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {node.undated.map((t, i) => (
+                <Dimmable key={i} kinds={undatedKeyKinds(t)}>
+                  <Tooltip
+                    content={`Projected ${t.provisional ? '≈ ' : ''}${fmtVal(t.value)} ${node.unit} · date TBD — click for details`}
+                  >
+                    <Button spacing="compact" onClick={() => setProjecting(t)}>
+                      {t.provisional ? '≈ ' : ''}
+                      {fmtVal(t.value)} {node.unit}
+                    </Button>
+                  </Tooltip>
+                </Dimmable>
+              ))}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {node.undated.map((t, i) => (
-              <Tooltip
-                key={i}
-                content={`Projected ${t.provisional ? '≈ ' : ''}${fmtVal(t.value)} ${node.unit} · date TBD — click for details`}
-              >
-                <Button spacing="compact" onClick={() => setProjecting(t)}>
-                  {t.provisional ? '≈ ' : ''}
-                  {fmtVal(t.value)} {node.unit}
-                </Button>
-              </Tooltip>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Legend */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-text-subtle">
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-0.5 w-4 bg-success" /> recorded value
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-0.5 w-4 border-t border-dashed border-success opacity-70" />{' '}
-          projection (recent trend)
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rotate-45 bg-text-subtle" /> issue target
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-3 w-0 border-l border-dashed border-danger" /> today
-        </span>
-      </div>
+        )}
+      </KeyHighlightProvider>
 
       <ModalTransition>
         {adding && (

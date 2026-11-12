@@ -81,6 +81,36 @@ describe('createKpiIssue', () => {
     );
     expect(putCall).toBeUndefined();
   });
+
+  it('sets kpi-meta in the create request itself (no separate property PUT) and returns the new KPI', async () => {
+    postResult = { ok: true, status: 201, json: async () => ({ id: '10050', key: 'KPI-7' }) };
+    const created = await createKpiIssue('10000', {
+      name: ' Revenue ',
+      unit: ' $ ',
+      direction: 'increase',
+      parentKpiId: 'KPI-1',
+    });
+
+    expect(created).toEqual({
+      id: '10050',
+      kpiId: 'KPI-7',
+      issueKey: 'KPI-7',
+      name: 'Revenue',
+      unit: '$',
+      direction: 'increase',
+      parentKpiId: 'KPI-1',
+    });
+    const posts = requestJira.mock.calls.filter(([, o]) => o?.method === 'POST');
+    const createBody = JSON.parse((posts[0][1] as { body: string }).body) as {
+      fields: { summary: string };
+      properties: Array<{ key: string; value: unknown }>;
+    };
+    expect(createBody.fields.summary).toBe('Revenue');
+    expect(createBody.properties).toEqual([{ key: 'kpi-meta', value: { unit: '$', direction: 'increase' } }]);
+    // The nest is the only follow-up request: the Parent issue link.
+    expect(posts.map(([r]) => String(r))).toEqual(['/rest/api/3/issue', '/rest/api/3/issueLink']);
+    expect(requestJira.mock.calls.some(([, o]) => o?.method === 'PUT')).toBe(false);
+  });
 });
 
 describe('fetchIconDataUrl', () => {

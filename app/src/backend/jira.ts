@@ -14,6 +14,7 @@ import {
   type DateFieldCatalog,
   type DateFieldOption,
   type DateFieldSelection,
+  type CreatedKpi,
   type CreateKpiInput,
   type IssueLinkRef,
   type IssuePickerItem,
@@ -129,6 +130,38 @@ export async function fetchAssignments(issueId: string): Promise<Assignment[]> {
   if (res.status === 404) return [];
   const body = (await res.json()) as { value?: unknown };
   return parseAssignments(body.value);
+}
+
+/**
+ * What `addTarget` needs about the issue a target is held on, in ONE request:
+ * its current assignments (`properties=`) plus the type/summary/due the new
+ * marker shows — the picker's item omits the issue type.
+ */
+export async function fetchTargetSourceIssue(issueId: string): Promise<{
+  key: string;
+  typeName: string;
+  typeIconUrl: string | null;
+  summary: string;
+  due: string | null;
+  assignments: Assignment[];
+}> {
+  const res = await asUser().requestJira(
+    route`/rest/api/3/issue/${issueId}?fields=summary,issuetype,duedate&properties=${ASSIGNMENT_PROPERTY_KEY}`,
+  );
+  if (!res.ok) throw new Error(await jiraError(res, `load issue ${issueId}`));
+  const data = (await res.json()) as {
+    key: string;
+    fields?: { summary?: string; duedate?: string | null; issuetype?: { name?: string; iconUrl?: string } };
+    properties?: Record<string, unknown>;
+  };
+  return {
+    key: data.key,
+    typeName: data.fields?.issuetype?.name ?? 'Issue',
+    typeIconUrl: data.fields?.issuetype?.iconUrl ?? null,
+    summary: data.fields?.summary ?? data.key,
+    due: data.fields?.duedate ?? null,
+    assignments: parseAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
+  };
 }
 
 /** Persist the full assignment list for an issue (batched single write). */
@@ -979,32 +1012,43 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
  * built-in `Parent` issue LINK (parent = link's outward end), because Jira
  * forbids a standard issue from being the native `parent` of another standard
  * issue. NOTE: unit/direction persist to the `kpi-meta` entity property (the
- * summary carries the KPI name).
+ * summary carries the KPI name) — set in the create request itself, so there's
+ * no separate property write.
  */
-export async function createKpiIssue(projectId: string, input: CreateKpiInput): Promise<string> {
+export async function createKpiIssue(projectId: string, input: CreateKpiInput): Promise<CreatedKpi> {
+  const name = input.name.trim() || 'Untitled KPI';
+  // unit/direction are descriptive, low-churn → issue entity property (not a field).
+  const meta: KpiMetaProperty = KpiMetaProperty.parse({
+    unit: input.unit.trim(),
+    direction: input.direction ?? null,
+  });
   const fields: Record<string, unknown> = {
     project: { id: projectId },
     issuetype: { name: KPI_ISSUE_TYPE },
-    summary: input.name.trim() || 'Untitled KPI',
+    summary: name,
   };
   const res = await asApp().requestJira(route`/rest/api/3/issue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields }),
+    body: JSON.stringify({ fields, properties: [{ key: KPI_META_PROPERTY_KEY, value: meta }] }),
   });
   // Surface Jira's rejection instead of returning `{ key: undefined }` — a
   // swallowed 4xx here is the same silent-failure class fixed in `writeReading`.
   if (!res.ok) {
     throw new Error(await jiraError(res, `create KPI issue "${input.name}"`));
   }
-  const created = (await res.json()) as { key: string };
-  // unit/direction are descriptive, low-churn → issue entity property (not a field).
-  await writeKpiMeta(created.key, {
-    unit: input.unit.trim(),
-    direction: input.direction ?? null,
-  });
-  if (input.parentKpiId) await linkKpiParent(input.parentKpiId, created.key);
-  return created.key;
+  const created = (await res.json()) as { id: string; key: string };
+  const parentKpiId = input.parentKpiId ?? null;
+  if (parentKpiId) await linkKpiParent(parentKpiId, created.key);
+  return {
+    id: String(created.id),
+    kpiId: created.key,
+    issueKey: created.key,
+    name,
+    unit: meta.unit,
+    direction: meta.direction ?? null,
+    parentKpiId,
+  };
 }
 
 /**

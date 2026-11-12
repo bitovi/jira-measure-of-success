@@ -1,9 +1,30 @@
 import { useState } from 'react';
-import type { Projection, TimelineNodeDto, TimelineReadingDto, TimelineTargetDto } from '@domain/index.js';
+import type {
+  Projection,
+  TargetStatus,
+  TimelineNodeDto,
+  TimelineReadingDto,
+  TimelineTargetDto,
+} from '@domain/index.js';
 import type { Axis } from './axis.js';
 import { PAD_R } from './axis.js';
 import { fmtVal } from './scale.js';
 import type { HoverState } from './hover.js';
+import { dimStyle, useIsDimmed } from './useKeyHighlight.js';
+import { targetKeyKinds } from './keyKinds.js';
+
+/**
+ * Recorded values + the projected trend are drawn in a neutral color so green
+ * only ever means "target hit" (spec 08).
+ */
+export const SERIES_COLOR = 'var(--ds-icon, #44546f)';
+
+/**
+ * Total height of the error bar drawn through an estimate target (spec 08).
+ * Rows must reserve at least half of it above/below the value range — see
+ * `bandScaleOf` — so a target at the row's min/max isn't clipped.
+ */
+export const ERROR_BAR_H = 24;
 
 /**
  * The plotted primitives shared by the KPI Timeline and the KPI View — the
@@ -27,6 +48,7 @@ export function Sparkline({
   /** SVG width; defaults to the full plot width + right padding. */
   width?: number;
 }) {
+  const dimmed = useIsDimmed(['recorded']);
   const sorted = [...readings].sort((a, b) => a.date.localeCompare(b.date));
   const points = sorted.map((r) => `${axis.xOf(r.date)},${yOf(r.value)}`).join(' ');
   // Purely presentational and click-through: the track handles hover so a
@@ -36,16 +58,16 @@ export function Sparkline({
       className="pointer-events-none absolute left-0 top-0"
       width={width ?? axis.plotWidth + PAD_R}
       height={plotH}
+      style={dimStyle(dimmed)}
     >
-      <polyline points={points} fill="none" stroke="#22a06b" strokeWidth={1.5} />
+      <polyline points={points} fill="none" style={{ stroke: SERIES_COLOR }} strokeWidth={1.5} />
       {sorted.map((r, i) => (
         <circle
           key={i}
           cx={axis.xOf(r.date)}
           cy={yOf(r.value)}
           r={4}
-          fill="#22a06b"
-          stroke="#fff"
+          style={{ fill: SERIES_COLOR, stroke: 'var(--ds-surface, #fff)' }}
           strokeWidth={2}
         />
       ))}
@@ -56,7 +78,7 @@ export function Sparkline({
 /**
  * The dashed forward-projection ray — the recency-weighted trend of the
  * recorded readings extended from the latest reading to the right edge of the
- * axis (`domainEnd`). Same dashed green as the sparkline so it reads as the
+ * axis (`domainEnd`). Same neutral color as the sparkline so it reads as the
  * metric's projected continuation. Rendered only when a `projection` exists
  * (≥ 2 readings — see `projectSeries`). Shared by the Timeline and KPI View.
  */
@@ -73,6 +95,7 @@ export function ProjectionLine({
   plotH: number;
   width?: number;
 }) {
+  const dimmed = useIsDimmed(['projection']);
   const endISO = new Date(axis.domainEnd).toISOString().slice(0, 10);
   const x1 = axis.xOf(projection.anchorDate);
   const y1 = yOf(projection.anchorValue);
@@ -83,13 +106,14 @@ export function ProjectionLine({
       className="pointer-events-none absolute left-0 top-0"
       width={width ?? axis.plotWidth + PAD_R}
       height={plotH}
+      style={dimStyle(dimmed)}
     >
       <line
         x1={x1}
         y1={y1}
         x2={x2}
         y2={y2}
-        stroke="#22a06b"
+        style={{ stroke: SERIES_COLOR }}
         strokeWidth={1.5}
         strokeDasharray="5 4"
         opacity={0.7}
@@ -132,6 +156,94 @@ export function ReadingDot({
   );
 }
 
+const STATUS_BG: Record<TargetStatus, string> = {
+  hit: 'bg-success',
+  missed: 'bg-danger',
+  upcoming: 'bg-text-subtle',
+};
+const STATUS_TEXT: Record<TargetStatus, string> = {
+  hit: 'text-success',
+  missed: 'text-danger',
+  upcoming: 'text-text-subtle',
+};
+
+const maskStyle = (url: string): React.CSSProperties => ({
+  WebkitMaskImage: `url(${url})`,
+  maskImage: `url(${url})`,
+  WebkitMaskSize: 'contain',
+  maskSize: 'contain',
+  WebkitMaskRepeat: 'no-repeat',
+  maskRepeat: 'no-repeat',
+  WebkitMaskPosition: 'center',
+  maskPosition: 'center',
+});
+
+/**
+ * The visible part of a target marker, shared by the plot and the key (spec 08):
+ *  - the source issue's type icon tinted by status (green hit / red missed /
+ *    gray upcoming), or a status diamond when no tintable icon is available;
+ *  - a ✓ / ✕ badge on hit / missed so status doesn't rely on color alone;
+ *  - an error bar behind the icon when the value is an estimate (≈) — a relative
+ *    target whose baseline hasn't been recorded yet. Rows reserve room for it.
+ *
+ * Tint the icon via CSS mask ONLY for a same-origin `data:` URL, which is
+ * guaranteed CORS-clean. Remote Atlassian icon hosts don't send CORS headers, so
+ * a mask over them fails silently in the iframe (blank marker) — the backend
+ * proxies remote icons into `data:` URLs (see jira.ts inlineIssueTypeIcons); if
+ * that ever falls through, the diamond is drawn instead.
+ */
+export function TargetGlyph({
+  status,
+  provisional,
+  iconUrl,
+  barHeight = ERROR_BAR_H,
+}: {
+  status: TargetStatus;
+  provisional: boolean;
+  iconUrl?: string | null;
+  barHeight?: number;
+}) {
+  const bg = STATUS_BG[status];
+  const canTint = !!iconUrl && iconUrl.startsWith('data:');
+  return (
+    <span className="relative grid place-items-center">
+      {provisional && (
+        <svg
+          aria-hidden="true"
+          data-error-bar
+          className={`pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 ${STATUS_TEXT[status]}`}
+          width={8}
+          height={barHeight}
+          stroke="currentColor"
+          strokeWidth={1.25}
+          strokeLinecap="round"
+        >
+          <line x1={4} y1={1} x2={4} y2={barHeight - 1} />
+          <line x1={1} y1={1} x2={7} y2={1} />
+          <line x1={1} y1={barHeight - 1} x2={7} y2={barHeight - 1} />
+        </svg>
+      )}
+      {/* Surface-colored backing so the error bar passes behind the icon, not through it. */}
+      <span className={`relative grid place-items-center ${provisional ? 'rounded-sm bg-surface p-px' : ''}`}>
+        {canTint ? (
+          <span className={`block h-4 w-4 ${bg}`} style={maskStyle(iconUrl)} />
+        ) : (
+          <span className={`block h-2.5 w-2.5 rotate-45 ${bg}`} />
+        )}
+        {status !== 'upcoming' && (
+          <span
+            aria-hidden="true"
+            data-status-badge
+            className={`absolute -bottom-1 -right-1 grid h-2.5 w-2.5 place-items-center rounded-full ${bg} text-[7px] font-bold leading-none text-surface ring-[1.5px] ring-surface`}
+          >
+            {status === 'hit' ? '✓' : '✕'}
+          </span>
+        )}
+      </span>
+    </span>
+  );
+}
+
 export function TargetMarker({
   target,
   node,
@@ -148,9 +260,7 @@ export function TargetMarker({
   siteUrl: string;
 }) {
   const [tip, setTip] = useState<{ clientX: number; clientY: number; flipX: boolean } | null>(null);
-  // Status colors the marker: green = hit, red = missed, gray = upcoming.
-  // A provisional (not-yet-baselined) estimate is rendered hollow/dashed (FR-23).
-  const color = target.status === 'hit' ? 'bg-success' : target.status === 'missed' ? 'bg-danger' : 'bg-text-subtle';
+  const dimmed = useIsDimmed(targetKeyKinds(target));
   const statusLabel =
     target.status === 'hit' ? 'Target hit' : target.status === 'missed' ? 'Target missed' : 'Upcoming';
 
@@ -159,21 +269,12 @@ export function TargetMarker({
 
   const issueKey = target.source.issue;
   const href = siteUrl ? `${siteUrl}/browse/${issueKey}` : `/browse/${issueKey}`;
-  const iconUrl = target.source.iconUrl;
-  // Tint the issue-type icon via CSS mask ONLY for a same-origin `data:` URL,
-  // which is guaranteed CORS-clean. Remote Atlassian icon hosts don't send CORS
-  // headers, so a mask over them fails silently in the iframe (blank marker) —
-  // the backend proxies remote icons into `data:` URLs (see jira.ts
-  // inlineIssueTypeIcons); if that ever falls through, we render the status
-  // diamond instead of an invisible or full-color marker.
-  const canTint = !!iconUrl && iconUrl.startsWith('data:');
 
   return (
     <>
           {/* Larger transparent hit area centered on the marker so the small target
-            is easy to hover; the visible marker is either a status-tinted issue
-            icon silhouette or, when no icon is available (or it fails), a plain
-            rotated-square diamond in the same status color. Clicking it opens
+            is easy to hover; the visible marker is a `TargetGlyph` (status-tinted
+            issue icon or diamond, ✓/✕ badge, error bar for estimates). Clicking it opens
             the work item that set the target in a NEW tab. No native
           `title` — the custom tooltip below carries the same info, and a title
           would render a second, overlapping browser tooltip. */}
@@ -194,34 +295,11 @@ export function TargetMarker({
           void onOpenIssueNewTab(issueKey);
         }}
       >
-        {canTint ? (
-          <div
-            className={`h-4 w-4 ${color} ${target.provisional ? 'opacity-50' : ''}`}
-            style={{
-              WebkitMaskImage: `url(${iconUrl})`,
-              maskImage: `url(${iconUrl})`,
-              WebkitMaskSize: 'contain',
-              maskSize: 'contain',
-              WebkitMaskRepeat: 'no-repeat',
-              maskRepeat: 'no-repeat',
-              WebkitMaskPosition: 'center',
-              maskPosition: 'center',
-            }}
-          />
-        ) : target.provisional ? (
-          // Provisional estimate: hollow, dashed outline (FR-23).
-          <div
-            className={`h-2.5 w-2.5 rotate-45 border border-dashed bg-transparent ${
-              target.status === 'hit'
-                ? 'border-success'
-                : target.status === 'missed'
-                  ? 'border-danger'
-                  : 'border-text-subtle'
-            }`}
-          />
-        ) : (
-          <div className={`h-2.5 w-2.5 rotate-45 ${color}`} />
-        )}
+        {/* Dim on an inner element: the link's fade-in animation (fill-mode both)
+            would otherwise override an inline opacity. */}
+        <span data-marker-glyph className="grid place-items-center" style={dimStyle(dimmed)}>
+          <TargetGlyph status={target.status} provisional={target.provisional} iconUrl={target.source.iconUrl} />
+        </span>
       </a>
       {tip && (
         <div
@@ -241,7 +319,9 @@ export function TargetMarker({
           </div>
           <div className="text-text-subtle">Due {target.date}</div>
           {target.provisional && (
-            <div className="text-text-subtle">Provisional estimate (baseline not yet baselined)</div>
+            <div className="text-text-subtle">
+              Relative target — ≈ until the KPI&apos;s value at the due date is recorded
+            </div>
           )}
           <div className="mt-0.5 flex items-center gap-1">
             <span className="text-text-subtle">Set on</span>
