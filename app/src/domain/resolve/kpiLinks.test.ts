@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   breakParentCycles,
+  defaultParentEnd,
   describeParentEnd,
+  findAppLinkType,
   isDirectionalLinkType,
   kpiParentLinkBody,
   parentFromIssueLinks,
@@ -125,5 +127,19 @@ describe('breakParentCycles', () => {
       { id: 'b', parentId: 'a' },
     ];
     expect(ids(breakParentCycles(two))).toEqual({ a: null, b: 'a' });
+  });
+});
+
+describe('defaultParentEnd / findAppLinkType', () => {
+  it('puts the parent on the inward end of the app type, or outward when its labels are reversed', () => {
+    expect(defaultParentEnd({ outward: 'is the parent KPI of' })).toBe('inward');
+    expect(defaultParentEnd({ outward: ' Is a child KPI of ' })).toBe('outward');
+    expect(defaultParentEnd(null)).toBe('inward');
+  });
+
+  it('finds the app type by name, case-insensitively', () => {
+    const types = [{ id: '1', name: 'Blocks' }, { id: '2', name: 'kpi hierarchy' }];
+    expect(findAppLinkType(types)).toEqual({ id: '2', name: 'kpi hierarchy' });
+    expect(findAppLinkType([{ id: '1', name: 'Blocks' }])).toBeNull();
   });
 });

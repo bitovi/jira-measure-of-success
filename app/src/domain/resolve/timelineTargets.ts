@@ -5,8 +5,16 @@ import { resolveRelativeTargetDate } from './relativeTargetDate';
 import { isBaselineRelative } from './relativeTargetValue';
 import { resolvePanelTarget } from './panelTarget';
 import { baselineDueEndpoint } from './panelLoad';
-import { targetStatus, type DatedValue } from './targetStatus';
+import { type DatedValue } from './targetStatus';
+import type { DisplayState } from './displayState';
 import { contributionContext, resolveStackSteps, stackChain } from './stackSteps';
+
+/** A marker's hit / missed / upcoming, from the shared display state ("upcoming" = can't judge yet). */
+function markerStatus(state: DisplayState): TimelineTargetDto['status'] {
+  if (state === 'met') return 'hit';
+  if (state === 'missed') return 'missed';
+  return 'upcoming';
+}
 
 /**
  * Timeline target aggregation — turns the KPI targets authored on contributing
@@ -127,7 +135,8 @@ export function buildKpiTargets(
     dated.push({
       date: resolvedDate.date,
       value: resolvedValue.value,
-      status: targetStatus({ date: resolvedDate.date, value: resolvedValue.value }, readings, direction, today),
+      // Same judgement as the tooltip and the issue panel (`displayState`).
+      status: markerStatus(resolved.displayState),
       provisional: resolvedValue.provisional,
       relative,
       detail,

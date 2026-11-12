@@ -168,3 +168,47 @@ export const CreateError: Story = {
     await expect(await c.findByText(/Jira 403/)).toBeInTheDocument();
   },
 };
+
+/**
+ * The "Use “KPI Hierarchy”" button switches the configuration in one click, so
+ * it warns about what IT would change — not only what the picker would.
+ */
+export const DefaultButtonWarnsWhenSwitchingType: Story = {
+  args: {
+    hierarchy: status({ state: 'ready', linkType: BLOCKS, linkTypeId: BLOCKS.id, parentEnd: 'outward', available: [...STOCK, KPI_HIER] }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Change' }));
+    // the picker still shows the current (Blocks) setting, so it has nothing to warn about…
+    await expect(c.getByRole('button', { name: 'Use this link type' })).toBeDisabled();
+    // …but the default button would switch to KPI Hierarchy
+    await expect(c.getByRole('button', { name: 'Use “KPI Hierarchy” link type' })).toBeEnabled();
+    await expect(
+      c.getByText('Switching to “KPI Hierarchy”: KPIs already nested with Blocks links will lose their nesting.'),
+    ).toBeInTheDocument();
+  },
+};
+
+/** Already on KPI Hierarchy but the other way round: the default button would flip it back. */
+export const DefaultButtonWarnsWhenResettingDirection: Story = {
+  args: { hierarchy: { ...READY, parentEnd: 'outward' } },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Change' }));
+    await expect(c.getByText(/This button also resets the direction/)).toBeInTheDocument();
+    await expect(c.queryByText(/will lose their nesting/)).not.toBeInTheDocument();
+  },
+};
+
+/** Already using exactly what the default button applies: it's disabled, with no warning. */
+export const DefaultButtonAlreadyInUse: Story = {
+  args: { hierarchy: READY },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Change' }));
+    await expect(c.getByRole('button', { name: 'Use “KPI Hierarchy” link type' })).toBeDisabled();
+    await expect(c.getByText(/Already in use/)).toBeInTheDocument();
+    await expect(c.queryByText(/This button also resets|Switching to/)).not.toBeInTheDocument();
+  },
+};

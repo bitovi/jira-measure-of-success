@@ -120,12 +120,12 @@ describe('derivePanelView', () => {
         ],
       };
       const panel: PanelData = { ...full, kpiView };
-      // Target 200 by 2026-06-30: missed with only the 100 reading; hit once 250 is recorded before it.
+      // Target 200 by 2026-06-30: can't be judged on the January reading; hit once 250 is recorded on the date.
       const v = derivePanelView({
         list: { panel },
         values: null,
         valuesError: null,
-        readingEdits: [{ kpiId: 'KPI-1', date: '2026-06-15', value: 250 }],
+        readingEdits: [{ kpiId: 'KPI-1', date: '2026-06-30', value: 250 }],
       });
       expect(v.data?.kpiView?.node.readings.map((r) => r.value)).toEqual([100, 250]);
       expect(v.data?.kpiView?.node.targets.map((t) => t.status)).toEqual(['hit']);

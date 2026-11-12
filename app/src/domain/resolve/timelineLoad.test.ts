@@ -47,7 +47,10 @@ const node = (over: Partial<TimelineNodeDto>): TimelineNodeDto => ({
   depth: 0,
   targets: [],
   undated: [],
-  readings: [{ date: '2026-01-01', value: 100 }],
+  readings: [
+    { date: '2026-01-01', value: 100 },
+    { date: '2026-04-01', value: 100 },
+  ],
   children: [],
   resolving: true,
   ...over,
@@ -78,7 +81,7 @@ describe('applyTargetContributions', () => {
       ['2026-03-31', 'APP-1'],
       ['2026-09-30', 'APP-2'],
     ]);
-    // past date, target 90, latest reading 100 on an "increase" KPI → hit; future → upcoming
+    // past date, target 90, first reading on/after it is 100 on an "increase" KPI → hit; future → upcoming
     expect(kpi1.targets.map((t) => t.status)).toEqual(['hit', 'upcoming']);
   });
 

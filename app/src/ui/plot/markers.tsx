@@ -13,6 +13,7 @@ import type { HoverState } from './hover.js';
 import { dimStyle, useIsDimmed } from './useKeyHighlight.js';
 import { targetKeyKinds } from './keyKinds.js';
 import { TargetTooltipBody } from './targetTooltip.js';
+import { tooltipPlacement, type TooltipPlacement } from './tooltipPlacement.js';
 
 /**
  * Recorded values + the projected trend are drawn in a neutral color so green
@@ -260,13 +261,13 @@ export function TargetMarker({
   onOpenIssueNewTab: (issueKey: string) => void | Promise<void>;
   siteUrl: string;
 }) {
-  const [tip, setTip] = useState<{ clientX: number; clientY: number; flipX: boolean } | null>(null);
+  const [tip, setTip] = useState<{ clientY: number; place: TooltipPlacement } | null>(null);
   const dimmed = useIsDimmed(targetKeyKinds(target));
   const statusLabel =
     target.status === 'hit' ? 'Target hit' : target.status === 'missed' ? 'Target missed' : 'Upcoming';
 
   const track = (e: React.MouseEvent) =>
-    setTip({ clientX: e.clientX, clientY: e.clientY, flipX: e.clientX > window.innerWidth - 420 });
+    setTip({ clientY: e.clientY, place: tooltipPlacement(e.clientX, window.innerWidth) });
 
   const issueKey = target.source.issue;
   const href = siteUrl ? `${siteUrl}/browse/${issueKey}` : `/browse/${issueKey}`;
@@ -304,12 +305,8 @@ export function TargetMarker({
       </a>
       {tip && (
         <div
-          className="pointer-events-none fixed z-50 w-max max-w-[400px] whitespace-normal rounded border border-border bg-surface px-2.5 py-2 text-xs text-text shadow-md"
-          style={{
-            left: tip.flipX ? undefined : tip.clientX + 14,
-            right: tip.flipX ? window.innerWidth - tip.clientX + 14 : undefined,
-            top: tip.clientY + 14,
-          }}
+          className="pointer-events-none fixed z-50 w-max whitespace-normal rounded border border-border bg-surface px-2.5 py-2 text-xs text-text shadow-md"
+          style={{ ...tip.place, top: tip.clientY + 14 }}
           role="tooltip"
         >
           <TargetTooltipBody target={target} node={node} />

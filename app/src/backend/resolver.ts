@@ -18,6 +18,7 @@ import {
   type KpiHierarchyStatus,
   type KpiSpaceStatus,
   DEFAULT_KPI_LINK_TYPE,
+  defaultParentEnd,
   isDirectionalLinkType,
   KPI_HIERARCHY_NOT_SET_UP,
   KpiHierarchyLink,
@@ -462,10 +463,7 @@ async function kpiHierarchyStatus(): Promise<KpiHierarchyStatus> {
 /** Create (or adopt) the app's `KPI Hierarchy` link type and point the config at it. */
 async function provisionDefaultHierarchy(): Promise<void> {
   const type = await ensureKpiHierarchyLinkType();
-  // A pre-existing same-named type may have its labels the other way round.
-  const reversed = type.outward.trim().toLowerCase() === DEFAULT_KPI_LINK_TYPE.inward.toLowerCase();
-  const parentEnd = reversed ? 'outward' : 'inward';
-  await writeKpiHierarchyConfig({ linkTypeId: type.id, parentEnd });
+  await writeKpiHierarchyConfig({ linkTypeId: type.id, parentEnd: defaultParentEnd(type) });
 }
 
 define('getKpiHierarchy', async () => kpiHierarchyStatus());

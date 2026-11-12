@@ -114,3 +114,33 @@ describe('displayState — target dated before its due date (negative offset)', 
     expect(displayState({ ...early, today: '2027-11-01' })).toEqual({ state: 'projected', warning: null });
   });
 });
+
+describe('displayState — fixed-value target (judged on or after its target date)', () => {
+  // An absolute target's due date is its target date (no baseline).
+  const fixed: DisplayStateInput = {
+    ...base,
+    valueState: 'baselined',
+    today: '2026-07-14',
+    dueDate: '2026-06-30',
+    targetDate: '2026-06-30',
+    target: 100,
+    fixedValue: true,
+  };
+
+  it('a reading on the target date judges it', () => {
+    expect(displayState({ ...fixed, readings: [r('2026-06-30', 120)] })).toEqual({ state: 'met', warning: null });
+    expect(displayState({ ...fixed, readings: [r('2026-06-30', 80)] })).toEqual({ state: 'missed', warning: null });
+  });
+
+  it('a reading only before the target date leaves it unknown', () => {
+    expect(displayState({ ...fixed, readings: [r('2026-06-01', 120)] })).toEqual({
+      state: 'resultUnknown',
+      warning: 'unconfirmedResult',
+    });
+  });
+
+  it('otherwise the first reading after the date judges it', () => {
+    const readings = [r('2026-06-01', 120), r('2026-07-05', 90), r('2026-07-10', 130)];
+    expect(displayState({ ...fixed, readings })).toEqual({ state: 'missed', warning: null });
+  });
+});
