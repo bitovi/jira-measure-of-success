@@ -4,6 +4,7 @@ import type {
   KpiDirection,
   KpiReading,
   DateFieldCatalog,
+  HierarchyLevel,
   RollupConfig,
 } from '@domain/index.js';
 
@@ -18,10 +19,21 @@ import type {
  *     INIT-48 Initiative Multi-store support    start 2026-02-01  due 2026-09-30
  *       INC-90 Increment Q1 rollout             start 2026-01-15  due 2026-03-31
  *         EPIC-231 Epic  Launch retail stores   start 2026-02-01  due 2026-05-31
+ *   OUT-20  Outcome     Grow weekly usage      due 2027-06-30  (+5% on Weekly Active Users, 2 months after)
+ *     INIT-61…64 Initiatives, one per quarter (+1% each, 1 month after due) — the
+ *     stacked-targets scenario (specs/09-stacked-targets): same-level targets add up.
  */
 
 // ── Hierarchy levels (discovered at runtime; deepest-parent → leaf) ──────────
-export const HIERARCHY_LEVELS = ['Outcome', 'Initiative', 'Increment', 'Epic', 'Story'];
+// Milestone shares level 2 with Increment (as on some real sites): settings are
+// per level, so a choice for "Milestone / Increment" must apply to Increments too.
+export const HIERARCHY_LEVELS: HierarchyLevel[] = [
+  { level: 4, name: 'Outcome', issueTypeNames: ['Outcome'] },
+  { level: 3, name: 'Initiative', issueTypeNames: ['Initiative'] },
+  { level: 2, name: 'Milestone', issueTypeNames: ['Milestone', 'Increment'] },
+  { level: 1, name: 'Epic', issueTypeNames: ['Epic'] },
+  { level: 0, name: 'Story', issueTypeNames: ['Story', 'Task', 'Bug'] },
+];
 
 // ── KPI catalog ─────────────────────────────────────────────────────────────
 function kpi(
@@ -53,6 +65,7 @@ export const CATALOG: KpiDefinition[] = [
   kpi('error-rate', 'Error Rate', '%', 'decrease'),
   kpi('costs', 'Costs', 'USD', 'decrease'),
   kpi('opportunity-enablement', 'Opportunity Enablement', 'future value', 'increase'),
+  kpi('weekly-active-users', 'Weekly Active Users', 'users', 'increase'),
 ];
 
 // ── Assignment builders ─────────────────────────────────────────────────────
@@ -177,6 +190,44 @@ export const ISSUES: FixtureIssue[] = [
       }),
     ],
   },
+  // Stacked-targets scenario (spec 09): an Outcome's +5% and its four quarterly
+  // Initiatives at +1% each. The Initiatives stack on each other; the Outcome doesn't.
+  {
+    id: '10020',
+    key: 'OUT-20',
+    summary: 'Grow weekly usage',
+    issueTypeName: 'Outcome',
+    hierarchyLevel: 4,
+    parentId: null,
+    ownStart: '2026-07-01',
+    ownDue: '2027-06-30',
+    assignments: [
+      // 2 months after (not 1) so its marker doesn't sit under INIT-64's on the timeline.
+      assignment({ kpiId: 'weekly-active-users', target: 5, targetType: 'percent', timing: { start: null, due: relDue({ offsetMonths: 2 }) } }),
+    ],
+  },
+  ...(
+    [
+      ['10061', 'INIT-61', 'Q3 onboarding refresh', '2026-09-30'],
+      ['10062', 'INIT-62', 'Q4 mobile reminders', '2026-12-31'],
+      ['10063', 'INIT-63', 'Q1 team invites', '2027-03-31'],
+      ['10064', 'INIT-64', 'Q2 saved views', '2027-06-30'],
+    ] as const
+  ).map(
+    ([id, key, summary, due]): FixtureIssue => ({
+      id,
+      key,
+      summary,
+      issueTypeName: 'Initiative',
+      hierarchyLevel: 3,
+      parentId: '10020',
+      ownStart: null,
+      ownDue: due,
+      assignments: [
+        assignment({ kpiId: 'weekly-active-users', target: 1, targetType: 'percent', timing: { start: null, due: relDue({ offsetMonths: 1 }) } }),
+      ],
+    }),
+  ),
 ];
 
 // ── Date fields (Settings pickers) — ids mirror a typical Jira Cloud site ────
@@ -195,12 +246,13 @@ export const DATE_FIELDS: DateFieldCatalog = {
 };
 
 export const ROLLUP_CONFIG: RollupConfig = {
+  // keyed by hierarchy level: Outcome 4, Initiative 3, Milestone/Increment 2, Epic 1, Story 0
   dueDateRollup: {
-    Outcome: 'childrenFirstThenParent',
-    Initiative: 'parentFirstThenChildren',
-    Increment: 'childrenFirstThenParent',
-    Epic: 'parentOnly',
-    Story: 'parentOnly',
+    '4': 'childrenFirstThenParent',
+    '3': 'parentFirstThenChildren',
+    '2': 'childrenFirstThenParent',
+    '1': 'parentOnly',
+    '0': 'parentOnly',
   },
 };
 
@@ -257,6 +309,11 @@ export interface KpiTreeNode {
   unit: string;
   direction: KpiDirection | null;
   targets: TimelineTargetFixture[];
+  /**
+   * Build this KPI's markers from the fixture ISSUES' assignments (like the live
+   * app) instead of `targets`, so the panel and the timeline resolve the same targets.
+   */
+  targetsFromIssues?: boolean;
   readings: KpiReading[];
   children?: KpiTreeNode[];
 }
@@ -450,5 +507,18 @@ export const KPI_TREE: KpiTreeNode[] = [
       { date: '2026-09-01', value: 100, source: { issue: 'INIT-53', type: 'Initiative', title: 'Sales Enablement' } },
     ],
     readings: [],
+  },
+  {
+    kpiId: 'weekly-active-users',
+    issueKey: 'KPI-11',
+    name: 'Weekly Active Users',
+    unit: 'users',
+    direction: 'increase',
+    targets: [],
+    targetsFromIssues: true,
+    readings: reads([
+      ['2026-01-01', 1000], ['2026-02-01', 1000], ['2026-03-01', 1000], ['2026-04-01', 1000],
+      ['2026-05-01', 1000], ['2026-06-01', 1000], ['2026-07-01', 1000],
+    ]),
   },
 ];

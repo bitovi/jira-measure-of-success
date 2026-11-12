@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Button, { IconButton } from '@atlaskit/button/new';
 import DropdownMenu, { DropdownItem, DropdownItemGroup } from '@atlaskit/dropdown-menu';
 import ArrowDownIcon from '@atlaskit/icon/core/arrow-down';
@@ -8,8 +8,8 @@ import ShowMoreHorizontalIcon from '@atlaskit/icon/core/show-more-horizontal';
 import InlineEdit from '@atlaskit/inline-edit';
 import Lozenge from '@atlaskit/lozenge';
 import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle } from '@atlaskit/modal-dialog';
-import Tooltip from '@atlaskit/tooltip';
 import type { PanelRowDto } from '@domain/index.js';
+import { EstimateLine } from '@ui/components/EstimateLine/index.js';
 import { TargetEditor } from '../TargetEditor/index.js';
 import {
   PILL,
@@ -23,10 +23,8 @@ import {
   nudgeFor,
   pillFor,
   sameDraft,
-  type Estimate,
-  type EstimatePart,
   type TargetDraft,
-} from '../../targetText.js';
+} from '@ui/targetText.js';
 
 /**
  * A saved KPI target (mock v3 — specs/03-relative-dates-and-values/issue-panel-v3.html).
@@ -333,50 +331,5 @@ function Estimate({ row, currentValue, className = '' }: { row: PanelRowDto; cur
         className="inline-block h-3 w-44 max-w-full animate-pulse rounded bg-[var(--ds-skeleton,#091e420f)] align-middle"
       />
     </p>
-  );
-}
-
-/** `Estimated target 275 by Apr 15, 2027 · from 250 now` — numbers in --text, the rest subtle. */
-function EstimateLine({ est, className = '' }: { est: Estimate; className?: string }) {
-  return (
-    <p className={`text-sm leading-5 text-text-subtle ${className}`}>
-      {est.label}
-      {est.value !== null && (
-        <>
-          {' '}
-          <span className="text-text tabular-nums">{est.value}</span>
-        </>
-      )}
-      {est.by && (
-        <>
-          {' '}
-          <Part part={est.by} />
-        </>
-      )}
-      {est.tail.map((p, i) => (
-        <Fragment key={i}>
-          {' · '}
-          <Part part={p} />
-        </Fragment>
-      ))}
-    </p>
-  );
-}
-
-function Part({ part }: { part: EstimatePart }) {
-  const tone = part.tone === 'good' ? 'text-success' : part.tone === 'bad' ? 'text-danger' : 'text-text';
-  const body = (
-    <span className="whitespace-nowrap">
-      {part.pre}
-      {part.num && <span className={`${tone} tabular-nums`}>{part.num}</span>}
-      {part.post}
-    </span>
-  );
-  return part.hint ? (
-    <Tooltip content={part.hint} tag="span">
-      {body}
-    </Tooltip>
-  ) : (
-    body
   );
 }

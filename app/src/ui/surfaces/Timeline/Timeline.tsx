@@ -21,6 +21,7 @@ import {
   buildAxis,
   axisDatesOf,
   initialScrollLeft,
+  initialViewQuarterStart,
   scrollShiftForAxisChange,
   useBandScale,
   useClientWidth,
@@ -220,7 +221,10 @@ export function Timeline({
       }
     };
     walk(filteredRoots);
-    return buildAxis(dates, today, { minWidth: scrollWidth - PAD_R });
+    return buildAxis(dates, today, {
+      minWidth: scrollWidth - PAD_R,
+      viewStart: initialViewQuarterStart(today),
+    });
   }, [data, filteredRoots, scrollWidth]);
 
   // Scroll behavior (spec 06 P4). Once per page load, open with the current
@@ -228,19 +232,25 @@ export function Timeline({
   // that, whenever the axis grows to the LEFT (an earlier target arrived, or the
   // filter changed), shift scrollLeft by the added width so what is on screen
   // doesn't move; growth to the right moves nothing. Never resets the user's scroll.
+  // The initial scroll waits for the viewport to be measured: until then the axis
+  // has no room to the right of the current quarter and scrollLeft would be clamped.
   const didInitialScroll = useRef(false);
   const prevDomainStart = useRef<number | null>(null);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el || !data) return;
     if (!didInitialScroll.current) {
+      if (scrollWidth <= 0) {
+        prevDomainStart.current = axis.domainStart;
+        return;
+      }
       didInitialScroll.current = true;
       el.scrollLeft = initialScrollLeft(axis, data.today);
     } else if (prevDomainStart.current !== null && prevDomainStart.current !== axis.domainStart) {
       el.scrollLeft += scrollShiftForAxisChange(axis, prevDomainStart.current);
     }
     prevDomainStart.current = axis.domainStart;
-  }, [data, axis]);
+  }, [data, axis, scrollWidth]);
 
   const flat = useMemo(() => {
     if (!data) return [];
@@ -658,8 +668,8 @@ function TimelineRowLabel({
           <span className="truncate text-sm font-semibold">{node.name}</span>
         )}
       </div>
-      <div className="flex items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP + 24 }}>
-        <span className="flex-none text-xs text-text-subtle" title={node.unit ? undefined : 'No unit'}>
+      <div className="relative flex min-w-0 items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP + 24 }}>
+        <span className="min-w-0 truncate text-xs text-text-subtle" title={node.unit || 'No unit'}>
           {node.unit || '—'}
         </span>
         {node.direction && (
@@ -674,9 +684,12 @@ function TimelineRowLabel({
             )}
           </span>
         )}
-        <RowAction tooltip="Create child KPI" label="Add child KPI" glyph="+" glyphClass="text-[13px]" first onClick={onAddChild} />
-        <RowAction tooltip="Record a value" label="Record a value" glyph="●" glyphClass="text-[13px]" onClick={onRecord} />
-        <RowAction tooltip="Add a target" label="Add a target" glyph="◇" glyphClass="text-[11px]" onClick={onAddTarget} />
+        {/* Overlaid (not in flow) so long units get the full width at rest; actions cover the tail on hover/focus. */}
+        <div className="absolute inset-y-0 right-0 flex items-center gap-2 bg-surface pl-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <RowAction tooltip="Create child KPI" label="Add child KPI" glyph="+" glyphClass="text-[13px]" onClick={onAddChild} />
+          <RowAction tooltip="Record a value" label="Record a value" glyph="●" glyphClass="text-[13px]" onClick={onRecord} />
+          <RowAction tooltip="Add a target" label="Add a target" glyph="◇" glyphClass="text-[11px]" onClick={onAddTarget} />
+        </div>
       </div>
     </div>
   );
@@ -688,14 +701,12 @@ function RowAction({
   label,
   glyph,
   glyphClass,
-  first,
   onClick,
 }: {
   tooltip: string;
   label: string;
   glyph: string;
   glyphClass: string;
-  first?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -703,7 +714,7 @@ function RowAction({
       {(tooltipProps) => (
         <button
           {...tooltipProps}
-          className={`grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle opacity-0 transition-opacity hover:bg-surface-sunken hover:text-brand focus-visible:opacity-100 group-hover:opacity-100 ${first ? 'ml-auto' : ''}`}
+          className="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle hover:bg-surface-sunken hover:text-brand"
           onClick={onClick}
           aria-label={label}
         >
@@ -871,6 +882,18 @@ function UndatedLane({
   );
 }
 
+/** Errors a Jira admin fixes in Settings: shown with an "Open Settings" button instead of the raw message. */
+const SETUP_ERRORS = {
+  'space-not-set-up': {
+    title: 'KPI space isn’t set up',
+    body: 'Create or select the project that stores your KPIs in Settings, then try again.',
+  },
+  'hierarchy-not-set-up': {
+    title: 'KPI nesting isn’t set up',
+    body: 'Choose the Jira issue link type that nests KPIs in Settings, then try again — or leave the parent empty.',
+  },
+} as const;
+
 function ActionErrorBanner({
   error,
   onDismiss,
@@ -880,22 +903,16 @@ function ActionErrorBanner({
   onDismiss: () => void;
   onOpenSettings: () => void | Promise<void>;
 }) {
-  const spaceNotSetUp = error.kind === 'space-not-set-up';
+  const setup = error.kind === 'generic' ? null : SETUP_ERRORS[error.kind];
   return (
     <div
       role="alert"
       className="mt-4 flex items-start gap-3 rounded-lg border border-danger bg-surface px-4 py-3 text-sm"
     >
       <div className="flex-1">
-        <p className="font-semibold text-danger">
-          {spaceNotSetUp ? 'KPI space isn’t set up' : 'Couldn’t save your change'}
-        </p>
-        <p className="mt-0.5 text-text-subtle">
-          {spaceNotSetUp
-            ? 'Create or select the project that stores your KPIs in Settings, then try again.'
-            : error.message}
-        </p>
-        {spaceNotSetUp && (
+        <p className="font-semibold text-danger">{setup ? setup.title : 'Couldn’t save your change'}</p>
+        <p className="mt-0.5 text-text-subtle">{setup ? setup.body : error.message}</p>
+        {setup && (
           <div className="mt-2">
             <Button appearance="primary" onClick={() => void onOpenSettings()}>
               Open Settings

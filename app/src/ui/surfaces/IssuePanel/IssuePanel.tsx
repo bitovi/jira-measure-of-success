@@ -1,4 +1,4 @@
-import { useMemo, useId, useState } from 'react';
+import { useEffect, useMemo, useId, useRef, useState } from 'react';
 import Button from '@atlaskit/button/new';
 import AddIcon from '@atlaskit/icon/core/add';
 import Select from '@atlaskit/select';
@@ -18,7 +18,7 @@ import {
   parseTarget,
   previewRow,
   type TargetDraft,
-} from './targetText.js';
+} from '@ui/targetText.js';
 
 /**
  * Issue panel (Custom UI) — on-issue KPI editor. KPIs are grouped by their
@@ -54,6 +54,8 @@ export function IssuePanel({
   const { data, pending, error, busy, actionError, dismissActionError, valuesError, retryValues, save, remove, record } =
     usePanel(issueId);
   const [recordFor, setRecordFor] = useState<PanelRowDto | null>(null);
+  // "+ Track this" pre-selects the KPI in the form; `n` re-triggers a repeat click.
+  const [trackRequest, setTrackRequest] = useState<TrackRequest | null>(null);
   const menuRoomRef = useMenuRoom();
 
   const groups = useMemo(() => {
@@ -110,7 +112,11 @@ export function IssuePanel({
           <div className="flex flex-col gap-2">
             {rows.map((row) =>
               row.relationship === 'onParentNotTracked' ? (
-                <TrackThisRow key={row.kpiId} row={row} onTrack={save} />
+                <TrackThisRow
+                  key={row.kpiId}
+                  row={row}
+                  onTrack={() => setTrackRequest((prev) => ({ kpiId: row.kpiId, n: (prev?.n ?? 0) + 1 }))}
+                />
               ) : (
                 <TargetCard
                   key={row.kpiId}
@@ -142,6 +148,7 @@ export function IssuePanel({
           issueDueDate={data.issueDueDate}
           issueDueRolledUp={data.issueDueRolledUp}
           resolving={data.resolving === true}
+          trackRequest={trackRequest}
           onSave={save}
         />
       )}
@@ -208,17 +215,19 @@ function buildAssignment(kpiId: string, draft: TargetDraft, start: string | null
   };
 }
 
-function TrackThisRow({ row, onTrack }: { row: PanelRowDto; onTrack: (a: Assignment) => void }) {
+type TrackRequest = { kpiId: string; n: number };
+
+/**
+ * A KPI on the parent but not here. "+ Track this" doesn't save anything: it
+ * picks the KPI in the "Set a KPI target" form and focuses its value, so the
+ * user sets a real target (v1 targets are independent — nothing to inherit).
+ */
+function TrackThisRow({ row, onTrack }: { row: PanelRowDto; onTrack: () => void }) {
   return (
     <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2">
       <span className="text-sm text-text-subtle">{row.name}</span>
       <div className="ml-auto">
-        <Button
-          appearance="subtle"
-          spacing="compact"
-          iconBefore={AddIcon}
-          onClick={() => onTrack(buildAssignment(row.kpiId, { targetType: 'absolute', value: '', due: DEFAULT_DUE }, null))}
-        >
+        <Button appearance="subtle" spacing="compact" iconBefore={AddIcon} onClick={onTrack}>
           Track this
         </Button>
       </div>
@@ -226,7 +235,7 @@ function TrackThisRow({ row, onTrack }: { row: PanelRowDto; onTrack: (a: Assignm
   );
 }
 
-type KpiOption = { label: string; value: string; depth: number };
+type KpiOption = { label: string; value: string; depth: number; unit: string };
 
 const EMPTY_DRAFT: TargetDraft = { targetType: 'percent', value: '', due: DEFAULT_DUE };
 
@@ -236,6 +245,7 @@ function AssociateForm({
   issueDueDate,
   issueDueRolledUp,
   resolving,
+  trackRequest,
   onSave,
 }: {
   catalog: CatalogEntryDto[];
@@ -244,6 +254,8 @@ function AssociateForm({
   issueDueRolledUp: boolean;
   /** the issue's due date and the KPIs' current values are still loading */
   resolving: boolean;
+  /** a "+ Track this" click: pick this KPI and focus the target value */
+  trackRequest: TrackRequest | null;
   onSave: (a: Assignment) => void;
 }) {
   const trackedIds = new Set(existing.filter((r) => r.relationship !== 'onParentNotTracked').map((r) => r.kpiId));
@@ -251,10 +263,17 @@ function AssociateForm({
   const [draft, setDraft] = useState<TargetDraft>(EMPTY_DRAFT);
   const kpiInputId = useId();
   const titleId = useId();
+  const amountRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!trackRequest) return;
+    setKpiId(trackRequest.kpiId);
+    amountRef.current?.focus();
+  }, [trackRequest]);
 
   const options: KpiOption[] = catalog
     .filter((c) => !trackedIds.has(c.id))
-    .map((c) => ({ label: c.name, value: c.id, depth: c.depth ?? 0 }));
+    .map((c) => ({ label: c.name, value: c.id, depth: c.depth ?? 0, unit: c.unit.trim() }));
   const kpi = catalog.find((c) => c.id === kpiId);
   const current = kpi?.currentValue ?? null;
   const preview = kpi ? { ...previewRow(kpi, draft, issueDueDate, issueDueRolledUp), resolving: resolving || undefined } : null;
@@ -285,14 +304,19 @@ function AssociateForm({
             value={options.find((o) => o.value === kpiId) ?? null}
             placeholder="Choose KPI…"
             // Indent by KPI-tree depth in the menu so parent/child nesting reads.
-            formatOptionLabel={(o, { context }) =>
-              context === 'menu' ? <span style={{ paddingLeft: o.depth * 12 }}>{o.label}</span> : o.label
-            }
+            // The unit is shown in the menu and once picked, so a "total" or
+            // "more" value is typed in the right unit (hours vs. minutes, % points).
+            formatOptionLabel={(o, { context }) => (
+              <>
+                <span style={context === 'menu' ? { paddingLeft: o.depth * 12 } : undefined}>{o.label}</span>
+                {o.unit && <span className="text-text-subtle"> ({o.unit})</span>}
+              </>
+            )}
             onChange={(o) => setKpiId(o?.value ?? '')}
           />
         </div>
 
-        <TargetEditor draft={draft} onChange={setDraft} />
+        <TargetEditor draft={draft} onChange={setDraft} amountRef={amountRef} />
 
         {kpi && preview && (
           <div>

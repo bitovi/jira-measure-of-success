@@ -1,6 +1,10 @@
 import {
   baselineDueEndpoint,
+  buildKpiTargets,
   dateFieldSelection,
+  DEFAULT_KPI_LINK_TYPE,
+  isDirectionalLinkType,
+  KPI_HIERARCHY_NOT_SET_UP,
   effectiveTiming,
   readOwnDates,
   encodeReadingValue,
@@ -17,7 +21,11 @@ import {
   type CreatedKpi,
   type CreateKpiInput,
   type IssuePickerItem,
+  type IssueLinkTypeInfo,
+  type KpiHierarchyLink,
+  type KpiHierarchyStatus,
   type KpiSpaceStatus,
+  type SaveKpiHierarchyInput,
   type PanelData,
   type PanelListData,
   type PanelParts,
@@ -33,6 +41,7 @@ import {
   type TimingNode,
   type Assignment,
   type DateFieldCatalog,
+  type HierarchyLevel,
   type RollupConfig,
 } from '@domain/index.js';
 import {
@@ -125,7 +134,8 @@ function timingNodes(): Map<string, TimingNode> {
         id: i.id,
         issueKey: i.key,
         issueTypeName: i.issueTypeName,
-        ...readOwnDates(rawDateFields(i), i.issueTypeName, selection),
+        hierarchyLevel: i.hierarchyLevel,
+        ...readOwnDates(rawDateFields(i), { name: i.issueTypeName, hierarchyLevel: i.hierarchyLevel }, selection),
         childIds: issues.filter((c) => c.parentId === i.id).map((c) => c.id),
       } satisfies TimingNode,
     ]),
@@ -153,6 +163,49 @@ function targetContext(
 
 function resolveDate(assignment: Assignment, ctx: RelativeTargetContext) {
   return resolveRelativeTargetDate(assignment.timing.due, ctx, assignment.timing.start);
+}
+
+/** The Jira hierarchy level of an issue type name (null when unknown). */
+function levelOfType(typeName: string): number | null {
+  return HIERARCHY_LEVELS.find((l) => l.issueTypeNames.includes(typeName))?.level ?? null;
+}
+
+/**
+ * Every fixture issue's target on `kpiId`, as the backend's contributions search
+ * returns them: the source issue's rolled-up due (and its parent's) plus its level.
+ */
+function issueContributions(kpiId: string): KpiTargetContribution[] {
+  const nodes = timingNodes();
+  const memo = new Map<string, ResolvedEndpoint>();
+  const out: KpiTargetContribution[] = [];
+  for (const issue of issues) {
+    const assignment = issue.assignments.find((a) => a.kpiId === kpiId);
+    if (!assignment) continue;
+    const ctx = targetContext(issue, nodes, memo);
+    out.push({
+      assignment,
+      source: {
+        key: issue.key,
+        type: issue.issueTypeName,
+        title: issue.summary,
+        iconUrl: issueTypeIconUri(issue.issueTypeName),
+        due: ctx.issue.due.date,
+        dueRolledUp: ctx.issue.due.source === 'children',
+        parent: ctx.parent
+          ? { key: ctx.parent.issueKey, due: ctx.parent.due.date, dueRolledUp: ctx.parent.due.source === 'children' }
+          : undefined,
+        hierarchyLevel: issue.hierarchyLevel,
+      },
+    });
+  }
+  return out;
+}
+
+/** A KPI row's raw contributions: from issue assignments when flagged, else from the hand-built targets. */
+function nodeContributions(node: KpiTreeNode): KpiTargetContribution[] {
+  if (node.targetsFromIssues) return issueContributions(node.kpiId);
+  const readings = readingsFor(node.kpiId).map((r) => ({ date: r.date, value: r.value }));
+  return node.targets.map((t) => fixtureContribution(node, t, readings));
 }
 
 // ── Issue panel ─────────────────────────────────────────────────────────────
@@ -184,7 +237,7 @@ export function getPanelData(issueId: string): PanelData {
       kpiView: {
         node: toTimelineNode(kpiNode, 0),
         today: TODAY,
-        contributions: kpiNode.targets.map((t) => fixtureContribution(kpiNode, t, readingsFor(kpiNode.kpiId))),
+        contributions: nodeContributions(kpiNode),
       },
     };
   }
@@ -363,7 +416,7 @@ export function removeAssignment(issueId: string, kpiId: string): PanelParts {
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
-export function getHierarchyLevels(): string[] {
+export function getHierarchyLevels(): HierarchyLevel[] {
   return HIERARCHY_LEVELS;
 }
 
@@ -404,16 +457,79 @@ export function createKpiSpace(rawKey: string): KpiSpaceStatus {
   const key = normalizeProjectKey(rawKey ?? '');
   if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${rawKey}"`);
   kpiSpace = { key, projectId: `proj-${key}`, name: `KPIs (${key})`, state: 'ready' };
+  if (!hierarchyLink) createKpiHierarchyLinkType();
   return kpiSpace;
+}
+
+// ── KPI hierarchy link (resolve/kpiLinks) ────────────────────────────────────
+// Which (site-global) issue link type nests KPIs. Starts connected to the app's
+// own type; `?hierarchy=unset|missing|unavailable` starts in that state instead.
+const linkTypes: IssueLinkTypeInfo[] = [
+  { id: '10000', name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+  { id: '10001', name: 'Cloners', inward: 'is cloned by', outward: 'clones' },
+  { id: '10002', name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' },
+  { id: '10003', name: 'Relates', inward: 'relates to', outward: 'relates to' },
+];
+const hierarchyParam = () => new URLSearchParams(globalThis.location?.search ?? '').get('hierarchy');
+let hierarchyLink: KpiHierarchyLink | null = (() => {
+  const mode = hierarchyParam();
+  if (mode === 'unset') return null;
+  if (mode === 'missing') return { linkTypeId: '10999', parentEnd: 'inward' };
+  return { linkTypeId: ensureAppLinkType().id, parentEnd: DEFAULT_KPI_LINK_TYPE.parentEnd };
+})();
+
+function ensureAppLinkType(): IssueLinkTypeInfo {
+  const found = linkTypes.find((t) => t.name === DEFAULT_KPI_LINK_TYPE.name);
+  if (found) return found;
+  const { name, inward, outward } = DEFAULT_KPI_LINK_TYPE;
+  const created = { id: '10500', name, inward, outward };
+  linkTypes.push(created);
+  return created;
+}
+
+export function getKpiHierarchy(): KpiHierarchyStatus {
+  const parentEnd = hierarchyLink?.parentEnd ?? DEFAULT_KPI_LINK_TYPE.parentEnd;
+  const linkTypeId = hierarchyLink?.linkTypeId ?? null;
+  if (hierarchyParam() === 'unavailable') {
+    return {
+      state: 'unavailable',
+      linkType: null,
+      linkTypeId,
+      parentEnd,
+      available: [],
+      message: 'Jira 404 while trying to list issue link types: Issue linking is disabled.',
+    };
+  }
+  const linkType = linkTypes.find((t) => t.id === linkTypeId) ?? null;
+  const state = !hierarchyLink ? 'unset' : linkType ? 'ready' : 'missing';
+  return { state, linkType, linkTypeId, parentEnd, available: linkTypes.map((t) => ({ ...t })) };
+}
+
+export function saveKpiHierarchy(input: SaveKpiHierarchyInput): KpiHierarchyStatus {
+  const type = linkTypes.find((t) => t.id === input?.linkTypeId);
+  if (!type) throw new Error(`No issue link type with id "${input?.linkTypeId}" on this site.`);
+  if (!isDirectionalLinkType(type)) {
+    throw new Error(`"${type.name}" reads "${type.outward}" both ways, so it can't tell a parent KPI from a child.`);
+  }
+  hierarchyLink = { linkTypeId: type.id, parentEnd: input.parentEnd === 'outward' ? 'outward' : 'inward' };
+  return getKpiHierarchy();
+}
+
+export function createKpiHierarchyLinkType(): KpiHierarchyStatus {
+  hierarchyLink = { linkTypeId: ensureAppLinkType().id, parentEnd: DEFAULT_KPI_LINK_TYPE.parentEnd };
+  return getKpiHierarchy();
 }
 
 // ── Timeline ────────────────────────────────────────────────────────────────
 let timelineIdSeq = 1;
 function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
   const readings = readingsFor(node.kpiId);
-  const dated: TimelineNodeDto['targets'] = [];
-  const undated: TimelineNodeDto['undated'] = [];
-  for (const t of node.targets) {
+  const built = node.targetsFromIssues
+    ? buildKpiTargets(issueContributions(node.kpiId), readings, node.direction, TODAY)
+    : null;
+  const dated: TimelineNodeDto['targets'] = built?.dated ?? [];
+  const undated: TimelineNodeDto['undated'] = built?.undated ?? [];
+  for (const t of built ? [] : node.targets) {
     const src = { ...t.source, iconUrl: t.source.iconUrl ?? issueTypeIconUri(t.source.type) };
     if (t.date === null) {
       undated.push({ date: null, value: t.value, status: 'upcoming', provisional: t.provisional ?? false, relative: t.relative ?? t.provisional ?? false, source: src });
@@ -483,6 +599,7 @@ function fixtureContribution(
     title: t.source.title,
     iconUrl: t.source.iconUrl ?? issueTypeIconUri(t.source.type),
     due: null,
+    hierarchyLevel: levelOfType(t.source.type),
   };
   const latest = readings.length ? readings[readings.length - 1].value : null;
   const asPercent = t.provisional === true && latest !== null && latest !== 0;
@@ -512,10 +629,8 @@ export function getTimelineTargets(): TimelineTargetsData {
   const contributions: TimelineTargetsData['contributions'] = {};
   const walk = (nodes: KpiTreeNode[]) => {
     for (const node of nodes) {
-      if (node.targets.length > 0) {
-        const readings = readingsFor(node.kpiId).map((r) => ({ date: r.date, value: r.value }));
-        contributions[node.kpiId] = node.targets.map((t) => fixtureContribution(node, t, readings));
-      }
+      const built = nodeContributions(node);
+      if (built.length > 0) contributions[node.kpiId] = built;
       walk(node.children ?? []);
     }
   };
@@ -574,6 +689,9 @@ function nextIssueKey(): string {
  * KPI, like the backend.
  */
 export function createKpi(input: CreateKpiInput): CreatedKpi {
+  if (input.parentKpiId && getKpiHierarchy().state !== 'ready') {
+    throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
+  }
   const kpiId = uniqueKpiId(slugifyKpi(input.name));
   const node: KpiTreeNode = {
     kpiId,
@@ -664,6 +782,10 @@ export function addTarget(input: AddTargetInput): AddedTarget {
     const idx = issue.assignments.findIndex((a) => a.kpiId === input.kpiId);
     if (idx >= 0) issue.assignments[idx] = assignment;
     else issue.assignments.push(assignment);
+  }
+  if (node.targetsFromIssues) {
+    const fromIssue = issueContributions(node.kpiId).find((c) => c.source.key === input.issueKey);
+    if (fromIssue) return fromIssue;
   }
   const readings = readingsFor(node.kpiId).map((r) => ({ date: r.date, value: r.value }));
   return fixtureContribution(node, target, readings);

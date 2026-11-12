@@ -81,6 +81,24 @@ export function insertCreatedKpi(data: TimelineData, kpi: CreatedKpi): TimelineD
 }
 
 /**
+ * Lay just-saved targets over the loaded contributions (one per issue and KPI,
+ * so a target from the same issue is replaced). Building markers from the merged
+ * list keeps a saved target in its level's stacking chain (spec 09).
+ */
+export function withAddedContributions(
+  contributions: TargetContributionsByKpi,
+  added: readonly KpiTargetContribution[],
+): TargetContributionsByKpi {
+  if (added.length === 0) return contributions;
+  const next: TargetContributionsByKpi = { ...contributions };
+  for (const a of added) {
+    const kpiId = a.assignment.kpiId;
+    next[kpiId] = [...(next[kpiId] ?? []).filter((c) => c.source.key !== a.source.key), a];
+  }
+  return next;
+}
+
+/**
  * Put a just-saved target on its KPI's row. One target per (issue, KPI), so any
  * marker from the same source issue is replaced — which also keeps this
  * idempotent when a later load already includes the target.

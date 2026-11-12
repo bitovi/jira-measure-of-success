@@ -8,6 +8,7 @@ export * from './resolve/relativeTargetDate';
 export * from './resolve/targetStatus';
 export * from './resolve/baseline';
 export * from './resolve/relativeTargetValue';
+export * from './resolve/stackSteps';
 export * from './resolve/displayState';
 export * from './resolve/freeze';
 export * from './resolve/panelTarget';

@@ -2,8 +2,92 @@ import { z } from 'zod';
 
 /**
  * App configuration — Forge KVS, single doc under `kpi:config:rollup`.
- * Brief §4.4. Keyed by issue-type NAME discovered at runtime (not hardcoded).
+ * Brief §4.4. Keyed by Jira HIERARCHY LEVEL (`issuetype.hierarchyLevel`, as a
+ * string — e.g. `"2"`), so every issue type at a level (Milestone AND
+ * Increment) shares the level's settings. Configs saved before this were keyed
+ * by issue-type name; those keys are migrated on read and still honored as a
+ * fallback (see `levelSetting`).
  */
+
+/** One level of the site's issue-type hierarchy, as Settings shows it. */
+export interface HierarchyLevel {
+  /** Jira `hierarchyLevel` (0 = Story/Task level, 1 = Epic, higher = parents) */
+  level: number;
+  /** representative issue-type name, used in option wording ("From Epics") */
+  name: string;
+  /** every issue type at this level, `name` first */
+  issueTypeNames: string[];
+}
+
+/** The config-map key for a hierarchy level. */
+export function levelKey(level: number): string {
+  return String(level);
+}
+
+/** "Milestone / Increment" — every issue type the level's settings apply to. */
+export function levelLabel(level: HierarchyLevel): string {
+  return level.issueTypeNames.join(' / ');
+}
+
+/** The minimal issue-type info needed to find its level's settings. */
+export interface IssueTypeRef {
+  name: string;
+  hierarchyLevel: number | null;
+}
+
+/**
+ * The setting for an issue's level: the level key wins; a legacy
+ * issue-type-name key is the fallback (configs saved before level keys).
+ */
+export function levelSetting<T>(
+  map: Record<string, T> | undefined,
+  issueType: IssueTypeRef,
+): T | undefined {
+  if (!map) return undefined;
+  const byLevel = issueType.hierarchyLevel != null ? map[levelKey(issueType.hierarchyLevel)] : undefined;
+  return byLevel ?? map[issueType.name];
+}
+
+const isLevelKey = (key: string): boolean => /^-?\d+$/.test(key);
+
+/**
+ * Re-key a config's legacy issue-type-NAME entries by hierarchy level. An
+ * existing level entry wins over a legacy one; names not found at any level
+ * (deleted/renamed types) are dropped. Pass the site's full level list — an
+ * empty list means it couldn't be read, and nothing is changed. Idempotent —
+ * returns the same object when there was nothing to migrate.
+ */
+export function migrateRollupConfigToLevels(config: RollupConfig, levels: HierarchyLevel[]): RollupConfig {
+  if (levels.length === 0) return config;
+  const levelOf = new Map<string, number>();
+  for (const l of levels) for (const n of l.issueTypeNames) levelOf.set(n, l.level);
+
+  let changed = false;
+  const migrate = <T>(map: Record<string, T> | undefined): Record<string, T> | undefined => {
+    if (!map) return map;
+    const out: Record<string, T> = {};
+    for (const [key, value] of Object.entries(map)) if (isLevelKey(key)) out[key] = value;
+    for (const [key, value] of Object.entries(map)) {
+      if (isLevelKey(key)) continue;
+      changed = true;
+      const level = levelOf.get(key);
+      if (level !== undefined) out[levelKey(level)] ??= value;
+    }
+    return out;
+  };
+
+  const dueDateRollup = migrate(config.dueDateRollup) ?? {};
+  const dateFields = migrate(config.dateFields);
+  if (!changed) return config;
+  return { ...config, dueDateRollup, ...(dateFields ? { dateFields } : {}) };
+}
+
+/** True when the config still has issue-type-name keys (pre-level configs). */
+export function hasLegacyRollupKeys(config: RollupConfig): boolean {
+  return [...Object.keys(config.dueDateRollup), ...Object.keys(config.dateFields ?? {})].some(
+    (k) => !isLevelKey(k),
+  );
+}
 
 /** Due-date rollup methods. Brief §6.1. */
 export const RollupMethod = z.enum([
@@ -27,9 +111,9 @@ export const DateFieldChoice = z.object({
 export type DateFieldChoice = z.infer<typeof DateFieldChoice>;
 
 export const RollupConfig = z.object({
-  /** issueTypeName -> method */
+  /** levelKey(hierarchyLevel) -> method */
   dueDateRollup: z.record(z.string(), RollupMethod),
-  /** issueTypeName -> the date fields to read for that level (default Start date / Due date) */
+  /** levelKey(hierarchyLevel) -> the date fields to read for that level (default Start date / Due date) */
   dateFields: z.record(z.string(), DateFieldChoice).optional(),
   /**
    * Optional rollup DEPTH CAP (Feature 03, FR-19): how many hierarchy levels

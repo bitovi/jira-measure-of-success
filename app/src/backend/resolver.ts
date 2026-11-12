@@ -14,7 +14,13 @@ import {
   type Assignment,
   type CatalogEntryDto,
   type CreateKpiInput,
+  type IssueLinkTypeInfo,
+  type KpiHierarchyStatus,
   type KpiSpaceStatus,
+  DEFAULT_KPI_LINK_TYPE,
+  isDirectionalLinkType,
+  KPI_HIERARCHY_NOT_SET_UP,
+  KpiHierarchyLink,
   type PanelData,
   type PanelListData,
   type PanelParts,
@@ -42,6 +48,8 @@ import {
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
+  ensureKpiHierarchyLinkType,
+  listIssueLinkTypes,
   ensureKpiIssueTypeOnProject,
   inlineIssueTypeIcons,
   KPI_ISSUE_TYPE,
@@ -54,8 +62,10 @@ import {
 import { stage, traced } from './requestLog';
 import {
   type KpiSpaceConfig,
+  readKpiHierarchyConfig,
   readKpiSpaceConfig,
   readRollupConfig,
+  writeKpiHierarchyConfig,
   writeKpiSpaceConfig,
   writeRollupConfig,
 } from './storage';
@@ -78,6 +88,33 @@ const resolver = new Resolver();
  */
 const define = (functionKey: string, cb: ResolverFunction<unknown, unknown>): void => {
   resolver.define(functionKey, (request) => traced(functionKey, async () => cb(request)));
+};
+
+/** The `jira:adminPage` module (manifest.yml) — Jira only shows it to site/Jira admins. */
+const SETTINGS_MODULE_KEY = 'kpi-settings-page';
+
+/**
+ * Every module shares this one resolver, so a write that changes app-wide or
+ * site-wide configuration (rollup settings, the KPI space, the KPI hierarchy
+ * link type) must come from the admin-only Settings page. `moduleKey` is set by
+ * the Forge platform from the invoking extension, not by the client payload.
+ */
+function requireSettingsPage(context: unknown): void {
+  const moduleKey = (context as { moduleKey?: string } | undefined)?.moduleKey;
+  if (moduleKey !== SETTINGS_MODULE_KEY) {
+    throw new Error('KPI settings can only be changed from the KPI Settings admin page.');
+  }
+}
+
+/**
+ * `define` for Settings writes: rejects calls from any module other than the
+ * admin Settings page before the handler runs.
+ */
+const defineSettingsWrite = (functionKey: string, cb: ResolverFunction<unknown, unknown>): void => {
+  define(functionKey, (request) => {
+    requireSettingsPage(request.context);
+    return cb(request);
+  });
 };
 
 /**
@@ -167,10 +204,11 @@ function observed<T>(promise: Promise<T>): Promise<T> {
 async function buildPanelList(issueId: string): Promise<PanelListData> {
   const issueP = stage('issue', () => fetchIssueWithAssignments(issueId));
   const spaceP = readKpiSpaceConfig();
+  const hierarchyP = readKpiHierarchyConfig();
   const kpiIssuesP = observed(
     stage('kpiSpaceIssues', async () => {
-      const space = await spaceP;
-      return space.key ? fetchKpiSpaceIssues(space.key) : [];
+      const [space, hierarchy] = await Promise.all([spaceP, hierarchyP]);
+      return space.key ? fetchKpiSpaceIssues(space.key, hierarchy) : [];
     }),
   );
   const parentKpiIdsP = observed(
@@ -237,8 +275,8 @@ async function buildPanelValues(issueId: string): Promise<PanelValuesData> {
   );
   const readingsP = observed(
     stage('readings', async () => {
-      const space = await spaceP;
-      const kpiIssues = space.key ? await fetchKpiSpaceIssues(space.key) : [];
+      const [space, hierarchy] = await Promise.all([spaceP, readKpiHierarchyConfig()]);
+      const kpiIssues = space.key ? await fetchKpiSpaceIssues(space.key, hierarchy) : [];
       const changelog = await fetchReadingChangelog(kpiIssues.map((i) => i.id));
       const readings: PanelValuesData['readings'] = {};
       for (const k of kpiIssues) {
@@ -337,7 +375,7 @@ define('removeAssignment', async ({ payload }) => {
 define('getHierarchyLevels', async () => fetchHierarchyLevels());
 define('getRollupConfig', async () => readRollupConfig());
 define('getDateFields', async () => fetchDateFieldCatalog());
-define('saveRollupConfig', async ({ payload }) => {
+defineSettingsWrite('saveRollupConfig', async ({ payload }) => {
   const saved = await writeRollupConfig((payload as { config?: unknown })?.config);
   return { ok: true, saved };
 });
@@ -372,7 +410,7 @@ async function readResolvedKpiSpaceConfig(): Promise<KpiSpaceConfig> {
   return resolved;
 }
 
-define('saveKpiSpaceKey', async ({ payload }) => {
+defineSettingsWrite('saveKpiSpaceKey', async ({ payload }) => {
   const key = normalizeProjectKey(String((payload as { key?: string })?.key ?? ''));
   if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
   const project = await findProjectByKey(key);
@@ -380,7 +418,7 @@ define('saveKpiSpaceKey', async ({ payload }) => {
   return kpiSpaceStatus();
 });
 
-define('createKpiSpace', async ({ payload, context }) => {
+defineSettingsWrite('createKpiSpace', async ({ payload, context }) => {
   const key = normalizeProjectKey(String((payload as { key?: string })?.key ?? ''));
   if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
   const existing = await findProjectByKey(key);
@@ -394,7 +432,60 @@ define('createKpiSpace', async ({ payload, context }) => {
   // Provision + associate the KPI issue type (also repairs a 'misconfigured' space).
   await ensureKpiIssueTypeOnProject(project.id);
   await writeKpiSpaceConfig({ key, projectId: project.id, name: project.name });
+  // Best-effort: also set up KPI nesting so a fresh install works in one click.
+  // If it fails (e.g. issue linking is disabled) the space is still usable and
+  // the KPI hierarchy card in Settings shows why.
+  if (!(await readKpiHierarchyConfig())) {
+    await provisionDefaultHierarchy().catch((e: unknown) => {
+      console.warn('[createKpiSpace] could not set up the KPI hierarchy link type:', (e as Error)?.message ?? e);
+    });
+  }
   return kpiSpaceStatus();
+});
+
+// ── KPI hierarchy link (resolve/kpiLinks) ────────────────────────────────────
+async function kpiHierarchyStatus(): Promise<KpiHierarchyStatus> {
+  const cfg = await readKpiHierarchyConfig();
+  const parentEnd = cfg?.parentEnd ?? DEFAULT_KPI_LINK_TYPE.parentEnd;
+  const linkTypeId = cfg?.linkTypeId ?? null;
+  let available: IssueLinkTypeInfo[];
+  try {
+    available = await listIssueLinkTypes();
+  } catch (e) {
+    return { state: 'unavailable', linkType: null, linkTypeId, parentEnd, available: [], message: (e as Error).message };
+  }
+  const linkType = cfg ? (available.find((t) => t.id === cfg.linkTypeId) ?? null) : null;
+  const state = !cfg ? 'unset' : linkType ? 'ready' : 'missing';
+  return { state, linkType, linkTypeId, parentEnd, available };
+}
+
+/** Create (or adopt) the app's `KPI Hierarchy` link type and point the config at it. */
+async function provisionDefaultHierarchy(): Promise<void> {
+  const type = await ensureKpiHierarchyLinkType();
+  // A pre-existing same-named type may have its labels the other way round.
+  const reversed = type.outward.trim().toLowerCase() === DEFAULT_KPI_LINK_TYPE.inward.toLowerCase();
+  const parentEnd = reversed ? 'outward' : 'inward';
+  await writeKpiHierarchyConfig({ linkTypeId: type.id, parentEnd });
+}
+
+define('getKpiHierarchy', async () => kpiHierarchyStatus());
+
+defineSettingsWrite('saveKpiHierarchy', async ({ payload }) => {
+  const parsed = KpiHierarchyLink.safeParse(payload);
+  if (!parsed.success) throw new Error('Pick a link type and which end is the parent KPI.');
+  const { linkTypeId, parentEnd } = parsed.data;
+  const type = (await listIssueLinkTypes()).find((t) => t.id === linkTypeId);
+  if (!type) throw new Error(`No issue link type with id "${linkTypeId}" on this site.`);
+  if (!isDirectionalLinkType(type)) {
+    throw new Error(`"${type.name}" reads "${type.outward}" both ways, so it can't tell a parent KPI from a child.`);
+  }
+  await writeKpiHierarchyConfig({ linkTypeId: type.id, parentEnd });
+  return kpiHierarchyStatus();
+});
+
+defineSettingsWrite('createKpiHierarchyLinkType', async () => {
+  await provisionDefaultHierarchy();
+  return kpiHierarchyStatus();
 });
 
 /**
@@ -418,14 +509,15 @@ async function buildTimelineSkeleton(): Promise<TimelineData> {
   const today = new Date().toISOString().slice(0, 10);
   // The shared `/field` lookup (rank + reading field ids) is independent of the
   // space config, so start both together.
-  const [space] = await Promise.all([
+  const [space, hierarchy] = await Promise.all([
     stage('config', () => readResolvedKpiSpaceConfig()),
+    readKpiHierarchyConfig(),
     stage('fields', () => warmFieldIds()),
   ]);
   if (!space.key || !space.projectId) return { today, roots: [] } satisfies TimelineData;
   const spaceKey = space.key;
 
-  const issues = await stage('kpiSpaceIssues', () => fetchKpiSpaceIssues(spaceKey));
+  const issues = await stage('kpiSpaceIssues', () => fetchKpiSpaceIssues(spaceKey, hierarchy));
   if (issues.length === 0) return { today, roots: [] } satisfies TimelineData;
 
   const changelogByIssue = await stage('readings', () => fetchReadingChangelog(issues.map((i) => i.id)));
@@ -498,6 +590,9 @@ async function buildTargetContributionsByKpi(): Promise<TimelineTargetsData> {
     idsNeedingRollup.add(ci.issueId);
     if (ci.parentId) idsNeedingRollup.add(ci.parentId);
   }
+  // Follow-up F1 (specs/09-stacked-targets/plan.md): every root is walked today,
+  // including Done issues whose dates are long settled. Once frozen end dates are
+  // saved, frozen issues use that date and only active items need this walk.
   // One shared, level-batched traversal across ALL rollup roots (instead of a
   // separate per-root subtree walk) — overlapping ancestors/subtrees between
   // contributing issues are fetched once. See jira.ts fetchSubtreeTimingNodesForRoots.
@@ -505,9 +600,9 @@ async function buildTargetContributionsByKpi(): Promise<TimelineTargetsData> {
   const rollupNodes = await stage('rollupWalk', () =>
     fetchSubtreeTimingNodesForRoots([...idsNeedingRollup], selection),
   );
-  const rolledDueById = new Map<string, string | null>();
+  const rolledDueById = new Map<string, ResolvedEndpoint>();
   for (const id of idsNeedingRollup) {
-    rolledDueById.set(id, effectiveTiming(id, rollupNodes, rollupConfig, new Map()).due.date);
+    rolledDueById.set(id, effectiveTiming(id, rollupNodes, rollupConfig, new Map()).due);
   }
 
   // Group every contributing issue's targets by the KPI they point at (a KPI's
@@ -516,16 +611,22 @@ async function buildTargetContributionsByKpi(): Promise<TimelineTargetsData> {
   const byKpi: TargetContributionsByKpi = {};
   for (const ci of contributions.issues) {
     const parent = ci.parentId ? contributions.parentById.get(ci.parentId) : undefined;
+    // rolledDueById always has an entry for ci.issueId/ci.parentId (populated
+    // above); its date may legitimately be `null` (still pending), so don't
+    // fall back to the raw own-due once the key is present.
+    const due = rolledDueById.get(ci.issueId);
+    const parentDue = ci.parentId ? rolledDueById.get(ci.parentId) : undefined;
     const source: TargetSourceIssue = {
       key: ci.issueKey,
       type: ci.issueTypeName,
       title: ci.title,
       iconUrl: (ci.issueTypeIconUrl && iconByUrl.get(ci.issueTypeIconUrl)) ?? ci.issueTypeIconUrl,
-      // rolledDueById always has an entry for ci.issueId/ci.parentId (populated
-      // above); the map value may legitimately be `null` (still pending), so
-      // don't `??`-fall back to the raw own-due once the key is present.
-      due: rolledDueById.get(ci.issueId) ?? null,
-      parent: parent ? { key: parent.key, due: rolledDueById.get(ci.parentId!) ?? null } : undefined,
+      due: due?.date ?? null,
+      dueRolledUp: due?.source === 'children',
+      parent: parent
+        ? { key: parent.key, due: parentDue?.date ?? null, dueRolledUp: parentDue?.source === 'children' }
+        : undefined,
+      hierarchyLevel: ci.hierarchyLevel,
     };
     for (const a of ci.assignments) {
       (byKpi[a.kpiId] ??= []).push({ assignment: a, source });
@@ -611,6 +712,7 @@ define('addTarget', async ({ payload, context }) => {
       title: issue.summary,
       iconUrl: (issue.typeIconUrl && iconByUrl.get(issue.typeIconUrl)) ?? issue.typeIconUrl,
       due: issue.due,
+      hierarchyLevel: issue.hierarchyLevel,
     },
   };
   return added;
@@ -621,10 +723,18 @@ define('addTarget', async ({ payload, context }) => {
 // and no full timeline rebuild.
 define('createKpi', async ({ payload }) => {
   const input = payload as CreateKpiInput;
-  const space = await readResolvedKpiSpaceConfig();
+  const [space, hierarchy] = await Promise.all([readResolvedKpiSpaceConfig(), readKpiHierarchyConfig()]);
   if (!space.key || !space.projectId)
     throw new Error('KPI space is not set up — configure it in Settings first.');
-  return createKpiIssue(space.projectId, input);
+  // A deleted link type would otherwise create the issue, fail the link with a
+  // raw Jira 404 and roll back — catch it up front with the actionable error.
+  if (input.parentKpiId && hierarchy) {
+    const types = await listIssueLinkTypes();
+    if (!types.some((t) => t.id === hierarchy.linkTypeId)) {
+      throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — the link type KPIs nest with was deleted; choose another in Settings.`);
+    }
+  }
+  return createKpiIssue(space.projectId, input, hierarchy);
 });
 
 export const handler = resolver.getDefinitions();

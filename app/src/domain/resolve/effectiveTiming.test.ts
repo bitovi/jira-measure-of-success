@@ -9,7 +9,7 @@ function node(
   ownDue: string | null,
   childIds: string[] = [],
 ): TimingNode {
-  return { id, issueKey: id.toUpperCase(), issueTypeName, ownStart, ownDue, childIds };
+  return { id, issueKey: id.toUpperCase(), issueTypeName, hierarchyLevel: null, ownStart, ownDue, childIds };
 }
 
 function graph(...nodes: TimingNode[]): Map<string, TimingNode> {
@@ -164,5 +164,21 @@ describe('effectiveTiming — recursion & guards', () => {
   it('leaf defaults to parentOnly when config missing', () => {
     const g = graph(node('s', 'Story', '2026-01-01', '2026-04-01'));
     expect(effectiveTiming('s', g, config({})).due).toEqual({ date: '2026-04-01', source: 'own' });
+  });
+});
+
+describe('effectiveTiming — per-level config', () => {
+  // Milestone and Increment share hierarchy level 2; the setting saved for the
+  // level must apply to both, not just the type Settings happened to show.
+  it('applies a level method to every issue type at that level', () => {
+    for (const type of ['Milestone', 'Increment']) {
+      const parent: TimingNode = {
+        ...node('p', type, '2026-01-01', '2026-06-30', ['e']),
+        hierarchyLevel: 2,
+      };
+      const child: TimingNode = { ...node('e', 'Epic', '2026-02-01', '2026-09-30'), hierarchyLevel: 1 };
+      const due = effectiveTiming('p', graph(parent, child), config({ '2': 'parentOnly' })).due;
+      expect(due).toEqual({ date: '2026-06-30', source: 'own' });
+    }
   });
 });

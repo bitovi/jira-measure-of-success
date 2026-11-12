@@ -15,6 +15,12 @@ import { resolveRelativeTargetValue } from './relativeTargetValue';
  * assignment stays `percent`/`relative` + relative date; the resolver merely presents the snapshot
  * (and a `frozen: true` flag) when the condition holds. Returns `null` when the
  * target is not yet frozen. No @forge/*, no React.
+ *
+ * STATUS: nothing is actually frozen yet. Only the issue panel calls this (via
+ * `resolvePanelTarget`); the resulting `frozen` flag isn't read by any UI, nothing
+ * is saved, and stacking (spec 09) ignores closed status. A Done issue's dates are
+ * still recalculated on every load. Saving a frozen end date and skipping frozen
+ * issues in stacking and rollup is Follow-up F1 in specs/09-stacked-targets/plan.md.
  */
 export interface FreezeContext {
   /** the contributing issue is resolved/closed */

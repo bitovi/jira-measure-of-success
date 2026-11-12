@@ -3,6 +3,7 @@ import forgeApi, { route } from './forge-api-shim';
 import {
   createKpiIssue,
   createKpiProject,
+  ensureKpiHierarchyLinkType,
   ensureKpiIssueTypeOnProject,
   fetchAssignments,
   fetchChildren,
@@ -18,7 +19,7 @@ import {
   writeAssignments,
   KPI_ISSUE_TYPE,
 } from '../src/backend/jira';
-import type { Assignment } from '../src/domain/index';
+import { DEFAULT_KPI_LINK_TYPE, type Assignment, type KpiHierarchyLink } from '../src/domain/index';
 
 /**
  * API E2E — drives every Jira REST capability in `src/backend/jira.ts` against a
@@ -30,6 +31,12 @@ import type { Assignment } from '../src/domain/index';
  * ⚠️ DESTRUCTIVE: deletes + recreates the `E2E_PROJECT_KEY` project on
  * `JIRA_BASE_URL`. It uses a DEDICATED disposable key (default `MOSE2E`) — NOT
  * the real configured KPI space — so real KPI data is never touched.
+ *
+ * ⚠️ SITE-WIDE SIDE EFFECT: issue link types are global to a Jira site. The
+ * `ensureKpiHierarchyLinkType` test creates a "KPI Hierarchy" link type if the
+ * site has none, and deliberately never deletes it — an installed copy of the
+ * app on the same site nests its KPIs with that same type, and deleting it would
+ * un-nest them. After one run the type exists; later runs adopt it.
  *
  * Run: `npm run test:e2e` (auto-skips when creds are absent).
  * Requires in `.env`: FORGE_EMAIL, FORGE_API_TOKEN, JIRA_BASE_URL (optional),
@@ -87,6 +94,7 @@ const ctx: {
   rootKey?: string;
   rootId?: string;
   childKey?: string;
+  hierarchy?: KpiHierarchyLink;
 } = {};
 
 const suite = HAS_CREDS ? describe : describe.skip;
@@ -138,7 +146,7 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
       name: 'E2E Revenue',
       unit: '$',
       direction: 'increase',
-    });
+    }, null);
     ctx.rootKey = created.issueKey;
     expect(ctx.rootKey).toBeTruthy();
     expect(created).toMatchObject({ kpiId: ctx.rootKey, name: 'E2E Revenue', unit: '$', parentKpiId: null });
@@ -150,15 +158,25 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     expect(meta).toEqual({ unit: '$', direction: 'increase' });
   });
 
-  it('createKpiIssue → nests a child KPI via a Parent link', async () => {
+  it('ensureKpiHierarchyLinkType → finds or creates the global KPI Hierarchy link type', async () => {
+    // Link types are site-global, so this is left in place (idempotent by name;
+    // see the SITE-WIDE SIDE EFFECT note at the top of this file).
+    const type = await ensureKpiHierarchyLinkType();
+    expect(type.id).toBeTruthy();
+    expect(type.name).toBe(DEFAULT_KPI_LINK_TYPE.name);
+    ctx.hierarchy = { linkTypeId: type.id, parentEnd: DEFAULT_KPI_LINK_TYPE.parentEnd };
+  });
+
+  it('createKpiIssue → nests a child KPI via a hierarchy link', async () => {
     expect(ctx.rootKey, 'requires createKpiIssue (root) to have succeeded').toBeTruthy();
+    expect(ctx.hierarchy, 'requires ensureKpiHierarchyLinkType to have succeeded').toBeTruthy();
     ctx.childKey = (
       await createKpiIssue(ctx.projectId!, {
         name: 'E2E Regional Revenue',
         unit: '$',
         direction: 'increase',
         parentKpiId: ctx.rootKey,
-      })
+      }, ctx.hierarchy!)
     ).issueKey;
     expect(ctx.childKey).toBeTruthy();
   });
@@ -166,11 +184,11 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
   it('fetchKpiSpaceIssues → enumerates + nests the space (links + JQL)', async () => {
     // JQL search reads a search index that trails issue creation (and link
     // indexing) by a few seconds — poll until the child is present AND its
-    // parent has resolved from the Parent link.
+    // parent has resolved from the hierarchy link.
     const rootPresent = (list: Awaited<ReturnType<typeof fetchKpiSpaceIssues>>) =>
       list.find((i) => i.key === ctx.rootKey);
     const issues = await pollFor(
-      () => fetchKpiSpaceIssues(PROJECT_KEY),
+      () => fetchKpiSpaceIssues(PROJECT_KEY, ctx.hierarchy ?? null),
       (list) => {
         const root = rootPresent(list);
         return Boolean(root && list.some((i) => i.key === ctx.childKey && i.parentId === root!.id));
@@ -181,7 +199,7 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     ctx.rootId = root!.id;
     const child = issues.find((i) => i.key === ctx.childKey);
     expect(child, `child KPI ${ctx.childKey} not found`).toBeTruthy();
-    expect(child!.parentId, 'child should nest under the root via the Parent link').toBe(ctx.rootId);
+    expect(child!.parentId, 'child should nest under the root via the hierarchy link').toBe(ctx.rootId);
   });
 
   it('fetchIssueMeta → reads issue key/type/dates', async () => {

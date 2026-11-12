@@ -4,9 +4,13 @@ import {
   AssignmentProperty,
   KpiMetaProperty,
   KPI_META_PROPERTY_KEY,
-  KPI_PARENT_LINK_TYPE,
+  breakParentCycles,
+  DEFAULT_KPI_LINK_TYPE,
+  isDirectionalLinkType,
+  KPI_HIERARCHY_NOT_SET_UP,
   dateFieldSelection,
   encodeReadingValue,
+  kpiParentLinkBody,
   parentFromIssueLinks,
   readOwnDates,
   FALLBACK_DATE_FIELD_DEFAULTS,
@@ -14,10 +18,13 @@ import {
   type DateFieldCatalog,
   type DateFieldOption,
   type DateFieldSelection,
+  type HierarchyLevel,
   type CreatedKpi,
   type CreateKpiInput,
   type IssueLinkRef,
+  type IssueLinkTypeInfo,
   type IssuePickerItem,
+  type KpiHierarchyLink,
   type ReadingChange,
   type TimingNode,
 } from '../domain/index';
@@ -47,9 +54,14 @@ interface IssueParentInfo {
   parentId: string | null;
   issueKey: string;
   issueTypeName: string;
+  /** Jira `issuetype.hierarchyLevel`; null when Jira didn't return one */
+  hierarchyLevel: number | null;
   ownStart: string | null;
   ownDueDate: string | null;
-  /** true when the issue's status category is "done" (Feature 03 freeze) */
+  /**
+   * true when the issue's status category is "done" (Feature 03 freeze). Read but
+   * not yet used to stop rollup walks — Follow-up F1 in specs/09-stacked-targets/plan.md.
+   */
   closed: boolean;
 }
 
@@ -59,7 +71,7 @@ const DEFAULT_DATE_SELECTION = dateFieldSelection(null);
 /** Raw issue fields as returned by Jira, including the selected date fields. */
 type RawMetaFields = {
   parent?: { id: string };
-  issuetype?: { name: string };
+  issuetype?: { name: string; hierarchyLevel?: number };
   status?: { statusCategory?: { key?: string } };
   [field: string]: unknown;
 };
@@ -70,11 +82,13 @@ function metaFieldList(selection: DateFieldSelection): string {
 
 function toIssueMeta(key: string, fields: RawMetaFields | undefined, selection: DateFieldSelection): IssueParentInfo {
   const issueTypeName = fields?.issuetype?.name ?? 'Unknown';
-  const { ownStart, ownDue } = readOwnDates(fields, issueTypeName, selection);
+  const hierarchyLevel = fields?.issuetype?.hierarchyLevel ?? null;
+  const { ownStart, ownDue } = readOwnDates(fields, { name: issueTypeName, hierarchyLevel }, selection);
   return {
     parentId: fields?.parent?.id ?? null,
     issueKey: key,
     issueTypeName,
+    hierarchyLevel,
     ownStart,
     ownDueDate: ownDue,
     closed: fields?.status?.statusCategory?.key === 'done',
@@ -141,6 +155,7 @@ export async function fetchTargetSourceIssue(issueId: string): Promise<{
   key: string;
   typeName: string;
   typeIconUrl: string | null;
+  hierarchyLevel: number | null;
   summary: string;
   due: string | null;
   assignments: Assignment[];
@@ -151,13 +166,18 @@ export async function fetchTargetSourceIssue(issueId: string): Promise<{
   if (!res.ok) throw new Error(await jiraError(res, `load issue ${issueId}`));
   const data = (await res.json()) as {
     key: string;
-    fields?: { summary?: string; duedate?: string | null; issuetype?: { name?: string; iconUrl?: string } };
+    fields?: {
+      summary?: string;
+      duedate?: string | null;
+      issuetype?: { name?: string; iconUrl?: string; hierarchyLevel?: number };
+    };
     properties?: Record<string, unknown>;
   };
   return {
     key: data.key,
     typeName: data.fields?.issuetype?.name ?? 'Issue',
     typeIconUrl: data.fields?.issuetype?.iconUrl ?? null,
+    hierarchyLevel: data.fields?.issuetype?.hierarchyLevel ?? null,
     summary: data.fields?.summary ?? data.key,
     due: data.fields?.duedate ?? null,
     assignments: parseAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
@@ -570,13 +590,18 @@ async function getRankFieldId(): Promise<string | null> {
  * sibling ordering) and the `kpi-meta` property (unit/direction — included in
  * the search so no per-KPI property GET is needed). Paginated to cover large spaces.
  *
- * The KPI tree is expressed with built-in `Parent` issue links rather than the
- * native `parent` field (a standard issue can't be the native parent of another
- * standard issue) — so each issue's parent is derived from its `issuelinks` via
- * the pure `parentFromIssueLinks`, restricted to links whose parent is also a
- * KPI-space issue. The nested tree + readings are assembled by `getTimelineData`.
+ * The KPI tree is expressed with issue links of the configured hierarchy type
+ * (`hierarchy`, see resolve/kpiLinks) rather than the native `parent` field (a
+ * standard issue can't be the native parent of another standard issue) — so
+ * each issue's parent is derived from its `issuelinks` via the pure
+ * `parentFromIssueLinks`, restricted to links whose parent is also a KPI-space
+ * issue. With no hierarchy configured every KPI is a root. The nested tree +
+ * readings are assembled by `getTimelineData`.
  */
-export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceIssue[]> {
+export async function fetchKpiSpaceIssues(
+  projectKey: string,
+  hierarchy: KpiHierarchyLink | null,
+): Promise<KpiSpaceIssue[]> {
   const rankFieldId = await getRankFieldId();
   const fieldList = ['summary', 'issuelinks', ...(rankFieldId ? [rankFieldId] : [])].join(',');
   type RawIssue = {
@@ -624,17 +649,19 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
     nextPageToken = data.nextPageToken;
   }
 
-  // Resolve parents only after every id is known, so `Parent` links pointing
-  // outside the KPI space are ignored (the built-in type is generic).
+  // Resolve parents only after every id is known, so hierarchy links pointing
+  // outside the KPI space are ignored (a reused type like "Blocks" is generic).
   const idSet = new Set(raw.map((r) => r.id));
-  return raw.map((r) => ({
-    id: r.id,
-    key: r.key,
-    name: r.name,
-    parentId: parentFromIssueLinks(r.links, idSet),
-    rank: r.rank,
-    meta: r.meta,
-  }));
+  return breakParentCycles(
+    raw.map((r) => ({
+      id: r.id,
+      key: r.key,
+      name: r.name,
+      parentId: parentFromIssueLinks(r.links, idSet, hierarchy),
+      rank: r.rank,
+      meta: r.meta,
+    })),
+  );
 }
 
 function parseKpiMeta(value: unknown): KpiMetaProperty | null {
@@ -649,6 +676,8 @@ export interface IssueTargetContributions {
   issueTypeName: string;
   /** issue type icon URL (Jira `issuetype.iconUrl`), when available */
   issueTypeIconUrl: string | null;
+  /** Jira `issuetype.hierarchyLevel` — targets stack within a level (spec 09); null when absent */
+  hierarchyLevel: number | null;
   title: string;
   /** the issue's own due date — anchor for `issueDueDate` relative timing */
   ownDue: string | null;
@@ -691,6 +720,7 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
     key: string;
     issueTypeName: string;
     issueTypeIconUrl: string | null;
+    hierarchyLevel: number | null;
     title: string;
     ownDue: string | null;
     parentId: string | null;
@@ -715,7 +745,7 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
         fields?: {
           summary?: string;
           duedate?: string | null;
-          issuetype?: { name?: string; iconUrl?: string };
+          issuetype?: { name?: string; iconUrl?: string; hierarchyLevel?: number };
           parent?: { id?: string | number };
         };
         properties?: Record<string, unknown>;
@@ -728,6 +758,7 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
         key: i.key,
         issueTypeName: i.fields?.issuetype?.name ?? 'Unknown',
         issueTypeIconUrl: i.fields?.issuetype?.iconUrl ?? null,
+        hierarchyLevel: i.fields?.issuetype?.hierarchyLevel ?? null,
         title: i.fields?.summary ?? i.key,
         ownDue: i.fields?.duedate ?? null,
         parentId: i.fields?.parent?.id != null ? String(i.fields.parent.id) : null,
@@ -743,6 +774,7 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
     issueKey: r.key,
     issueTypeName: r.issueTypeName,
     issueTypeIconUrl: r.issueTypeIconUrl,
+    hierarchyLevel: r.hierarchyLevel,
     title: r.title,
     ownDue: r.ownDue,
     parentId: r.parentId,
@@ -807,6 +839,7 @@ export async function fetchSubtreeTimingNodesForRoots(
         id,
         issueKey: meta.issueKey,
         issueTypeName: meta.issueTypeName,
+        hierarchyLevel: meta.hierarchyLevel,
         ownStart: meta.ownStart,
         ownDue: meta.ownDueDate,
         childIds,
@@ -832,10 +865,12 @@ export async function fetchSubtreeTimingNodes(
 }
 
 /**
- * Discover hierarchy level names ordered deepest-parent → leaf, from the site's
- * issue-type hierarchy configuration (never hardcoded — Constitution §6).
+ * Discover the hierarchy levels ordered deepest-parent → leaf, from the site's
+ * issue-type hierarchy configuration (never hardcoded — Constitution §6). Each
+ * level lists EVERY issue type at it (e.g. Milestone and Increment), since
+ * rollup settings are per level, not per type.
  */
-export async function fetchHierarchyLevels(): Promise<string[]> {
+export async function fetchHierarchyLevels(): Promise<HierarchyLevel[]> {
   const res = await asApp().requestJira(route`/rest/api/3/issuetype`);
   if (!res.ok) return [];
   const types = (await res.json()) as Array<{ name: string; hierarchyLevel?: number }>;
@@ -843,13 +878,17 @@ export async function fetchHierarchyLevels(): Promise<string[]> {
   for (const t of types) {
     const level = t.hierarchyLevel ?? 0;
     const names = namesByLevel.get(level) ?? [];
-    names.push(t.name);
+    // Team-managed projects repeat type names (one "Epic" per project).
+    if (!names.includes(t.name)) names.push(t.name);
     namesByLevel.set(level, names);
   }
   // higher hierarchyLevel = closer to the top (deepest parent) → leaf last
   return [...namesByLevel.entries()]
     .sort((a, b) => b[0] - a[0])
-    .map(([level, names]) => pickLevelName(level, names));
+    .map(([level, names]) => {
+      const name = pickLevelName(level, names);
+      return { level, name, issueTypeNames: [name, ...names.filter((n) => n !== name)] };
+    });
 }
 
 /**
@@ -1014,14 +1053,22 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
 }
 
 /**
- * Create a KPI as an issue in the KPI space. Nesting under `parentKpiId` uses a
- * built-in `Parent` issue LINK (parent = link's outward end), because Jira
- * forbids a standard issue from being the native `parent` of another standard
- * issue. NOTE: unit/direction persist to the `kpi-meta` entity property (the
- * summary carries the KPI name) — set in the create request itself, so there's
- * no separate property write.
+ * Create a KPI as an issue in the KPI space. Nesting under `parentKpiId` uses an
+ * issue LINK of the configured `hierarchy` type, because Jira forbids a
+ * standard issue from being the native `parent` of another standard issue.
+ * Nesting without a configured hierarchy throws before anything is created.
+ * NOTE: unit/direction persist to the `kpi-meta` entity property (the summary
+ * carries the KPI name) — set in the create request itself, so there's no
+ * separate property write.
  */
-export async function createKpiIssue(projectId: string, input: CreateKpiInput): Promise<CreatedKpi> {
+export async function createKpiIssue(
+  projectId: string,
+  input: CreateKpiInput,
+  hierarchy: KpiHierarchyLink | null,
+): Promise<CreatedKpi> {
+  if (input.parentKpiId && !hierarchy) {
+    throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
+  }
   const name = input.name.trim() || 'Untitled KPI';
   // unit/direction are descriptive, low-churn → issue entity property (not a field).
   const meta: KpiMetaProperty = KpiMetaProperty.parse({
@@ -1051,7 +1098,7 @@ export async function createKpiIssue(projectId: string, input: CreateKpiInput): 
   // (still open) modal would create a duplicate.
   if (parentKpiId) {
     try {
-      await linkKpiParent(parentKpiId, created.key);
+      await linkKpiParent(hierarchy as KpiHierarchyLink, parentKpiId, created.key);
     } catch (err) {
       await deleteIssue(created.key).catch(() => {
         throw new Error(`${(err as Error).message}. ${created.key} was created without its parent; delete it in Jira.`);
@@ -1071,24 +1118,77 @@ export async function createKpiIssue(projectId: string, input: CreateKpiInput): 
 }
 
 /**
- * Link a child KPI to its parent with the built-in `Parent` link type
- * (outward "Parent" / inward "Child"): the parent is the link's outward issue,
- * the child its inward issue — matching how `parentFromIssueLinks` reads it back.
+ * Link a child KPI to its parent with the configured hierarchy link type; the
+ * body puts each issue on the end `parentFromIssueLinks` reads it back from.
  */
-export async function linkKpiParent(parentKpiKey: string, childKpiKey: string): Promise<void> {
+export async function linkKpiParent(
+  hierarchy: KpiHierarchyLink,
+  parentKpiKey: string,
+  childKpiKey: string,
+): Promise<void> {
   const res = await asApp().requestJira(route`/rest/api/3/issueLink`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      type: { name: KPI_PARENT_LINK_TYPE },
-      outwardIssue: { key: parentKpiKey },
-      inwardIssue: { key: childKpiKey },
-    }),
+    body: JSON.stringify(kpiParentLinkBody(hierarchy, parentKpiKey, childKpiKey)),
   });
   // 201 on success. Surface failures so a broken nest doesn't look like a no-op.
   if (!res.ok) {
     throw new Error(await jiraError(res, `link KPI "${childKpiKey}" under "${parentKpiKey}"`));
   }
+}
+
+/** Every issue link type on the site (link types are global, not per project). */
+export async function listIssueLinkTypes(): Promise<IssueLinkTypeInfo[]> {
+  const res = await asApp().requestJira(route`/rest/api/3/issueLinkType`);
+  if (!res.ok) throw new Error(await jiraError(res, 'list issue link types'));
+  const body = (await res.json()) as { issueLinkTypes?: Array<Partial<IssueLinkTypeInfo> & { id: string | number }> };
+  return (body.issueLinkTypes ?? []).map((t) => ({
+    id: String(t.id),
+    name: t.name ?? '',
+    inward: t.inward ?? '',
+    outward: t.outward ?? '',
+  }));
+}
+
+/**
+ * Find (by name) or create the app's own `KPI Hierarchy` link type. Reusing a
+ * same-named type keeps this idempotent across reinstalls; a type of that name
+ * created by someone else is used as-is with its own labels.
+ */
+export async function ensureKpiHierarchyLinkType(): Promise<IssueLinkTypeInfo> {
+  const existing = (await listIssueLinkTypes()).find(
+    (t) => t.name.toLowerCase() === DEFAULT_KPI_LINK_TYPE.name.toLowerCase(),
+  );
+  if (existing) {
+    // Adopting it would store a hierarchy nobody can read the direction of — the
+    // same rule `saveKpiHierarchy` enforces. Jira won't allow a second type with
+    // this name, so the admin has to rename or fix the existing one.
+    if (!isDirectionalLinkType(existing)) {
+      throw new Error(
+        `The existing "${existing.name}" link type reads "${existing.outward}" both ways, so it can't tell a parent KPI from a child. Rename it or give its two ends different labels, then try again.`,
+      );
+    }
+    return existing;
+  }
+  const res = await asApp().requestJira(route`/rest/api/3/issueLinkType`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: DEFAULT_KPI_LINK_TYPE.name,
+      inward: DEFAULT_KPI_LINK_TYPE.inward,
+      outward: DEFAULT_KPI_LINK_TYPE.outward,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await jiraError(res, `create the "${DEFAULT_KPI_LINK_TYPE.name}" issue link type`));
+  }
+  const t = (await res.json()) as Partial<IssueLinkTypeInfo> & { id: string | number };
+  return {
+    id: String(t.id),
+    name: t.name ?? DEFAULT_KPI_LINK_TYPE.name,
+    inward: t.inward ?? DEFAULT_KPI_LINK_TYPE.inward,
+    outward: t.outward ?? DEFAULT_KPI_LINK_TYPE.outward,
+  };
 }
 
 /** Delete an issue (used to roll back a half-created KPI). */

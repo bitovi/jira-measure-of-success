@@ -65,11 +65,16 @@ function quarterIndex(msVal: number): number {
  * `plotWidth` becomes exactly `minWidth` so the plot never overflows (the last
  * column may be partially visible). Only the right edge grows, so positions and
  * `domainStart` are unaffected (extend-only rule).
+ *
+ * `viewStart` (UTC ms, see `initialViewQuarterStart`) is the quarter the view
+ * opens on. When the data range overflows `minWidth`, enough quarters are
+ * appended that the columns from `viewStart` onward still cover `minWidth`, so
+ * scrolling it to the left edge isn't clamped short by the end of the strip.
  */
 export function buildAxis(
   dates: string[],
   today: string,
-  opts: { padQuarters?: number; minWidth?: number } = {},
+  opts: { padQuarters?: number; minWidth?: number; viewStart?: number } = {},
 ): Axis {
   const pad = opts.padQuarters ?? 1;
   const minWidth = Math.max(0, opts.minWidth ?? 0);
@@ -82,7 +87,13 @@ export function buildAxis(
   const firstQ = addQuarters(quarterStartMs(minT), -pad);
   const lastQ = addQuarters(quarterStartMs(maxT), pad);
   const dataCount = Math.max(1, quarterIndex(lastQ) - quarterIndex(firstQ) + 1);
-  const count = Math.max(dataCount, Math.ceil(minWidth / QUARTER_PX));
+  const overflows = dataCount * QUARTER_PX > minWidth;
+  const viewStartX =
+    overflows && minWidth > 0 && opts.viewStart !== undefined
+      ? Math.max(0, quarterIndex(opts.viewStart) - quarterIndex(firstQ)) * QUARTER_PX
+      : 0;
+  const fillWidth = viewStartX + minWidth;
+  const count = Math.max(dataCount, Math.ceil(fillWidth / QUARTER_PX));
 
   const quarters = Array.from({ length: count }, (_, i) => {
     const startMs = addQuarters(firstQ, i);
@@ -91,7 +102,7 @@ export function buildAxis(
 
   const domainStart = firstQ;
   const domainEnd = addQuarters(firstQ, count);
-  const plotWidth = Math.max(dataCount * QUARTER_PX, minWidth);
+  const plotWidth = Math.max(dataCount * QUARTER_PX, fillWidth);
   // Piecewise per quarter: every quarter column is exactly QUARTER_PX wide, so a
   // date's pixel offset depends only on its own quarter's position — adding
   // quarters on the right never moves anything, and adding N on the left moves

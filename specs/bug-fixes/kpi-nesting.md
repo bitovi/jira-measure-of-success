@@ -1,6 +1,6 @@
 # KPI nesting doesn't persist — design decision
 
-Status: **OPEN (design decision for the user)** — hardening shipped, nesting mechanism not chosen.
+Status: **RESOLVED — Option B (issue links), with an admin-chosen link type.** See [Resolution](#resolution).
 
 ## Symptom
 
@@ -124,3 +124,28 @@ links)** if a first-class, Jira-visible relationship becomes important.
 Whichever is chosen, `buildTimelineData` in `app/src/backend/resolver.ts` must be
 updated to derive adjacency from the chosen source (entity property or links)
 instead of, or in addition to, `issue.parentId`.
+
+## Resolution
+
+Option B shipped: a child KPI is linked to its parent with an issue link, and the
+tree is read back from each KPI's `issuelinks` (`app/src/domain/resolve/kpiLinks.ts`).
+
+The first version hard-coded a link type named `Parent`. Jira Cloud doesn't ship
+one (stock types are Blocks / Cloners / Duplicate / Relates), so nesting failed on
+sites without it: `Jira 404 … No issue link type with name 'Parent' found.`
+
+Link types are **global to the site** and admin-managed, so which one nests KPIs
+is now configured like the KPI space (Settings → **KPI Hierarchy**):
+
+- **Create “KPI Hierarchy” link type** (recommended) — the app creates (or adopts
+  a same-named) type reading “is the parent KPI of” / “is a child KPI of”.
+  **Create space** also does this when nothing is configured yet.
+- **Or use an existing link type** — any type whose two labels differ (symmetric
+  ones like Relates are excluded), plus which end is the parent
+  (e.g. “Parent blocks child” vs “Child blocks parent”).
+
+Stored in KVS `kpi:hierarchy` as `{ linkTypeId, parentEnd }` — by **id**, so an
+admin renaming the type doesn't break nesting. Until one is set, every KPI is a
+root and nesting a new KPI fails up front (nothing is created) with
+“KPI hierarchy is not set up”, which the New KPI modal shows with **Open Settings**.
+Changing the type later un-nests KPIs linked with the old one (the card warns).

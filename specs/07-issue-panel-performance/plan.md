@@ -83,7 +83,7 @@ The bundle is a single 889 KB chunk (269 KB gzipped). The largest parts:
 Notes:
 
 - `onParentNotTracked` rows have no assignment and no dates, and `sharedWithParent` rows use the issue's own assignment, so neither needs the parent's date.
-- The "Set a KPI target" preview ([previewRow](../../app/src/ui/surfaces/IssuePanel/targetText.ts)) uses only `issueDueDate`.
+- The "Set a KPI target" preview ([previewRow](../../app/src/ui/targetText.ts)) uses only `issueDueDate`.
 - Saving a target with a `parentDueDate` anchor (none of today's UI does) still works. The save returns `buildPanelData`, which then sees the anchor and walks the parent.
 
 **Verify:** at the scale fixture, opening an Epic makes no `id in` / `parent in` request for the Initiative or the sibling epics. A fixture issue with a `parentDueDate` target still shows the same resolved date as today (same `PanelData`).

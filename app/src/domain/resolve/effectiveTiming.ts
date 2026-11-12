@@ -1,5 +1,5 @@
 import type { IsoDate, RollupConfig, RollupMethod } from '../models/index';
-import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD } from '../models/index';
+import { DEFAULT_ROLLUP_METHOD, LEAF_ROLLUP_METHOD, levelSetting } from '../models/index';
 
 /**
  * Effective TIMING resolution — Brief §6.1, requirements §5.2.
@@ -16,6 +16,8 @@ export interface TimingNode {
   id: string;
   issueKey: string;
   issueTypeName: string;
+  /** Jira `issuetype.hierarchyLevel` — the key rollup settings are looked up by */
+  hierarchyLevel: number | null;
   ownStart: IsoDate | null;
   ownDue: IsoDate | null;
   childIds: string[];
@@ -40,7 +42,10 @@ const MAX_DEPTH = 10;
 const PENDING: ResolvedEndpoint = { date: null, source: 'pending' };
 
 function methodFor(node: TimingNode, config: RollupConfig): RollupMethod {
-  const configured = config.dueDateRollup[node.issueTypeName];
+  const configured = levelSetting(config.dueDateRollup, {
+    name: node.issueTypeName,
+    hierarchyLevel: node.hierarchyLevel,
+  });
   if (configured) return configured;
   return node.childIds.length === 0 ? LEAF_ROLLUP_METHOD : DEFAULT_ROLLUP_METHOD;
 }

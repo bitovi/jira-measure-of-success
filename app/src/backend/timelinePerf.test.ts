@@ -137,8 +137,12 @@ describe('getTimelineData at scale', () => {
     expect(marker?.date).toBe(latestDue(jira.fixture, epicId));
 
     // Changed by spec 08 (targets carry `relative`); identical to the previous digest with it stripped.
-    const digest = createHash('sha256').update(JSON.stringify(data)).digest('hex');
-    expect(digest).toMatchInlineSnapshot(`"23cc61b30ad60cc4595ac2db8971391a85cb7abeefb934acc2318963a544fe89"`);
+    // Changed by spec 09 (same-level relative targets stack); identical to the previous digest with chains disabled.
+    // `detail` (the tooltip's bet + resolution) is left out so this still guards the rest of the output.
+    const digest = createHash('sha256')
+      .update(JSON.stringify(data, (key, value) => (key === 'detail' ? undefined : value)))
+      .digest('hex');
+    expect(digest).toMatchInlineSnapshot(`"0e0631704229daa51ef39d7ce15e64cdc1261f0ee4308fc1b69e6b841dc2ed4b"`);
   });
 
   it('the contributions search asks for the kpi-assignments property and never reads it per issue', async () => {
