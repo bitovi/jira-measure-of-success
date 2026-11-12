@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { applyTargetContributions, clearResolving, type TargetContributionsByKpi } from './timelineLoad';
-import type { TimelineData, TimelineNodeDto } from '../contracts';
+import {
+  applyAddedTarget,
+  applyTargetContributions,
+  clearResolving,
+  insertCreatedKpi,
+  type TargetContributionsByKpi,
+} from './timelineLoad';
+import type { CreatedKpi, TimelineData, TimelineNodeDto } from '../contracts';
 import type { Assignment } from '../models/assignment';
 
 const assignment = (over: Partial<Assignment> & Pick<Assignment, 'timing'>): Assignment => ({
@@ -116,5 +122,82 @@ describe('clearResolving', () => {
     expect(cleared.roots[0].resolving).toBeUndefined();
     expect(cleared.roots[0].children[0].resolving).toBeUndefined();
     expect(cleared.roots[0].children[0].name).toBe('Revenue');
+  });
+});
+
+describe('insertCreatedKpi', () => {
+  const created = (over: Partial<CreatedKpi> = {}): CreatedKpi => ({
+    id: '10099',
+    kpiId: 'KPI-9',
+    issueKey: 'KPI-9',
+    name: 'Churn',
+    unit: '%',
+    direction: 'decrease',
+    parentKpiId: null,
+    ...over,
+  });
+
+  it('appends a root KPI with no readings or targets', () => {
+    const out = insertCreatedKpi(skeleton, created());
+    expect(out.roots.map((n) => n.kpiId)).toEqual(['KPI-1', 'KPI-9']);
+    expect(out.roots[1]).toMatchObject({ depth: 0, name: 'Churn', readings: [], targets: [], undated: [] });
+    expect(out.roots[1].resolving).toBeUndefined();
+  });
+
+  it('nests under its parent, one level deeper, after existing siblings', () => {
+    const out = insertCreatedKpi(skeleton, created({ parentKpiId: 'KPI-1' }));
+    expect(out.roots[0].children.map((n) => [n.kpiId, n.depth])).toEqual([
+      ['KPI-2', 1],
+      ['KPI-9', 1],
+    ]);
+    expect(skeleton.roots[0].children).toHaveLength(1);
+  });
+
+  it('falls back to the root when the parent is not in the tree', () => {
+    const out = insertCreatedKpi(skeleton, created({ parentKpiId: 'KPI-404' }));
+    expect(out.roots.map((n) => n.kpiId)).toEqual(['KPI-1', 'KPI-9']);
+  });
+
+  it('is a no-op once the tree already holds the KPI (a later load caught up)', () => {
+    expect(insertCreatedKpi(skeleton, created({ kpiId: 'KPI-2' }))).toBe(skeleton);
+  });
+});
+
+describe('applyAddedTarget', () => {
+  const merged = applyTargetContributions(skeleton, {
+    'KPI-1': [{ assignment: assignment({ timing: absolute('2026-09-30') }), source: source('APP-2', null) }],
+  });
+
+  it('adds a marker in date order, with status from the KPI readings', () => {
+    const out = applyAddedTarget(merged, {
+      assignment: assignment({ timing: absolute('2026-03-31'), target: 90 }),
+      source: source('APP-1', null),
+    });
+    expect(out.roots[0].targets.map((t) => [t.date, t.source.issue, t.status])).toEqual([
+      ['2026-03-31', 'APP-1', 'hit'],
+      ['2026-09-30', 'APP-2', 'upcoming'],
+    ]);
+  });
+
+  it("replaces the same issue's marker (one target per issue + KPI), so re-applying is idempotent", () => {
+    const added = { assignment: assignment({ timing: absolute('2026-12-31'), target: 200 }), source: source('APP-2', null) };
+    const once = applyAddedTarget(merged, added);
+    expect(once.roots[0].targets.map((t) => [t.date, t.value])).toEqual([['2026-12-31', 200]]);
+    expect(applyAddedTarget(once, added)).toEqual(once);
+  });
+
+  it('reaches nested KPIs and keeps a still-resolving row resolving', () => {
+    const out = applyAddedTarget(skeleton, {
+      assignment: assignment({ kpiId: 'KPI-2', timing: absolute('2026-09-30') }),
+      source: source('APP-5', null),
+    });
+    const kpi2 = out.roots[0].children[0];
+    expect(kpi2.targets.map((t) => t.source.issue)).toEqual(['APP-5']);
+    expect(kpi2.resolving).toBe(true);
+  });
+
+  it('ignores a target for a KPI that is not in the tree', () => {
+    const added = { assignment: assignment({ kpiId: 'KPI-404', timing: absolute('2026-09-30') }), source: source('X', null) };
+    expect(applyAddedTarget(merged, added)).toBe(merged);
   });
 });

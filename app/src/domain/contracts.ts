@@ -70,6 +70,12 @@ export interface PanelRowDto {
    * line, status pill, dates) are still loading — spec 07 progressive panel.
    */
   resolving?: boolean;
+  /**
+   * true when the target points at a KPI that's no longer in the catalog (the
+   * KPI issue was deleted or moved out of the KPI space). The row keeps the
+   * stored bet so it can be removed, but has no values, status or record action.
+   */
+  kpiMissing?: boolean;
 }
 
 export interface CatalogEntryDto {
@@ -117,6 +123,12 @@ export interface PanelBasis {
   parentKpiIds: string[];
   /** the KPI picker catalog, without `currentValue` (that needs readings) */
   catalog: CatalogEntryDto[];
+  /**
+   * Targeted KPI ids (own or parent's) that Jira confirmed no longer exist. A KPI
+   * merely missing from the catalog isn't enough — the search index lags new
+   * KPIs — so only these are shown as "KPI deleted".
+   */
+  deletedKpiIds?: string[];
 }
 
 /**
@@ -147,6 +159,22 @@ export interface KpiViewDto {
   node: TimelineNodeDto;
   /** ISO "today" for the axis marker + status classification */
   today: string;
+  /**
+   * The raw targets behind `node`'s markers, so the client can rebuild them
+   * (`buildKpiTargets`) after recording a value — a marker's status and a
+   * relative target's value depend on the readings.
+   */
+  contributions?: KpiTargetContribution[];
+}
+
+/**
+ * The issue panel's save/remove result: the same two pieces as the progressive
+ * load, so the client keeps assembling the panel itself (and can lay recorded
+ * values over it) instead of receiving a finished one.
+ */
+export interface PanelParts {
+  list: PanelListData;
+  values: PanelValuesData;
 }
 
 // ── Settings preview ────────────────────────────────────────────────────────
@@ -161,6 +189,12 @@ export interface TimelineTargetDto {
   status: TargetStatus;
   /** true = an estimate (baseline not yet baselined); rendered distinct (FR-23) */
   provisional: boolean;
+  /**
+   * true = a percent/relative change on a baseline, false = a fixed value. Not the
+   * same as `provisional`: a relative target stops being an estimate once its
+   * baseline is recorded, but it's still a relative target.
+   */
+  relative: boolean;
   source: { issue: string; type: string; title: string; iconUrl?: string | null };
 }
 
@@ -218,6 +252,8 @@ export interface KpiSpaceStatus {
   state: KpiSpaceState;
 }
 
+// `RecordValueInput` (the recordValue payload) is a Zod schema: see models/kpiReading.
+
 /** Input for creating a KPI (an issue in the KPI space). Nest by parentKpiId. */
 export interface CreateKpiInput {
   name: string;
@@ -226,6 +262,28 @@ export interface CreateKpiInput {
   /** parent KPI to nest under; null/omitted = a root KPI */
   parentKpiId?: string | null;
 }
+
+/**
+ * `createKpi` result: just the new KPI, not a rebuilt timeline. A new KPI has no
+ * readings or targets, so the client splices it into the tree it already has —
+ * no wait for Jira's search index to catch up and no full rebuild.
+ */
+export interface CreatedKpi {
+  id: string;
+  kpiId: string;
+  issueKey: string;
+  name: string;
+  unit: string;
+  direction: KpiDirection | null;
+  parentKpiId: string | null;
+}
+
+/**
+ * `addTarget` result: the saved target as a raw contribution (assignment + its
+ * source issue, icon already inlined). The client turns it into a marker with
+ * the KPI readings it already holds.
+ */
+export type AddedTarget = KpiTargetContribution;
 
 // ── Add target (issue picker) ────────────────────────────────────────────────
 /**

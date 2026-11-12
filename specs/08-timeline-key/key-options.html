@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>KPI Timeline — key / legend options (mock)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            surface: 'var(--ds-surface, #ffffff)',
+            'surface-sunken': 'var(--ds-surface-sunken, #f7f8f9)',
+            border: 'var(--ds-border, #091e4224)',
+            text: 'var(--ds-text, #172b4d)',
+            'text-subtle': 'var(--ds-text-subtle, #626f86)',
+            brand: 'var(--ds-background-brand-bold, #1868db)',
+            success: 'var(--ds-text-success, #216e4e)',
+            warning: 'var(--ds-text-warning, #a54800)',
+            danger: 'var(--ds-text-danger, #ae2e24)',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    :root {
+      --c-series: #22a06b;
+      --c-hit: #22a06b;
+      --c-missed: #c9372c;
+      --c-upcoming: #626f86;
+      --c-today-current: #ae2e24;
+      --c-today-proposed: #1868db;
+    }
+    html.neutral-series { --c-series: #44546f; }
+    html.dark {
+      --ds-surface: #22272b;
+      --ds-surface-sunken: #1d2125;
+      --ds-border: #a6c5e229;
+      --ds-text: #b6c2cf;
+      --ds-text-subtle: #9fadbc;
+      --ds-background-brand-bold: #579dff;
+      --ds-text-success: #7ee2b8;
+      --ds-text-warning: #fec195;
+      --ds-text-danger: #fd9891;
+      --c-series: #4bce97;
+      --c-hit: #4bce97;
+      --c-missed: #f87168;
+      --c-upcoming: #8c9bab;
+      --c-today-current: #f87168;
+      --c-today-proposed: #579dff;
+      color-scheme: dark;
+    }
+    html.dark.neutral-series { --c-series: #9fadbc; }
+    body { background: var(--ds-surface-sunken, #f7f8f9); }
+    [data-k] { transition: opacity 120ms ease; }
+    .dim { opacity: 0.08 !important; }
+    .mk-badge {
+      position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; border-radius: 9999px;
+      display: grid; place-items: center; font-size: 7px; line-height: 1; font-weight: 800; color: #fff;
+      box-shadow: 0 0 0 1.5px var(--ds-surface, #fff);
+    }
+    .chip-on { box-shadow: inset 0 0 0 1.5px var(--ds-background-brand-bold, #1868db); }
+  </style>
+</head>
+<body class="text-text">
+  <!-- Review chrome (not part of the product) -->
+  <div class="sticky top-0 z-40 border-b border-border bg-surface/95 backdrop-blur">
+    <div class="mx-auto max-w-[1500px] px-6 py-3">
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-wide text-warning">Mock · spec 08</div>
+          <div class="text-lg font-bold">KPI Timeline — key options</div>
+        </div>
+        <nav id="tabs" class="flex flex-wrap gap-1"></nav>
+      </div>
+      <div id="toggles" class="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-text-subtle"></div>
+    </div>
+  </div>
+
+  <main class="mx-auto max-w-[1500px] px-6 pb-24">
+    <section id="about" class="mt-4 rounded-lg border border-border bg-surface p-4 text-sm"></section>
+    <!-- The "product" area: mimics the Timeline surface (p-6 inside the Jira global page). -->
+    <section class="mt-4 rounded-lg border border-dashed border-border">
+      <div id="surface" class="relative p-6"></div>
+    </section>
+  </main>
+
+  <script>
+    // ---------------------------------------------------------------- data
+    const START = '2026-01-01';
+    const END = '2027-04-01';
+    const TODAY = '2026-11-11';
+    const PLOT_W = 1000;
+    const PAD_R = 16;
+    const ROW_H = 60;
+    const HEADER_H = 33;
+    const LABEL_W = 300;
+    const UNDATED_W = 140;
+    const QUARTERS = [
+      ['2026-01-01', 'Q1 2026'], ['2026-04-01', 'Q2 2026'], ['2026-07-01', 'Q3 2026'],
+      ['2026-10-01', 'Q4 2026'], ['2027-01-01', 'Q1 2027'],
+    ];
+
+    const KPIS = [
+      { id: 'arr', depth: 0, kids: true, name: 'Annual recurring revenue', unit: '$M', dir: 'up',
+        readings: [['2026-01-15', 2.1], ['2026-03-10', 2.3], ['2026-05-05', 2.6], ['2026-07-08', 2.8], ['2026-09-02', 3.0], ['2026-10-28', 3.2]],
+        targets: [
+          { d: '2026-06-30', v: 2.5, s: 'hit', t: 'epic', k: 'GRO-4', rel: true },
+          { d: '2026-09-30', v: 3.4, s: 'missed', t: 'epic', k: 'GRO-9' },
+          { d: '2027-02-10', v: 4.0, s: 'upcoming', t: 'epic', k: 'GRO-15', p: true },
+        ],
+        undated: [{ v: 4.5, p: true }] },
+      { id: 'new', depth: 1, name: 'New customers / month', unit: 'customers', dir: 'up',
+        readings: [['2026-02-01', 38], ['2026-04-01', 44], ['2026-06-01', 51], ['2026-08-01', 49], ['2026-10-01', 57]],
+        targets: [
+          { d: '2026-05-31', v: 45, s: 'hit', t: 'story', k: 'MKT-21' },
+          { d: '2026-12-31', v: 65, s: 'upcoming', t: 'story', k: 'MKT-30', p: true },
+          { d: '2027-02-28', v: 70, s: 'upcoming', t: 'task', k: 'MKT-33' },
+        ],
+        undated: [] },
+      { id: 'churn', depth: 1, kids: true, name: 'Logo churn', unit: '%', dir: 'down',
+        readings: [['2026-01-20', 4.8], ['2026-04-15', 4.5], ['2026-07-15', 4.6], ['2026-10-15', 4.4]],
+        targets: [
+          { d: '2026-08-31', v: 3.9, s: 'missed', t: 'story', k: 'CS-12', rel: true },
+          { d: '2027-01-31', v: 3.5, s: 'upcoming', t: 'epic', k: 'CS-2', p: true },
+        ],
+        undated: [{ v: 3.0 }] },
+      { id: 'tix', depth: 2, name: 'Support tickets / week', unit: 'tickets', dir: 'down',
+        readings: [],
+        targets: [{ d: '2027-02-15', v: 120, s: 'upcoming', t: 'task', k: 'CS-40', p: true }],
+        undated: [] },
+      { id: 'nps', depth: 0, name: 'Net promoter score', unit: 'NPS', dir: 'up',
+        readings: [['2026-03-01', 31], ['2026-06-01', 34], ['2026-09-01', 33]],
+        targets: [
+          { d: '2026-04-30', v: 33, s: 'hit', t: 'task', k: 'PRD-3' },
+          { d: '2026-12-15', v: 38, s: 'upcoming', t: 'story', k: 'PRD-7', p: true },
+        ],
+        undated: [{ v: 45, p: true }, { v: 50 }] },
+    ];
+
+    // Extra rows so the sticky variant has something to scroll past.
+    const MORE = [
+      { id: 'act', depth: 0, kids: true, name: 'Activation rate', unit: '%', dir: 'up',
+        readings: [['2026-02-10', 41], ['2026-05-10', 44], ['2026-08-10', 47], ['2026-11-01', 48]],
+        targets: [{ d: '2026-07-31', v: 46, s: 'hit', t: 'epic', k: 'ONB-1', rel: true }, { d: '2027-03-01', v: 55, s: 'upcoming', t: 'epic', k: 'ONB-6', p: true }],
+        undated: [] },
+      { id: 'ttv', depth: 1, name: 'Time to first value', unit: 'days', dir: 'down',
+        readings: [['2026-03-01', 14], ['2026-06-01', 12], ['2026-09-01', 11]],
+        targets: [{ d: '2026-09-30', v: 9, s: 'missed', t: 'story', k: 'ONB-11' }, { d: '2027-01-15', v: 7, s: 'upcoming', t: 'story', k: 'ONB-14', p: true }],
+        undated: [] },
+      { id: 'exp', depth: 0, name: 'Expansion revenue', unit: '$M', dir: 'up',
+        readings: [['2026-01-31', 0.4], ['2026-04-30', 0.5], ['2026-07-31', 0.55], ['2026-10-31', 0.7]],
+        targets: [{ d: '2026-12-31', v: 0.8, s: 'upcoming', t: 'epic', k: 'GRO-22', p: true }],
+        undated: [{ v: 1.2, p: true }] },
+      { id: 'up', depth: 0, name: 'Uptime', unit: '%', dir: 'up',
+        readings: [['2026-02-01', 99.82], ['2026-05-01', 99.91], ['2026-08-01', 99.95], ['2026-11-01', 99.93]],
+        targets: [{ d: '2026-06-30', v: 99.9, s: 'hit', t: 'task', k: 'OPS-2' }, { d: '2026-12-31', v: 99.95, s: 'upcoming', t: 'task', k: 'OPS-9' }],
+        undated: [] },
+    ];
+
+    const HINTS = [
+      'Click a past date to record a value',
+      'click a future date to add a target',
+      'click a value to edit it',
+      'click a target to open its issue',
+    ];
+
+    // ---------------------------------------------------------------- geometry
+    const days = (d) => (Date.parse(d) - Date.parse(START)) / 864e5;
+    const xOf = (d) => (days(d) / days(END)) * PLOT_W;
+    const fmt = (v) => (Math.abs(v) >= 100 ? String(Math.round(v * 100) / 100) : String(+v.toFixed(2)));
+
+    function projection(readings) {
+      if (readings.length < 2) return null;
+      const pts = readings.slice(-4).map(([d, v]) => [days(d), v]);
+      const n = pts.length;
+      const mx = pts.reduce((s, p) => s + p[0], 0) / n;
+      const my = pts.reduce((s, p) => s + p[1], 0) / n;
+      const num = pts.reduce((s, p) => s + (p[0] - mx) * (p[1] - my), 0);
+      const den = pts.reduce((s, p) => s + (p[0] - mx) ** 2, 0) || 1;
+      const slope = num / den;
+      const [ld, lv] = readings[readings.length - 1];
+      return { anchorDate: ld, anchorValue: lv, at: (d) => lv + slope * (days(d) - days(ld)) };
+    }
+
+    function yScale(row, proj) {
+      const vals = [...row.readings.map((r) => r[1]), ...row.targets.map((t) => t.v)];
+      if (proj) vals.push(proj.at(END));
+      let min = Math.min(...vals), max = Math.max(...vals);
+      if (!isFinite(min)) { min = 0; max = 1; }
+      if (min === max) { min -= 1; max += 1; }
+      const pad = estStyle() === 'errorbar' ? 15 : 10;
+      return (v) => pad + (1 - (v - min) / (max - min)) * (ROW_H - pad * 2);
+    }
+
+    // ---------------------------------------------------------------- icons
+    const ICON_PATHS = {
+      epic: '<path d="M9.6 1 3 9.2h4.3L6.2 15l6.8-8.3H8.7z"/>',
+      story: '<path d="M4.2 1.5h7.6c.6 0 1 .4 1 1V15L8 11.9 3.2 15V2.5c0-.6.4-1 1-1z"/>',
+      task: '<path fill-rule="evenodd" d="M3 1h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2zm3.2 10.3 6.1-6.1-1.1-1.1-5 5-2-2-1.1 1.1z"/>',
+    };
+    const icon = (type, size = 16) =>
+      `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">${ICON_PATHS[type]}</svg>`;
+    const TYPE_LABEL = { epic: 'Epic', story: 'Story', task: 'Task' };
+    const STATUS_LABEL = { hit: 'Hit', missed: 'Missed', upcoming: 'Upcoming' };
+
+    // ---------------------------------------------------------------- state
+    const state = {
+      variant: 'F',
+      today: 'proposed',
+      series: 'neutral',
+      badges: true,
+      theme: 'light',
+      popOpen: true,
+      keyCollapsed: false,
+      pinned: null,
+      est: 'errorbar',
+      word: 'Provisional',
+    };
+
+    const estStyle = () => (state.variant === 'current' ? 'faded' : state.est);
+    const estWord = () => (state.variant === 'current' ? 'Provisional' : state.word);
+    // Which "certainty" entry the key shows: the estimate style, the locked style (inverted), or nothing.
+    const certaintyKeys = () =>
+      ({ none: [], firm: ['locked'], type: ['fixed', 'relative'] })[estStyle()] ?? ['provisional'];
+
+    const targetKinds = () =>
+      estStyle() === 'errorbar'
+        ? ['hit', 'missed', 'upcoming-fixed', 'upcoming-rel']
+        : ['hit', 'missed', 'upcoming', ...certaintyKeys()];
+
+    /** A target icon decorated per the chosen estimate style. `p` = estimate (not locked). */
+    function targetGlyph(type, status, p, size = 16, rel = p) {
+      const core = `${icon(type, size)}${badge(status)}`;
+      // Ring styles shrink the icon so the circle stays compact (18px vs 24px).
+      const ringed = (dashed) => {
+        const inner = Math.round(size * 0.75);
+        return `<span class="relative grid place-items-center rounded-full" style="width:${inner + 6}px;height:${inner + 6}px;border:${dashed ? '1px dashed' : '1.5px solid'} currentColor">${icon(type, inner)}${badge(status)}</span>`;
+      };
+      switch (estStyle()) {
+        case 'faded':
+          return `<span class="relative grid" style="opacity:${p ? 0.5 : 1}">${core}</span>`;
+        case 'halo':
+          return p ? ringed(true) : `<span class="relative grid">${core}</span>`;
+        case 'errorbar': {
+          if (!p) return `<span class="relative grid">${core}</span>`;
+          const inner = Math.round(size * 0.85);
+          const h = inner + 12;
+          const bar = `<svg class="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" width="8" height="${h}" aria-hidden="true" style="stroke:currentColor" stroke-width="1.25" stroke-linecap="round">
+              <line x1="4" y1="1" x2="4" y2="${h - 1}"/><line x1="1" y1="1" x2="7" y2="1"/><line x1="1" y1="${h - 1}" x2="7" y2="${h - 1}"/></svg>`;
+          return `<span class="relative grid place-items-center" style="width:${inner}px;height:${h}px">${bar}<span class="relative grid rounded-sm" style="background:var(--ds-surface,#fff)">${icon(type, inner)}${badge(status)}</span></span>`;
+        }
+        case 'tag':
+          return `<span class="relative grid">${core}${p ? '<span class="pointer-events-none absolute -right-[9px] -top-[7px] text-[11px] font-bold leading-none">≈</span>' : ''}</span>`;
+        case 'firm':
+          return !p ? ringed(false) : `<span class="relative grid">${core}</span>`;
+        case 'type':
+          return ringed(rel);
+        default:
+          return `<span class="relative grid">${core}</span>`;
+      }
+    }
+
+    const todayIsProposed = () => state.variant !== 'current' && state.today === 'proposed';
+
+    // ---------------------------------------------------------------- swatches (key samples)
+    function sw(kind) {
+      const surface = 'var(--ds-surface,#fff)';
+      switch (kind) {
+        case 'recorded':
+          return `<svg width="24" height="12" aria-hidden="true"><line x1="1" y1="6" x2="23" y2="6" style="stroke:var(--c-series)" stroke-width="1.5"/><circle cx="12" cy="6" r="3.6" style="fill:var(--c-series);stroke:${surface}" stroke-width="1.5"/></svg>`;
+        case 'projection':
+          return `<svg width="24" height="12" aria-hidden="true"><line x1="1" y1="6" x2="23" y2="6" style="stroke:var(--c-series)" stroke-width="1.5" stroke-dasharray="5 4" opacity=".7"/></svg>`;
+        case 'hit':
+        case 'missed':
+        case 'upcoming':
+          return `<span class="relative inline-grid" style="color:var(--c-${kind})">${icon('story', 14)}${badge(kind)}</span>`;
+        case 'provisional':
+          return `<span class="inline-grid px-1" style="color:var(--c-upcoming)">${targetGlyph('story', 'upcoming', true, 14)}</span>`;
+        case 'upcoming-fixed':
+          return `<span class="inline-grid px-1" style="color:var(--c-upcoming)">${targetGlyph('story', 'upcoming', false, 14)}</span>`;
+        case 'upcoming-rel':
+          return `<span class="inline-grid px-1" style="color:var(--c-upcoming)">${targetGlyph('story', 'upcoming', true, 14)}</span>`;
+        case 'fixed':
+          return `<span class="inline-grid px-1" style="color:var(--c-upcoming)">${targetGlyph('story', 'upcoming', false, 14, false)}</span>`;
+        case 'relative':
+          return `<span class="inline-grid px-1" style="color:var(--c-upcoming)">${targetGlyph('story', 'upcoming', false, 14, true)}</span>`;
+        case 'locked':
+          return `<span class="inline-grid px-1" style="color:var(--c-upcoming)">${targetGlyph('story', 'upcoming', false, 14)}</span>`;
+        case 'types':
+          return `<span class="inline-flex items-center gap-1 text-text-subtle">${icon('epic', 13)}${icon('story', 13)}${icon('task', 13)}</span>`;
+        case 'undated':
+          return `<span class="inline-block h-3.5 w-6 rounded border border-text-subtle/40 bg-surface-sunken"></span>`;
+      }
+      return '';
+    }
+
+    function badge(status) {
+      if (!state.badges || state.variant === 'current') return '';
+      if (status === 'hit') return `<span class="mk-badge" style="background:var(--c-hit)">✓</span>`;
+      if (status === 'missed') return `<span class="mk-badge" style="background:var(--c-missed)">✕</span>`;
+      return '';
+    }
+
+    const KEY = {
+      recorded: ['Recorded value', 'A value someone recorded on that date. Click to edit or delete.'],
+      projection: ['Projected trend', 'Where the recent trend is heading (needs 2+ values).'],
+      types: ['Marker = issue type', 'Each target shows the icon of the Jira issue that set it.'],
+      hit: ['Hit', 'The value reached the target by its date.'],
+      missed: ['Missed', 'The date passed without reaching the target.'],
+      upcoming: ['Upcoming', 'The target date is still ahead.'],
+      get provisional() {
+        return [estWord(), 'A ± target whose starting value hasn’t been recorded yet, so the number (≈) may still change.'];
+      },
+      'upcoming-fixed': ['Upcoming (fixed)', 'A set number, e.g. “reach 4.0”. The date is still ahead.'],
+      'upcoming-rel': ['Upcoming (relative)', 'A ± change, e.g. “+10%”, from the KPI’s value at the due date. The bar means the ≈ number can still move until that value is recorded.'],
+      fixed: ['Fixed', 'A set number, e.g. “reach 4.0”.'],
+      relative: ['Relative', 'A ± change from the KPI’s value at the due date, e.g. “+10%”. Shown as ≈ until that value is recorded.'],
+      locked: ['Locked', 'The number is final — its starting value has been recorded. Unringed targets are still estimates (≈).'],
+      undated: ['Undated target', 'No date yet — listed in the Undated column.'],
+    };
+
+    function keyGroups() {
+      // The today line is self-explanatory, so it gets no key entry.
+      return [
+        ['Values', ['recorded', 'projection']],
+        ['Targets', [...targetKinds(), 'undated']],
+      ];
+    }
+
+    // ---------------------------------------------------------------- timeline renderer
+    function renderTimeline({ rows = KPIS, scrollH = null, header = '', footer = '', annotate = false, kpiHeaderExtra = '' } = {}) {
+      const proposed = todayIsProposed();
+      const todayX = xOf(TODAY);
+      const hasUndated = rows.some((r) => r.undated.length);
+
+      const labelCol = rows.map((r) => `
+        <div class="flex flex-col justify-center gap-0.5 border-b border-r border-border bg-surface pr-3" style="height:${ROW_H}px;padding-left:${12 + r.depth * 20}px">
+          <div class="flex min-w-0 items-center gap-1">
+            <span class="w-3 flex-none text-[10px] text-text-subtle">${r.kids ? '▾' : ''}</span>
+            <a href="#" onclick="return false" class="truncate text-sm font-medium text-brand hover:underline">${r.name}</a>
+          </div>
+          <div class="pl-4 text-[11px] text-text-subtle">${r.unit} · ${r.dir === 'up' ? '↑ higher is better' : '↓ lower is better'}</div>
+        </div>`).join('');
+
+      const quarterHeader = QUARTERS.map(([d, l]) =>
+        `<div class="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="left:${xOf(d)}px">${l}</div>`).join('');
+
+      const tracks = rows.map((r, idx) => {
+        const proj = projection(r.readings);
+        const yOf = yScale(r, proj);
+        const grid = QUARTERS.map(([d]) => `<div class="absolute top-0 bottom-0 w-px bg-border" style="left:${xOf(d)}px"></div>`).join('');
+        const todayLine = proposed
+          ? `<div data-k="today" class="absolute top-0 bottom-0 w-0 border-l-2" style="left:${todayX - 1}px;border-color:var(--c-today-proposed);opacity:.55"></div>`
+          : `<div data-k="today" class="absolute top-0 bottom-0 w-0 border-l border-dashed" style="left:${todayX}px;border-color:var(--c-today-current);opacity:.8"></div>`;
+
+        let svg = '';
+        if (r.readings.length) {
+          const pts = r.readings.map(([d, v]) => `${xOf(d)},${yOf(v)}`).join(' ');
+          const dots = r.readings.map(([d, v]) =>
+            `<circle cx="${xOf(d)}" cy="${yOf(v)}" r="4" style="fill:var(--c-series);stroke:var(--ds-surface,#fff)" stroke-width="2"><title>${fmt(v)} ${r.unit} · recorded ${d}</title></circle>`).join('');
+          const projLine = proj
+            ? `<line data-k="projection" x1="${xOf(proj.anchorDate)}" y1="${yOf(proj.anchorValue)}" x2="${PLOT_W}" y2="${yOf(proj.at(END))}" style="stroke:var(--c-series)" stroke-width="1.5" stroke-dasharray="5 4" opacity=".7"/>`
+            : '';
+          svg = `<svg class="absolute left-0 top-0" width="${PLOT_W + PAD_R}" height="${ROW_H}">${projLine}<g data-k="recorded"><polyline points="${pts}" fill="none" style="stroke:var(--c-series)" stroke-width="1.5"/>${dots}</g></svg>`;
+        }
+        const empty = r.readings.length ? '' :
+          `<span class="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">No values yet — click a past date to add</span>`;
+
+        const markers = r.targets.map((t) => {
+          const x = xOf(t.d), y = yOf(t.v);
+          const rel = !!(t.p || t.rel);
+          const k = `target type-${t.t} ${t.s} ${t.s}-${rel ? 'rel' : 'fixed'}${t.p ? ' provisional' : ' locked'}${rel ? ' relative' : ' fixed'}`;
+          const tip = `Target ${t.p ? '≈ ' : ''}${fmt(t.v)} ${r.unit} · ${STATUS_LABEL[t.s]}${t.p ? ` (${estWord().toLowerCase()})` : ''} · due ${t.d} · ${TYPE_LABEL[t.t]} ${t.k}`;
+          const mark = `<span data-k="${k}" title="${tip}" class="absolute z-20 grid h-5 w-5 -translate-x-1/2 -translate-y-1/2 cursor-pointer place-items-center" style="left:${x}px;top:${y}px;color:var(--c-${t.s})">${targetGlyph(t.t, t.s, t.p, 16, rel)}</span>`;
+          if (!annotate) return mark;
+          const glyph = t.p ? '≈ ' : t.s === 'hit' ? '✓ ' : t.s === 'missed' ? '✕ ' : '';
+          const lbl = `<span data-k="${k}" class="pointer-events-none absolute z-10 -translate-y-1/2 whitespace-nowrap text-[10px] font-semibold tabular-nums" style="left:${x + 11}px;top:${y}px;color:var(--c-${t.s})">${glyph}${fmt(t.v)}</span>`;
+          return mark + lbl;
+        }).join('');
+
+        let notes = '';
+        if (annotate && idx === 0 && r.readings.length) {
+          const [ld, lv] = r.readings[r.readings.length - 2];
+          notes += `<span class="pointer-events-none absolute -translate-x-1/2 whitespace-nowrap rounded bg-surface/80 px-1 text-[10px] italic text-text-subtle" style="left:${xOf(ld)}px;top:${Math.max(0, yOf(lv) - 20)}px">recorded values</span>`;
+          if (proj) {
+            const mid = '2027-01-20';
+            notes += `<span class="pointer-events-none absolute -translate-x-1/2 whitespace-nowrap rounded bg-surface/80 px-1 text-[10px] italic text-text-subtle" style="left:${xOf(mid)}px;top:${Math.min(ROW_H - 14, yOf(proj.at(mid)) + 8)}px">projected trend</span>`;
+          }
+        }
+
+        return `<div class="relative border-b border-border" style="width:${PLOT_W + PAD_R}px;height:${ROW_H}px">${grid}${todayLine}${empty}${svg}${markers}${notes}</div>`;
+      }).join('');
+
+      const undatedCol = !hasUndated ? '' : `
+        <div class="flex-none border-l border-border" style="width:${UNDATED_W}px">
+          <div class="flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="height:${HEADER_H}px">Undated</div>
+          ${rows.map((r) => `
+            <div class="flex flex-wrap content-center items-center gap-1 border-b border-border px-2" style="height:${ROW_H}px">
+              ${r.undated.map((u) => `<button data-k="undated${u.p ? ' provisional' : ''}" title="Projected ${u.p ? '≈ ' : ''}${fmt(u.v)} ${r.unit} · date TBD" class="rounded border border-border bg-surface-sunken px-1.5 py-0.5 text-xs font-semibold text-text hover:bg-border">${u.p ? '≈ ' : ''}${fmt(u.v)}</button>`).join('')}
+            </div>`).join('')}
+        </div>`;
+
+      const body = `
+        <div class="flex">
+          <div class="flex-none" style="width:${LABEL_W}px">
+            <div class="flex items-center justify-between border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle" style="height:${HEADER_H}px">
+              <span>KPI</span>${kpiHeaderExtra}
+            </div>
+            ${labelCol}
+          </div>
+          <div class="min-w-0 flex-1 overflow-x-auto" data-scroll>
+            <div style="width:${PLOT_W + PAD_R}px">
+              <div class="relative overflow-hidden border-b border-border bg-surface-sunken" style="height:${HEADER_H}px">${quarterHeader}</div>
+              ${tracks}
+            </div>
+          </div>
+          ${undatedCol}
+        </div>`;
+
+      return `
+        <div data-chart class="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
+          ${header}
+          ${scrollH ? `<div class="overflow-y-auto" style="max-height:${scrollH}px">${body}</div>` : body}
+          ${footer}
+        </div>`;
+    }
+
+    // ---------------------------------------------------------------- shared bits
+    const projectFilter = `<button class="flex h-8 items-center gap-2 rounded border border-border bg-surface px-2.5 text-sm text-text hover:bg-surface-sunken">Project: All <span class="text-text-subtle">▾</span></button>`;
+    const addKpi = `<button class="flex h-8 items-center gap-1 rounded bg-brand px-3 text-sm font-semibold text-white hover:opacity-90"><span class="text-base leading-none">+</span> Add KPI</button>`;
+    const toolbar = (left = '', extraRight = '') => `
+      <div class="flex items-start justify-end gap-4">
+        ${left ? `<div class="mr-auto mt-1 min-w-0">${left}</div>` : ''}
+        <div class="relative mt-1 flex min-h-[40px] flex-none items-center gap-2">${extraRight}${projectFilter}${addKpi}</div>
+      </div>`;
+
+    const item = (kind, opts = {}) => `
+      <span class="inline-flex items-center gap-1.5" ${opts.k ? `data-key="${opts.k}"` : ''}>
+        <span class="inline-grid min-w-[1.5rem] place-items-center">${sw(kind)}</span>
+        <span class="text-text">${KEY[kind][0]}</span>
+      </span>`;
+
+    const hintLine = (prefix = 'Tip:') =>
+      `<p class="mt-2 text-xs text-text-subtle"><span class="font-semibold">${prefix}</span> ${HINTS.join(' · ')}.</p>`;
+
+    function countTargets(rows) {
+      const all = rows.flatMap((r) => r.targets);
+      const undated = rows.flatMap((r) => r.undated);
+      return {
+        hit: all.filter((t) => t.s === 'hit').length,
+        missed: all.filter((t) => t.s === 'missed').length,
+        upcoming: all.filter((t) => t.s === 'upcoming').length,
+        provisional: all.filter((t) => t.p).length + undated.filter((u) => u.p).length,
+        locked: all.filter((t) => !t.p).length,
+        relative: all.filter((t) => t.p || t.rel).length,
+        fixed: all.filter((t) => !(t.p || t.rel)).length,
+        undated: undated.length,
+        'upcoming-fixed': all.filter((t) => t.s === 'upcoming' && !(t.p || t.rel)).length,
+        'upcoming-rel': all.filter((t) => t.s === 'upcoming' && (t.p || t.rel)).length,
+      };
+    }
+
+    // ---------------------------------------------------------------- variants
+    const VARIANTS = {
+      current: {
+        tab: 'Current',
+        title: 'Current — one sentence under the chart',
+        summary: 'What ships today: a single sentence of prose below the whole tree.',
+        pros: ['Already built.'],
+        cons: [
+          'No samples: you have to match “green = hit” to a mark on the chart yourself.',
+          'Leaves out the recorded line, the projected trend, provisional (≈) targets, and the Undated column.',
+          'Red means both “today” and “missed”; green means both “recorded value” and “hit”.',
+          'Mixes the key with click instructions, and sits below the fold on large trees.',
+        ],
+        render: () => toolbar() + renderTimeline() + `
+          <p class="mt-3 text-xs text-text-subtle">
+            Target markers show the source issue's icon · the red line is today · green = hit, red =
+            missed, gray = upcoming · click a recorded value to edit or delete it.
+          </p>`,
+      },
+
+      A: {
+        tab: 'A · Swatch strip',
+        title: 'A — Grouped swatch strip under the chart',
+        summary: 'Replace the sentence with a real key: small samples drawn with the same marks as the chart, grouped into Values and Targets. Click tips move to their own “Tip” line. The same component would replace the KPI View legend too.',
+        pros: ['Smallest change; always visible; easy to share with KPI View.', 'Covers every mark the chart draws.'],
+        cons: ['Still below the chart, so it is off-screen on large trees.'],
+        render: () => {
+          const groups = keyGroups().map(([label, kinds]) => `
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-text-subtle">${label}</span>
+              ${kinds.map((k) => item(k)).join('')}
+            </div>`).join('<span class="hidden h-5 w-px bg-border lg:block"></span>');
+          return toolbar() + renderTimeline() + `
+            <div class="mt-3 flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-border bg-surface px-4 py-2.5 text-xs">
+              ${groups}
+              <span class="ml-auto inline-flex items-center gap-1.5 text-text-subtle">${sw('types')} marker shape = source issue type</span>
+            </div>
+            ${hintLine()}`;
+        },
+      },
+
+      B: {
+        tab: 'B · Key popover',
+        title: 'B — “Key” button in the toolbar opens a popover',
+        summary: 'A small “Key” button sits next to the project filter. Its popover explains each mark in a sentence and has a separate “How to use” section. The popover is open in this mock; click the button to toggle it.',
+        pros: ['Always reachable at the top, however long the tree.', 'Room for real explanations and how-to text without taking chart space.'],
+        cons: ['Hidden by default; first-time users may not open it.', 'One extra click to check a color.'],
+        render: () => {
+          const btn = `<button data-act="pop" aria-expanded="${state.popOpen}" class="flex h-8 items-center gap-1.5 rounded border border-border bg-surface px-2.5 text-sm text-text hover:bg-surface-sunken ${state.popOpen ? 'chip-on' : ''}">
+              <span class="inline-flex" style="color:var(--c-hit)">${icon('story', 13)}</span> Key <span class="text-text-subtle">▾</span></button>`;
+          const pop = !state.popOpen ? '' : `
+            <div class="absolute right-0 top-10 z-30 w-[340px] rounded-lg border border-border bg-surface p-4 text-xs shadow-xl">
+              <div class="mb-2 flex items-center justify-between">
+                <span class="text-sm font-semibold text-text">Reading the timeline</span>
+                <button data-act="pop" class="rounded px-1 text-text-subtle hover:bg-surface-sunken" aria-label="Close">✕</button>
+              </div>
+              ${keyGroups().map(([label, kinds]) => `
+                <div class="mt-3 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">${label}${label === 'Targets' ? ` <span class="normal-case tracking-normal font-normal">· icon = source issue type ${sw('types')}</span>` : ''}</div>
+                <ul class="mt-1.5 space-y-1.5">
+                  ${kinds.map((k) => `<li class="flex items-start gap-2"><span class="mt-0.5 inline-grid min-w-[1.5rem] flex-none place-items-center">${sw(k)}</span><span><span class="font-semibold text-text">${KEY[k][0]}</span> <span class="text-text-subtle">— ${KEY[k][1]}</span></span></li>`).join('')}
+                </ul>`).join('')}
+              <div class="mt-4 border-t border-border pt-3 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">How to use</div>
+              <ul class="mt-1.5 list-disc space-y-0.5 pl-4 text-text-subtle">
+                <li>Click a <b class="text-text">past</b> date in a row to record a value.</li>
+                <li>Click a <b class="text-text">future</b> date to add a target.</li>
+                <li>Click a recorded value to edit or delete it.</li>
+                <li>Click a target to open its Jira issue.</li>
+              </ul>
+            </div>`;
+          return toolbar('', `<span class="relative">${btn}${pop}</span>`) + renderTimeline();
+        },
+      },
+
+      C: {
+        tab: 'C · Sticky key bar',
+        title: 'C — Compact key bar pinned to the bottom of the chart',
+        summary: 'A one-line key stays pinned under the visible rows, so it is always next to the marks, however long the tree. It can be collapsed. The chart scrolls in this mock to show the effect.',
+        pros: ['Always in view next to the chart.', 'Collapsible for experienced users (remember the choice per user).'],
+        cons: ['Takes a permanent ~32px of height.', 'Sticky positioning inside the Jira iframe needs a real-device check.'],
+        render: () => {
+          const bar = state.keyCollapsed
+            ? `<div class="flex items-center justify-end border-t border-border bg-surface-sunken px-3 py-1.5 text-xs">
+                 <button data-act="collapse" class="rounded px-1.5 py-0.5 text-text-subtle hover:bg-border">Show key ▴</button>
+               </div>`
+            : `<div class="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border bg-surface-sunken px-3 py-1.5 text-[11px]">
+                 ${keyGroups().flatMap(([, kinds]) => kinds).map((k) => item(k)).join('')}
+                 <span class="inline-flex items-center gap-1.5 text-text-subtle">${sw('types')} = issue type</span>
+                 <button data-act="collapse" class="ml-auto rounded px-1.5 py-0.5 text-text-subtle hover:bg-border">Hide key ▾</button>
+               </div>`;
+          return toolbar() + renderTimeline({ rows: [...KPIS, ...MORE], scrollH: 330, footer: bar }) + hintLine();
+        },
+      },
+
+      D: {
+        tab: 'D · Interactive summary',
+        title: 'D — Interactive key that also summarizes status',
+        summary: 'The key moves to the toolbar as chips with counts (“2 missed”). Hover a chip to highlight those marks across the tree; click to pin the highlight. The key teaches by pointing and doubles as a quick status summary.',
+        pros: ['Shows how many targets were missed or are upcoming at a glance.', 'Hovering connects each key entry to the marks on the chart.'],
+        cons: ['Most build work.', 'Needs a decision on highlight vs. filter, and how it combines with the project filter.'],
+        render: () => {
+          const count = countTargets(KPIS);
+          const chip = (kind, n) => `
+            <button data-chip="${kind}" class="inline-flex h-7 items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 text-xs hover:bg-surface-sunken ${state.pinned === kind ? 'chip-on' : ''}">
+              <span class="inline-grid min-w-[1.25rem] place-items-center">${sw(kind)}</span>
+              ${n != null ? `<span class="font-semibold tabular-nums text-text">${n}</span>` : ''}
+              <span class="text-text-subtle">${KEY[kind][0].toLowerCase()}</span>
+            </button>`;
+          const left = `
+            <div class="flex flex-wrap items-center gap-1.5">
+              ${chip('recorded')}${chip('projection')}
+              <span class="mx-1 h-5 w-px bg-border"></span>
+              ${targetKinds().map((k) => chip(k, count[k])).join('')}${chip('undated', count.undated)}
+            </div>
+            <div class="mt-1 text-[11px] text-text-subtle">Hover a chip to highlight those marks · click to pin · target icons show the source issue type ${sw('types')}</div>`;
+          return toolbar(left) + renderTimeline() + hintLine();
+        },
+      },
+
+      F: {
+        tab: 'F · Key bar on top',
+        title: 'F — Compact key bar on top of the table, interactive (C’s look + D’s behavior)',
+        summary: 'A one-line key bar is attached to the top of the table, just above the quarter header, and stays put while the rows scroll. Target entries show counts. Hover an entry to highlight those marks; click to pin the highlight (click again to clear). It is always shown (no hide). The chart scrolls in this mock to show the effect.',
+        pros: [
+          'Seen first, before reading the chart, and always next to it.',
+          'Doubles as a status summary (“2 missed”) and a way to find marks.',
+          'Same height as a header row; feels like part of the table, not extra chrome.',
+          'Issue-type entries are built from the targets shown (icon + name + count) and highlight like the rest.',
+        ],
+        cons: [
+          'Decided: entries highlight (dim everything else), never filter; counts follow the project filter.',
+          'Sticky inside the Jira iframe needs a real-device check.',
+        ],
+        render: () => {
+          const rows = [...KPIS, ...MORE];
+          const count = countTargets(rows);
+          const entry = (kind, n) => `
+            <button data-chip="${kind}" class="inline-flex h-6 items-center gap-1.5 rounded px-1.5 hover:bg-border ${state.pinned === kind ? 'chip-on bg-surface' : ''}">
+              <span class="inline-grid min-w-[1.25rem] place-items-center">${sw(kind)}</span>
+              ${n != null ? `<span class="font-semibold tabular-nums text-text">${n}</span>` : ''}
+              <span class="${n != null ? 'text-text-subtle' : 'text-text'}">${KEY[kind][0]}</span>
+            </button>`;
+          const sep = '<span class="mx-1 h-4 w-px bg-border"></span>';
+          // Issue types are discovered from the visible targets, not hard-coded.
+          const typeCounts = {};
+          rows.flatMap((r) => r.targets).forEach((t) => { typeCounts[t.t] = (typeCounts[t.t] ?? 0) + 1; });
+          const typeEntries = Object.entries(typeCounts)
+            .sort((a, b) => b[1] - a[1])
+            .map(([type, n]) => `
+              <button data-chip="type-${type}" class="inline-flex h-6 items-center gap-1.5 rounded px-1.5 hover:bg-border ${state.pinned === 'type-' + type ? 'chip-on bg-surface' : ''}">
+                <span class="inline-grid text-text-subtle">${icon(type, 13)}</span>
+                <span class="font-semibold tabular-nums text-text">${n}</span>
+                <span class="text-text-subtle">${TYPE_LABEL[type]}</span>
+              </button>`).join('');
+          const bar = `<div class="flex flex-wrap items-center gap-x-1 gap-y-1 border-b border-border bg-surface-sunken px-2 py-1 text-[11px]">
+                 ${entry('recorded')}${entry('projection')}
+                 ${sep}
+                 ${targetKinds().map((k) => entry(k, count[k])).join('')}${entry('undated', count.undated)}
+                 ${sep}
+                 ${typeEntries}
+                 <span class="ml-auto inline-flex items-center gap-2">
+                   ${state.pinned ? '<button data-chip-clear class="rounded px-1.5 py-0.5 text-brand hover:bg-border">Clear highlight</button>' : ''}
+                 </span>
+               </div>`;
+          return toolbar() + renderTimeline({ rows, scrollH: 330, header: bar }) + hintLine();
+        },
+      },
+
+      E: {
+        tab: 'E · Direct labels',
+        title: 'E — Label the chart directly (almost no key)',
+        summary: 'Put the meaning on the marks instead of in a key. Each target shows its value with a ✓ / ✕ / ≈ glyph in its status color. The first row has light “recorded values / projected trend” notes. A ⓘ in the KPI header covers the rest.',
+        pros: ['No looking things up; status does not rely on color alone (better for color-blind users).', 'Values are readable without hovering.'],
+        cons: ['Busier rows; labels can overlap on dense rows or zoomed-out ranges.', 'Collision handling would be needed.'],
+        render: () => {
+          const info = `
+            <span class="group relative normal-case tracking-normal">
+              <span class="cursor-help rounded-full border border-border px-1.5 text-[11px] font-semibold text-text-subtle">ⓘ Key</span>
+              <span class="pointer-events-none absolute left-0 top-6 z-30 hidden w-[300px] rounded-lg border border-border bg-surface p-3 text-xs font-normal text-text shadow-xl group-hover:block">
+                ${keyGroups().map(([label, kinds]) => `
+                  <div class="mt-1 text-[10px] font-semibold uppercase tracking-wide text-text-subtle">${label}</div>
+                  <div class="mt-1 grid grid-cols-2 gap-1">${kinds.map((k) => item(k)).join('')}</div>`).join('')}
+                <div class="mt-2 text-text-subtle">Target icons show the source issue type ${sw('types')}</div>
+              </span>
+            </span>`;
+          return toolbar() + renderTimeline({ annotate: true, kpiHeaderExtra: info }) + hintLine();
+        },
+      },
+    };
+
+    // ---------------------------------------------------------------- page chrome
+    function renderTabs() {
+      document.getElementById('tabs').innerHTML = ['current', 'A', 'B', 'C', 'D', 'E', 'F'].map((id) => [id, VARIANTS[id]]).map(([id, v]) => `
+        <button data-tab="${id}" class="rounded-md px-3 py-1.5 text-sm font-medium ${state.variant === id ? 'bg-brand text-white' : 'text-text hover:bg-surface-sunken'}">${v.tab}</button>`).join('');
+    }
+
+    function seg(name, label, options) {
+      return `<span class="inline-flex items-center gap-1.5"><span class="font-semibold">${label}</span>
+        <span class="inline-flex overflow-hidden rounded border border-border">
+          ${options.map(([val, txt]) => `<button data-set="${name}" data-val="${val}" class="px-2 py-0.5 ${String(state[name]) === String(val) ? 'bg-brand text-white' : 'bg-surface text-text hover:bg-surface-sunken'}">${txt}</button>`).join('')}
+        </span></span>`;
+    }
+
+    function renderToggles() {
+      const disabled = state.variant === 'current';
+      document.getElementById('toggles').innerHTML = `
+        <span class="${disabled ? 'opacity-40 pointer-events-none' : ''} inline-flex flex-wrap items-center gap-x-5 gap-y-1">
+          ${seg('today', 'Today line', [['current', 'Red dashed (now)'], ['proposed', 'Blue solid']])}
+          ${seg('series', 'Recorded line', [['green', 'Green (now)'], ['neutral', 'Neutral']])}
+          ${seg('badges', '✓/✕ badges on markers', [[false, 'Off'], [true, 'On']])}
+          ${seg('est', 'Target marker', [['faded', 'Faded (now)'], ['none', 'No difference'], ['type', 'Fixed ○ / Relative ◌'], ['halo', 'Dashed ring'], ['tag', '≈ tag'], ['errorbar', 'Error bar'], ['firm', 'Ring locked ones instead']])}
+          ${state.est === 'type' || state.est === 'errorbar' ? '' : seg('word', 'Word', [['Provisional', 'Provisional (now)'], ['Estimate', 'Estimate'], ['Tentative', 'Tentative'], ['Not locked', 'Not locked']])}
+        </span>
+        ${seg('theme', 'Theme', [['light', 'Light'], ['dark', 'Dark']])}
+        ${disabled ? '<span class="italic">Cross-cutting toggles apply to options A–E.</span>' : ''}`;
+    }
+
+    function renderAbout() {
+      const v = VARIANTS[state.variant];
+      document.getElementById('about').innerHTML = `
+        <div class="font-semibold text-text">${v.title}</div>
+        <p class="mt-1 text-text-subtle">${v.summary}</p>
+        <div class="mt-2 grid gap-3 md:grid-cols-2">
+          <div><div class="text-xs font-semibold uppercase tracking-wide text-success">Pros</div><ul class="mt-1 list-disc pl-5 text-text-subtle">${v.pros.map((p) => `<li>${p}</li>`).join('')}</ul></div>
+          <div><div class="text-xs font-semibold uppercase tracking-wide text-danger">Cons</div><ul class="mt-1 list-disc pl-5 text-text-subtle">${v.cons.map((p) => `<li>${p}</li>`).join('')}</ul></div>
+        </div>`;
+    }
+
+    function applyHighlight(kind) {
+      const chart = document.querySelector('[data-chart]');
+      if (!chart) return;
+      chart.querySelectorAll('[data-k]').forEach((el) => {
+        const ks = el.getAttribute('data-k').split(' ');
+        el.classList.toggle('dim', !!kind && !ks.includes(kind));
+      });
+    }
+
+    function render() {
+      document.documentElement.classList.toggle('dark', state.theme === 'dark');
+      document.documentElement.classList.toggle('neutral-series', state.series === 'neutral' && state.variant !== 'current');
+      renderTabs();
+      renderToggles();
+      renderAbout();
+      const surface = document.getElementById('surface');
+      const scroller = surface.querySelector('[data-scroll]');
+      const scrollLeft = scroller ? scroller.scrollLeft : null;
+      surface.innerHTML = VARIANTS[state.variant].render();
+      const sc = surface.querySelector('[data-scroll]');
+      if (sc && scrollLeft != null) sc.scrollLeft = scrollLeft;
+      // Tailwind's CDN styles land after first paint, so defer the initial "scroll to today".
+      else if (sc) setTimeout(() => { sc.scrollLeft = Math.max(0, xOf(TODAY) - sc.clientWidth * 0.6); }, 150);
+      applyHighlight(state.pinned);
+    }
+
+    // ---------------------------------------------------------------- events
+    document.addEventListener('click', (e) => {
+      const tab = e.target.closest('[data-tab]');
+      if (tab) { state.variant = tab.dataset.tab; state.pinned = null; render(); return; }
+      const set = e.target.closest('[data-set]');
+      if (set) {
+        const raw = set.dataset.val;
+        state[set.dataset.set] = raw === 'true' ? true : raw === 'false' ? false : raw;
+        render();
+        return;
+      }
+      const act = e.target.closest('[data-act]');
+      if (act?.dataset.act === 'pop') { state.popOpen = !state.popOpen; render(); return; }
+      if (act?.dataset.act === 'collapse') { state.keyCollapsed = !state.keyCollapsed; render(); return; }
+      if (e.target.closest('[data-chip-clear]')) { state.pinned = null; render(); return; }
+      const chip = e.target.closest('[data-chip]');
+      if (chip) { state.pinned = state.pinned === chip.dataset.chip ? null : chip.dataset.chip; render(); }
+    });
+    document.addEventListener('mouseover', (e) => {
+      const chip = e.target.closest('[data-chip]');
+      if (chip) applyHighlight(chip.dataset.chip);
+    });
+    document.addEventListener('mouseout', (e) => {
+      const chip = e.target.closest('[data-chip]');
+      if (chip && !chip.contains(e.relatedTarget)) applyHighlight(state.pinned);
+    });
+
+    render();
+  </script>
+</body>
+</html>

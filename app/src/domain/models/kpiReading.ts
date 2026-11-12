@@ -18,6 +18,20 @@ export const KpiReading = z.object({
 export type KpiReading = z.infer<typeof KpiReading>;
 
 /**
+ * `recordValue` input: record a reading on a KPI, or with `value: null` delete
+ * the reading at that date. The resolver returns nothing — readings are
+ * last-write-wins per date, so the client applies the same edit to the series it
+ * already holds (`applyReadingEdits`). Parsed at the bridge boundary, because the
+ * client assumes the server stored exactly what it sent.
+ */
+export const RecordValueInput = z.object({
+  kpiId: z.string().min(1),
+  date: IsoDate,
+  value: z.number().finite().nullable(),
+});
+export type RecordValueInput = z.infer<typeof RecordValueInput>;
+
+/**
  * @deprecated Legacy entity-property container (pre-Option-B, per-issue). Kept
  * for reference only; readings now live in the KPI issue's field changelog.
  */

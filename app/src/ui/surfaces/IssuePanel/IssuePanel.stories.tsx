@@ -148,6 +148,7 @@ const KPI_NODE: TimelineNodeDto = {
       value: 1_400_000,
       status: 'upcoming',
       provisional: false,
+      relative: false,
       source: { issue: 'OUT-12', type: 'Outcome', title: 'Grow Revenue', iconUrl: null },
     },
   ],
@@ -177,7 +178,7 @@ function stub(over: Partial<PanelController> & { data: PanelData | null }): UseP
     dismissActionError: over.dismissActionError ?? (() => {}),
     save: over.save ?? (() => {}),
     remove: over.remove ?? (() => {}),
-    record: over.record ?? (() => {}),
+    record: over.record ?? (async () => {}),
   });
 }
 
@@ -368,7 +369,7 @@ export const ErrorState: Story = {
   },
 };
 
-/** A save / remove / record failed: the panel keeps its data and shows a dismissible alert. */
+/** A save / remove failed: the panel keeps its data and shows a dismissible alert. */
 const dismissActionErrorSpy = fn();
 export const ActionFailed: Story = {
   args: {

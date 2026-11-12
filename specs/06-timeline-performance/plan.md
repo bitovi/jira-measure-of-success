@@ -216,6 +216,19 @@ Then:
   - `addTarget` returns only that KPI's contributions. The client replaces them and re-runs `buildKpiTargets`.
   - `createKpi` returns the skeleton, since the tree changes.
   - The KPI issue panel's record path stops calling `getPanelData` after `recordValue`.
+
+  **Done for `createKpi` and `addTarget`, with smaller results than planned above:**
+  - `createKpi` returns just the new KPI (`CreatedKpi`). A new KPI has no readings or targets, so the client splices it into its tree (`insertCreatedKpi`). This dropped both the `waitForKpiIndexed` polling and the full rebuild. `kpi-meta` now goes in the issue-create request's `properties`, so the separate PUT is gone too.
+  - `addTarget` returns just the saved contribution (`AddedTarget`). It reads the issue and its assignments in one GET, then writes the assignments and inlines the icon in parallel. The client builds the marker with `applyAddedTarget`. This also fixes a bug: the rebuild found targets through the `kpiIds` search index, which lags the write, so a new target could be missing.
+  - Saved KPIs and targets stay layered on top of whatever is loaded (`deriveTimelineView`), because a later load may not include them yet. Both overlays are no-ops or exact replacements once the load catches up.
+  - Both modals stay open while saving: the primary button spins, fields and Cancel are disabled, and a failure is shown at the top of the modal. The harness takes `?mutationDelayMs=` and `?mutationFail=1` to show these states.
+  - **`recordValue` is done too, and returns nothing.** Readings are last-write-wins per date, so the client applies the same edit (`applyReadingEdits`) to the readings it already holds.
+    - Timeline: edits are applied to the KPIs before targets are built, so hit/missed and relative target values are recomputed. Nothing returns a full timeline any more, so `full` state and the page-level action-error banner are gone.
+    - KPI issue panel: `kpiView` now carries its raw `contributions`, so recording a value rebuilds that chart's markers. The second `getPanelData` reload is gone.
+    - Target cards on ordinary issues: the edit is applied to the Phase 2 readings and the panel is re-assembled.
+    - `saveAssignment` / `removeAssignment` now return `PanelParts` (`list` + `values`) instead of a finished panel, so recorded values can still be laid over them.
+    - The shared Record / Edit value modals (`@ui/plot/modals`, `useModalSave`) get the same saving state and in-modal error.
+  - Still open: the KPI issue panel's Phase 1 builds the whole timeline to show one KPI (`buildKpiNode`), and save/remove still rebuild the panel.
 - `buildPanelData` enumerates the KPI space once and shares it with `buildKpiCatalog`, and `buildKpiCatalog` reads `kpi-meta` from the search (P8).
 
 This per-KPI path is also the natural seed for later pagination (load a KPI's targets when it is expanded or scrolled into view).

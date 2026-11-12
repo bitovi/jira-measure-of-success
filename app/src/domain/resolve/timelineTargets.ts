@@ -2,7 +2,7 @@ import type { IsoDate, KpiDirection } from '../models/index';
 import type { Assignment } from '../models/assignment';
 import type { TimelineTargetDto } from '../contracts';
 import { resolveRelativeTargetDate, type RelativeTargetContext } from './relativeTargetDate';
-import { resolveRelativeTargetValue } from './relativeTargetValue';
+import { isBaselineRelative, resolveRelativeTargetValue } from './relativeTargetValue';
 import { baselineDueEndpoint } from './panelLoad';
 import { targetStatus, type DatedValue } from './targetStatus';
 
@@ -78,6 +78,7 @@ export function buildKpiTargets(
     if (resolvedValue.value === null) continue; // percent/relative with no baseline yet → skip
 
     const src = { issue: source.key, type: source.type, title: source.title, iconUrl: source.iconUrl };
+    const relative = isBaselineRelative(assignment.targetType);
 
     if (resolvedDate.pending || resolvedDate.date === null) {
       undated.push({
@@ -85,6 +86,7 @@ export function buildKpiTargets(
         value: resolvedValue.value,
         status: 'upcoming',
         provisional: resolvedValue.provisional,
+        relative,
         source: src,
       });
       continue;
@@ -95,6 +97,7 @@ export function buildKpiTargets(
       value: resolvedValue.value,
       status: targetStatus({ date: resolvedDate.date, value: resolvedValue.value }, readings, direction, today),
       provisional: resolvedValue.provisional,
+      relative,
       source: src,
     });
   }

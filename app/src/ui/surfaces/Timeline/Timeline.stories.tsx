@@ -42,8 +42,8 @@ const POPULATED: TimelineData = {
         { date: '2026-07-06', value: 1_243_000 },
       ],
       targets: [
-        { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+        { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
       ],
       children: [
         node({
@@ -62,6 +62,7 @@ const POPULATED: TimelineData = {
               value: 11_500,
               status: 'upcoming',
               provisional: false,
+              relative: false,
               source: { ...src('INIT-48', 'Initiative', 'Expand Orders'), iconUrl: null },
             },
           ],
@@ -88,10 +89,10 @@ const PROJECTIONS: TimelineData = {
       unit: 'USD',
       readings: [{ date: '2026-06-01', value: 1_326_000 }],
       targets: [
-        { date: '2026-09-30', value: 1_339_000, status: 'upcoming', provisional: true, source: src('INIT-48', 'Initiative', '+1% 3mo after due') },
+        { date: '2026-09-30', value: 1_339_000, status: 'upcoming', provisional: true, relative: true, source: src('INIT-48', 'Initiative', '+1% 3mo after due') },
       ],
       undated: [
-        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
+        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, relative: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
       ],
     }),
   ],
@@ -115,12 +116,10 @@ function stub(over: Partial<TimelineController>): UseTimeline {
     targetsError: over.targetsError ?? null,
     retryTargets: over.retryTargets ?? (() => {}),
     error: over.error ?? null,
-    actionError: over.actionError ?? null,
-    clearActionError: over.clearActionError ?? (() => {}),
-    record: over.record ?? (() => {}),
-    createKpi: over.createKpi ?? (() => {}),
+    record: over.record ?? (async () => {}),
+    createKpi: over.createKpi ?? (async () => {}),
     searchIssues: over.searchIssues ?? (async () => []),
-    addTarget: over.addTarget ?? (() => {}),
+    addTarget: over.addTarget ?? (async () => {}),
   });
 }
 
@@ -292,6 +291,69 @@ export const ProjectFilter: Story = {
   },
 };
 
+/** The key-bar entry for `label`, e.g. "2 Upcoming (fixed)". */
+const keyEntry = (c: ReturnType<typeof within>, label: RegExp) =>
+  within(c.getByRole('toolbar', { name: 'Chart key' })).getByRole('button', { name: label });
+
+/** A dated target marker's inline opacity ('' = full strength, '0.12' = dimmed). */
+const markerOpacity = (c: ReturnType<typeof within>, label: RegExp) =>
+  (c.getAllByRole('link', { name: label })[0].querySelector('[data-marker-glyph]') as HTMLElement).style.opacity;
+
+/**
+ * Key bar (spec 08): entries + counts come from the targets shown, issue types
+ * included; hovering an entry dims every other mark and clicking pins it; counts
+ * follow the project filter but not row collapse.
+ */
+export const KeyBar: Story = {
+  args: { useData: stub({ data: POPULATED }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(keyEntry(c, /Recorded value/)).toBeInTheDocument();
+    await expect(keyEntry(c, /Projected trend/)).toBeInTheDocument();
+    await expect(keyEntry(c, /1\s*Missed/)).toBeInTheDocument();
+    await expect(keyEntry(c, /2\s*Upcoming \(fixed\)/)).toBeInTheDocument();
+    await expect(keyEntry(c, /2\s*Outcome/)).toBeInTheDocument();
+    await expect(keyEntry(c, /1\s*Initiative/)).toBeInTheDocument();
+
+    // Hover highlights: the missed marker stays, upcoming ones dim.
+    await userEvent.hover(keyEntry(c, /Missed/));
+    await expect(markerOpacity(c, /Target missed/)).toBe('');
+    await expect(markerOpacity(c, /— Upcoming\./)).toBe('0.12');
+    // Click pins it past the hover; Clear releases it.
+    await userEvent.click(keyEntry(c, /Missed/));
+    await userEvent.unhover(keyEntry(c, /Missed/));
+    await expect(markerOpacity(c, /— Upcoming\./)).toBe('0.12');
+    await userEvent.click(c.getByRole('button', { name: 'Clear highlight' }));
+    await expect(markerOpacity(c, /— Upcoming\./)).toBe('');
+
+    // Collapsing rows doesn't change the counts.
+    await userEvent.click(c.getByRole('button', { name: 'Collapse children' }));
+    await expect(keyEntry(c, /2\s*Upcoming \(fixed\)/)).toBeInTheDocument();
+    await userEvent.click(c.getByRole('button', { name: 'Expand children' }));
+
+    // The project filter does: INIT keeps only INIT-48's target.
+    await userEvent.click(c.getByRole('combobox', { name: 'Filter by Jira project' }));
+    await userEvent.click(screen.getByRole('option', { name: 'INIT' }));
+    await expect(keyEntry(c, /1\s*Upcoming \(fixed\)/)).toBeInTheDocument();
+    await expect(c.queryByRole('button', { name: /Missed/ })).not.toBeInTheDocument();
+    await expect(c.queryByRole('button', { name: /Outcome/ })).not.toBeInTheDocument();
+    await userEvent.click(await pickProjectOption(c, 'INIT'));
+    await waitFor(() => expect(window.location.search).not.toContain('projects'));
+  },
+};
+
+/** Estimate (relative) targets: counted as "Upcoming (relative)" and drawn with an error bar. */
+export const KeyBarRelative: Story = {
+  args: { useData: stub({ data: PROJECTIONS }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(keyEntry(c, /1\s*Upcoming \(relative\)/)).toBeInTheDocument();
+    await expect(keyEntry(c, /1\s*Undated/)).toBeInTheDocument();
+    const marker = c.getAllByRole('link', { name: /INIT-48/ })[0];
+    await expect(marker.querySelector('[data-error-bar]')).not.toBeNull();
+  },
+};
+
 /** Interaction: the KPI name is a link that navigates to the KPI's Jira issue. */
 const openIssueSpy = fn();
 export const OpenIssue: Story = {
@@ -374,6 +436,44 @@ export const RecordValue: Story = {
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
     await waitFor(() => expect(recordSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  },
+};
+
+/** While the value saves, the record modal stays open: Record spins, the fields and Cancel are disabled. */
+export const RecordValueSaving: Story = {
+  args: { useData: stub({ data: POPULATED, record: () => new Promise<void>(() => {}) }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
+    await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
+    await waitFor(() => expect(dialog.getByPlaceholderText(/1,300,000/)).toBeDisabled());
+    await expect(dialog.getByRole('button', { name: /Cancel/i })).toBeDisabled();
+    await expect(screen.getByRole('dialog')).toBeInTheDocument();
+  },
+};
+
+/** A failed save keeps the record modal open with the error inside it and the typed value intact. */
+export const RecordValueFailed: Story = {
+  args: {
+    useData: stub({
+      data: POPULATED,
+      record: async () => {
+        throw new Error('Network request failed');
+      },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
+    await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
+    const alert = within(await dialog.findByRole('alert'));
+    await expect(alert.getByText(/Network request failed/)).toBeInTheDocument();
+    await expect(dialog.getByPlaceholderText(/1,300,000/)).toHaveValue('1300000');
   },
 };
 
@@ -432,6 +532,53 @@ export const AddKpi: Story = {
         expect.objectContaining({ name: 'Net Revenue', unit: 'USD', parentKpiId: null }),
       ),
     );
+    // Saved → the modal closes.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  },
+};
+
+/**
+ * While the KPI is being created (a multi-second Jira round-trip) the modal
+ * stays open: Create KPI shows a spinner, the fields and Cancel are disabled.
+ */
+export const AddKpiSaving: Story = {
+  args: { useData: stub({ data: POPULATED, createKpi: () => new Promise<void>(() => {}) }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Net Revenue');
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    await waitFor(() => expect(dialog.getByLabelText('KPI name')).toBeDisabled());
+    await expect(dialog.getByRole('button', { name: /Cancel/i })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: /Create KPI/i })).toHaveAttribute('aria-disabled', 'true');
+    await expect(screen.getByRole('dialog')).toBeInTheDocument();
+  },
+};
+
+/**
+ * A failed create keeps the modal open with the error shown inside it, and the
+ * typed values intact so the user can retry.
+ */
+export const AddKpiFailed: Story = {
+  args: {
+    useData: stub({
+      data: POPULATED,
+      createKpi: async () => {
+        throw new Error('Jira 400 while trying to create KPI issue "Net Revenue": boom');
+      },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Net Revenue');
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    const alert = within(await dialog.findByRole('alert'));
+    await expect(alert.getByText(/boom/)).toBeInTheDocument();
+    await expect(dialog.getByLabelText('KPI name')).toHaveValue('Net Revenue');
+    await expect(dialog.getByLabelText('KPI name')).not.toBeDisabled();
   },
 };
 
@@ -483,35 +630,6 @@ export const AddKpiWithParent: Story = {
 };
 
 /**
- * A mutation failed because the KPI space isn't configured — the inline banner
- * appears with an "Open Settings" action that routes to the admin page (spied),
- * and a dismiss control that clears the error.
- */
-const openSettingsSpy = fn();
-const dismissSpy = fn();
-export const SpaceNotSetUp: Story = {
-  args: {
-    useData: stub({
-      data: POPULATED,
-      actionError: { kind: 'space-not-set-up', message: 'KPI space is not set up — configure it in Settings first.' },
-      clearActionError: dismissSpy,
-    }),
-    onOpenSettings: openSettingsSpy,
-  },
-  play: async ({ canvasElement }) => {
-    openSettingsSpy.mockClear();
-    dismissSpy.mockClear();
-    const c = within(canvasElement);
-    const alert = within(await c.findByRole('alert'));
-    await expect(alert.getByText(/KPI space isn’t set up/i)).toBeInTheDocument();
-    await userEvent.click(alert.getByRole('button', { name: /Open Settings/i }));
-    await waitFor(() => expect(openSettingsSpy).toHaveBeenCalledTimes(1));
-    await userEvent.click(alert.getByRole('button', { name: /Dismiss/i }));
-    await waitFor(() => expect(dismissSpy).toHaveBeenCalledTimes(1));
-  },
-};
-
-/**
  * Interaction: the “Add a target” row action opens the Add Target modal, where a
  * type-ahead issue picker (like Jira's Parent field) chooses the contributing
  * issue; Add calls the loader with the KPI + issue + date + value.
@@ -543,6 +661,36 @@ export const AddTarget: Story = {
         expect.objectContaining({ kpiId: 'revenue', issueKey: 'INIT-48', value: 2_000_000 }),
       ),
     );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  },
+};
+
+/**
+ * A failed save keeps the Add Target modal open with the error inside it; a
+ * missing KPI space offers the same "Open Settings" action as the page banner.
+ */
+export const AddTargetFailed: Story = {
+  args: {
+    useData: stub({
+      data: POPULATED,
+      searchIssues: searchIssuesStub,
+      addTarget: async () => {
+        throw new Error('KPI space is not set up — configure it in Settings first.');
+      },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Add a target' })[0]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('combobox', { name: 'Search for an issue' }));
+    await userEvent.click(await screen.findByText('Multi-store support'));
+    await userEvent.type(dialog.getByLabelText('Target value'), '2000000');
+    await userEvent.click(dialog.getByRole('button', { name: 'Add target' }));
+    const alert = within(await dialog.findByRole('alert'));
+    await expect(alert.getByText(/KPI space isn’t set up/i)).toBeInTheDocument();
+    await expect(alert.getByRole('button', { name: /Open Settings/i })).toBeInTheDocument();
+    await expect(dialog.getByLabelText('Target value')).toHaveValue('2000000');
   },
 };
 
@@ -568,24 +716,5 @@ export const ExcludeExistingTarget: Story = {
       'aria-disabled',
       'true',
     );
-  },
-};
-
-/**
- * A generic mutation failure shows the plain inline error message and NO
- * "Open Settings" action.
- */
-export const GenericActionError: Story = {
-  args: {
-    useData: stub({
-      data: POPULATED,
-      actionError: { kind: 'generic', message: 'Network request failed' },
-    }),
-  },
-  play: async ({ canvasElement }) => {
-    const c = within(canvasElement);
-    const alert = within(await c.findByRole('alert'));
-    await expect(alert.getByText(/Network request failed/i)).toBeInTheDocument();
-    await expect(alert.queryByRole('button', { name: /Open Settings/i })).toBeNull();
   },
 };

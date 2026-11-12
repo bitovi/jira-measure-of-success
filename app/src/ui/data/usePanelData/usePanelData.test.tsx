@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { PanelData, PanelListData, PanelValuesData } from '@domain/index.js';
+import type { PanelData, PanelListData, PanelParts, PanelValuesData } from '@domain/index.js';
 
 const call = vi.fn();
 vi.mock('@ui/bridge.js', () => ({ call: (...args: unknown[]) => call(...args) }));
@@ -37,7 +37,7 @@ describe('usePanelData mutations', () => {
   });
 
   it('drops a mutation result that lands after the issue changed', async () => {
-    const save = deferred<PanelData>();
+    const save = deferred<PanelParts>();
     const base = call.getMockImplementation()!;
     call.mockImplementation((key: string, payload?: unknown) =>
       key === 'saveAssignment' ? save.promise : base(key, payload),
@@ -53,12 +53,13 @@ describe('usePanelData mutations', () => {
     await waitFor(() => expect(result.current.data?.issueKey).toBe('B'));
     expect(result.current.busy).toBe(false);
 
-    await act(async () => save.resolve(panel('A')));
+    const values: PanelValuesData = { today: '2026-01-01', issueDue: { date: null, source: 'pending' }, parent: null, readings: {} };
+    await act(async () => save.resolve({ list: list('A'), values }));
     expect(result.current.data?.issueKey).toBe('B');
     expect(result.current.busy).toBe(false);
   });
 
-  it('surfaces a failed record as actionError instead of an unhandled rejection', async () => {
+  it('a failed record rejects (the record modal shows it) and leaves the panel untouched', async () => {
     const base = call.getMockImplementation()!;
     call.mockImplementation((key: string, payload?: unknown) =>
       key === 'recordValue' ? Promise.reject(new Error('Network error')) : base(key, payload),
@@ -67,12 +68,47 @@ describe('usePanelData mutations', () => {
     const { result } = renderHook(() => usePanelData('A'));
     await waitFor(() => expect(result.current.data?.issueKey).toBe('A'));
 
-    await act(async () => result.current.record('K', '2026-01-01', 5));
-    await waitFor(() => expect(result.current.actionError).toBe('Network error'));
+    await act(async () => {
+      await expect(result.current.record('K', '2026-01-01', 5)).rejects.toThrow('Network error');
+    });
+    expect(result.current.actionError).toBeNull();
     expect(result.current.busy).toBe(false);
     expect(result.current.data?.issueKey).toBe('A');
+  });
 
-    act(() => result.current.dismissActionError());
-    expect(result.current.actionError).toBeNull();
+  it('a recorded value is applied locally — no panel reload', async () => {
+    const kpiPanel: PanelData = {
+      ...panel('KPI-1'),
+      kpiView: {
+        today: '2026-07-10',
+        contributions: [],
+        node: {
+          id: '1',
+          kpiId: 'KPI-1',
+          issueKey: 'KPI-1',
+          name: 'Revenue',
+          unit: 'USD',
+          direction: 'increase',
+          depth: 0,
+          readings: [{ date: '2026-01-01', value: 100 }],
+          targets: [],
+          undated: [],
+          children: [],
+        },
+      },
+    };
+    const base = call.getMockImplementation()!;
+    call.mockImplementation((key: string, payload?: unknown) => {
+      if (key === 'getPanelList') return Promise.resolve({ panel: kpiPanel });
+      if (key === 'recordValue') return Promise.resolve(null);
+      return base(key, payload);
+    });
+
+    const { result } = renderHook(() => usePanelData('KPI-1'));
+    await waitFor(() => expect(result.current.data?.kpiView).toBeTruthy());
+    await act(async () => result.current.record('KPI-1', '2026-07-01', 130));
+
+    expect(result.current.data?.kpiView?.node.readings.map((r) => r.value)).toEqual([100, 130]);
+    expect(call.mock.calls.filter(([key]) => key === 'getPanelList' || key === 'getPanelData')).toHaveLength(1);
   });
 });

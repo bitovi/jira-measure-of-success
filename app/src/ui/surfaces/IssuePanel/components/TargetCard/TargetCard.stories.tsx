@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { expect, within } from '@storybook/test';
+import { expect, fn, userEvent, waitFor, within } from '@storybook/test';
 import type { PanelRowDto } from '@domain/index.js';
 import { TargetCard } from './TargetCard.js';
 
@@ -44,6 +44,24 @@ const STATES: Array<[string, PanelRowDto]> = [
   ['Total by a fixed date', { ...base, targetType: 'absolute', target: 300, dueTiming: { mode: 'absolute', absolute: '2026-12-31', anchor: 'issueDueDate', offsetMonths: 0 }, targetDate: { date: '2026-12-31', pending: false, source: '' }, resolvedValue: { value: 300, baseline: null, baselineDate: null, baselineFrom: null, state: 'baselined', provisional: false } }],
 ];
 
+/** A target whose KPI issue was deleted: the panel only has the stored bet and the raw key. */
+const deletedKpi: PanelRowDto = {
+  ...base,
+  kpiId: 'KPI-404',
+  name: 'KPI-404',
+  unit: '',
+  direction: null,
+  targetType: 'absolute',
+  target: 50,
+  dueTiming: { mode: 'absolute', absolute: '2026-05-31', anchor: 'issueDueDate', offsetMonths: 0 },
+  targetDate: null,
+  resolvedValue: null,
+  displayState: null,
+  dueDate: null,
+  dueDateRolledUp: false,
+  kpiMissing: true,
+};
+
 function Gallery({ width }: { width: number }) {
   return (
     <div style={{ width }} className="flex flex-col gap-3">
@@ -53,6 +71,10 @@ function Gallery({ width }: { width: number }) {
           <TargetCard row={row} currentValue={262} onRecord={() => {}} />
         </figure>
       ))}
+      <figure className="m-0">
+        <figcaption className="mb-1 text-xs font-medium text-text-subtlest">KPI deleted</figcaption>
+        <TargetCard row={deletedKpi} currentValue={null} onRecord={() => {}} />
+      </figure>
       <figure className="m-0">
         <figcaption className="mb-1 text-xs font-medium text-text-subtlest">Preview (form)</figcaption>
         <TargetCard row={base} currentValue={250} preview />
@@ -86,3 +108,36 @@ export const Narrow: Story = {
 export const Medium: Story = { args: { width: 560 } };
 
 export const Wide: Story = { args: { width: 760 } };
+
+const onRemoveDeleted = fn();
+
+/** Deleted KPI: no status, estimate, edit or record — only Remove. */
+export const KpiDeleted: Story = {
+  args: { width: 360 },
+  render: ({ width }) => (
+    <div style={{ width }}>
+      <TargetCard row={deletedKpi} currentValue={null} onSave={fn()} onRemove={onRemoveDeleted} onRecord={fn()} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    onRemoveDeleted.mockClear();
+    const c = within(canvasElement);
+    const card = c.getByRole('group', { name: 'KPI-404' });
+    await expect(within(card).getByText('KPI deleted')).toBeInTheDocument();
+    await expect(within(card).getByText(/deleted or moved out of the KPI space/)).toBeInTheDocument();
+    await expect(within(card).getByText('50')).toBeInTheDocument();
+    await expect(within(card).queryByRole('button', { name: /^Edit target/ })).not.toBeInTheDocument();
+    await expect(within(card).queryByRole('button', { name: 'Record a value' })).not.toBeInTheDocument();
+    await expect(within(card).queryByText(/Estimated target/)).not.toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole('button', { name: `Actions for KPI-404` }));
+    await waitFor(() => expect(c.getByRole('menuitem', { name: 'Remove' })).toBeInTheDocument());
+    await expect(c.queryByRole('menuitem', { name: 'Edit' })).not.toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+
+    await userEvent.click(within(card).getByRole('button', { name: 'Remove target' }));
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(onRemoveDeleted).toHaveBeenCalledTimes(1));
+  },
+};

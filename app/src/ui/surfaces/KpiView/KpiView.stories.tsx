@@ -40,9 +40,9 @@ const REVENUE = node({
     { date: '2026-07-06', value: 1_243_000 },
   ],
   targets: [
-    { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-    { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
-    { date: '2026-12-20', value: 1_500_000, status: 'upcoming', provisional: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+    { date: '2026-06-30', value: 1_300_000, status: 'missed', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+    { date: '2026-09-30', value: 1_400_000, status: 'upcoming', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
+    { date: '2026-12-20', value: 1_500_000, status: 'upcoming', provisional: false, relative: false, source: src('OUT-12', 'Outcome', 'Grow Revenue') },
   ],
 });
 
@@ -75,6 +75,26 @@ export const Empty: Story = {
   },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByText(/No values recorded yet/i)).toBeInTheDocument();
+    // Nothing plotted → nothing for the key to explain.
+    await expect(within(canvasElement).queryByRole('toolbar', { name: 'Chart key' })).not.toBeInTheDocument();
+  },
+};
+
+/** Key bar (spec 08): the shared key, counted for this one KPI; hovering an entry dims the rest. */
+export const KeyBar: Story = {
+  args: { node: REVENUE },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const key = within(c.getByRole('toolbar', { name: 'Chart key' }));
+    await expect(key.getByRole('button', { name: /1\s*Missed/ })).toBeInTheDocument();
+    await expect(key.getByRole('button', { name: /2\s*Upcoming \(fixed\)/ })).toBeInTheDocument();
+    await expect(key.getByRole('button', { name: /3\s*Outcome/ })).toBeInTheDocument();
+
+    await userEvent.hover(key.getByRole('button', { name: /Upcoming \(fixed\)/ }));
+    const missed = c.getAllByRole('link', { name: /Target missed/ })[0].querySelector('[data-marker-glyph]') as HTMLElement;
+    await expect(missed.style.opacity).toBe('0.12');
+    await userEvent.unhover(key.getByRole('button', { name: /Upcoming \(fixed\)/ }));
+    await expect(missed.style.opacity).toBe('');
   },
 };
 
@@ -87,7 +107,7 @@ export const Undated: Story = {
       unit: 'USD',
       readings: [{ date: '2026-06-01', value: 1_326_000 }],
       undated: [
-        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
+        { date: null, value: 1_255_000, status: 'upcoming', provisional: true, relative: true, source: { ...src('INC-90', 'Increment', '+1% after TBD due'), iconUrl: null } },
       ],
     }),
   },

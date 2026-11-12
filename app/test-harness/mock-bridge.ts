@@ -64,11 +64,30 @@ const resolvers: Record<string, Handler> = {
     if (params.get('targetsFail') === '1') throw new Error('Simulated Phase 2 failure');
     return getTimelineTargets();
   },
-  recordValue: (p) => recordValue(p?.kpiId, p?.date, p?.value),
-  createKpi: (p) => createKpi(p),
+  recordValue: async (p) => {
+    await simulateMutation();
+    return recordValue(p?.kpiId, p?.date, p?.value);
+  },
+  // `?mutationDelayMs=3000` slows the modal saves (createKpi / addTarget /
+  // recordValue) so the saving state is visible; `?mutationFail=1` makes them
+  // reject (error shown in the modal).
+  createKpi: async (p) => {
+    await simulateMutation();
+    return createKpi(p);
+  },
   searchIssues: (p) => searchIssues(p?.query ?? ''),
-  addTarget: (p) => addTarget(p),
+  addTarget: async (p) => {
+    await simulateMutation();
+    return addTarget(p);
+  },
 };
+
+async function simulateMutation(): Promise<void> {
+  const params = new URLSearchParams(globalThis.location?.search ?? '');
+  const delay = Number(params.get('mutationDelayMs') ?? 0);
+  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+  if (params.get('mutationFail') === '1') throw new Error('Simulated save failure');
+}
 
 export async function invoke<T = unknown>(key: string, payload?: unknown): Promise<T> {
   const handler = resolvers[key];

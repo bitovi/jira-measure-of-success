@@ -136,8 +136,9 @@ describe('getTimelineData at scale', () => {
     const marker = nodes.find((n) => n.kpiId === 'KPI-10')!.targets.find((t) => t.source.issue === 'APP-10');
     expect(marker?.date).toBe(latestDue(jira.fixture, epicId));
 
+    // Changed by spec 08 (targets carry `relative`); identical to the previous digest with it stripped.
     const digest = createHash('sha256').update(JSON.stringify(data)).digest('hex');
-    expect(digest).toMatchInlineSnapshot(`"4e111c3553b36a770fb08ea90de76693f71e27d257f41470d13a8fb49cbaece4"`);
+    expect(digest).toMatchInlineSnapshot(`"23cc61b30ad60cc4595ac2db8971391a85cb7abeefb934acc2318963a544fe89"`);
   });
 
   it('the contributions search asks for the kpi-assignments property and never reads it per issue', async () => {

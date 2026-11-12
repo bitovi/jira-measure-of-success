@@ -93,3 +93,28 @@ describe('axis geometry', () => {
     expect(grown.xOf('2026-02-28')).toBe(axis.xOf('2026-02-28'));
   });
 });
+
+describe('minWidth (fill the viewport)', () => {
+  const today = '2026-11-11';
+  const base = buildAxis([], today);
+
+  it('appends future quarters until the columns cover minWidth', () => {
+    const filled = buildAxis([], today, { minWidth: 1000 });
+    expect(filled.quarters.length).toBe(Math.ceil(1000 / QUARTER_PX));
+    expect(filled.quarters.slice(0, base.quarters.length)).toEqual(base.quarters);
+    expect(filled.plotWidth).toBe(1000);
+  });
+
+  it('leaves positions and domainStart unchanged (only the right edge grows)', () => {
+    const filled = buildAxis([], today, { minWidth: 1500 });
+    expect(filled.domainStart).toBe(base.domainStart);
+    expect(filled.xOf(today)).toBe(base.xOf(today));
+  });
+
+  it('does nothing when the data range is already wider than minWidth', () => {
+    const wide = buildAxis(['2024-01-10', '2028-06-01'], today);
+    const same = buildAxis(['2024-01-10', '2028-06-01'], today, { minWidth: 400 });
+    expect(same.quarters).toEqual(wide.quarters);
+    expect(same.plotWidth).toBe(wide.plotWidth);
+  });
+});

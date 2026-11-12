@@ -15,6 +15,7 @@ function target(issue: string, over: Partial<TimelineTargetDto> = {}): TimelineT
     value: 100,
     status: 'upcoming',
     provisional: false,
+    relative: false,
     source: { issue, type: 'Story', title: 'x' },
     ...over,
   };

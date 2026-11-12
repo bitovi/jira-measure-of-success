@@ -11,13 +11,16 @@ import {
   resolveRelativeTargetDate,
   resolvePanelTarget,
   targetStatus,
+  type AddedTarget,
   type AddTargetInput,
   type CatalogEntryDto,
+  type CreatedKpi,
   type CreateKpiInput,
   type IssuePickerItem,
   type KpiSpaceStatus,
   type PanelData,
   type PanelListData,
+  type PanelParts,
   type PanelValuesData,
   type PanelRowDto,
   type ReadingChange,
@@ -178,7 +181,11 @@ export function getPanelData(issueId: string): PanelData {
       catalog: catalogDto(),
       issueDueDate: null,
       issueDueRolledUp: false,
-      kpiView: { node: toTimelineNode(kpiNode, 0), today: TODAY },
+      kpiView: {
+        node: toTimelineNode(kpiNode, 0),
+        today: TODAY,
+        contributions: kpiNode.targets.map((t) => fixtureContribution(kpiNode, t, readingsFor(kpiNode.kpiId))),
+      },
     };
   }
 
@@ -207,6 +214,8 @@ export function getPanelData(issueId: string): PanelData {
   ) => {
     const def = CATALOG.find((k) => k.id === kpiId);
     if (!assignment) {
+      // Don't offer to track a parent's target on a KPI that no longer exists.
+      if (!def) return;
       rows.push({
         kpiId,
         name: def?.name ?? kpiId,
@@ -225,6 +234,30 @@ export function getPanelData(issueId: string): PanelData {
         dueDate: null,
         dueDateRolledUp: false,
         actual: null,
+      });
+      return;
+    }
+
+    if (!def) {
+      rows.push({
+        kpiId,
+        name: kpiId,
+        unit: '',
+        direction: null,
+        target: assignment.target,
+        targetType: assignment.targetType,
+        targetDate: null,
+        dueTiming: assignment.timing.due,
+        start: assignment.timing.start,
+        relationship,
+        resolvedValue: null,
+        displayState: null,
+        warning: null,
+        frozen: false,
+        dueDate: null,
+        dueDateRolledUp: false,
+        actual: null,
+        kpiMissing: true,
       });
       return;
     }
@@ -290,6 +323,10 @@ export function getPanelList(issueId: string): PanelListData {
       own: issue.assignments,
       parentKpiIds: [...new Set((parent?.assignments ?? []).map((a) => a.kpiId))],
       catalog: catalogDto().map((c) => ({ ...c, currentValue: null })),
+      // The harness has no search-index lag: a targeted KPI outside the catalog is deleted.
+      deletedKpiIds: [
+        ...new Set([...issue.assignments, ...(parent?.assignments ?? [])].map((a) => a.kpiId)),
+      ].filter((id) => !CATALOG.some((k) => k.id === id)),
     },
   };
 }
@@ -304,20 +341,25 @@ export function getPanelValues(issueId: string): PanelValuesData {
   return { today: TODAY, issueDue: ctx.issue.due, parent: ctx.parent ?? null, readings };
 }
 
-export function saveAssignment(issueId: string, assignment: Assignment): PanelData {
+/** The panel's two phases, unassembled — what save/remove return, like the backend. */
+function panelParts(issueId: string): PanelParts {
+  return { list: getPanelList(issueId), values: getPanelValues(issueId) };
+}
+
+export function saveAssignment(issueId: string, assignment: Assignment): PanelParts {
   const issue = findIssue(issueId);
   if (issue) {
     const idx = issue.assignments.findIndex((a) => a.kpiId === assignment.kpiId);
     if (idx >= 0) issue.assignments[idx] = assignment;
     else issue.assignments.push(assignment);
   }
-  return getPanelData(issueId);
+  return panelParts(issueId);
 }
 
-export function removeAssignment(issueId: string, kpiId: string): PanelData {
+export function removeAssignment(issueId: string, kpiId: string): PanelParts {
   const issue = findIssue(issueId);
   if (issue) issue.assignments = issue.assignments.filter((a) => a.kpiId !== kpiId);
-  return getPanelData(issueId);
+  return panelParts(issueId);
 }
 
 // ── Settings ────────────────────────────────────────────────────────────────
@@ -374,13 +416,14 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
   for (const t of node.targets) {
     const src = { ...t.source, iconUrl: t.source.iconUrl ?? issueTypeIconUri(t.source.type) };
     if (t.date === null) {
-      undated.push({ date: null, value: t.value, status: 'upcoming', provisional: t.provisional ?? false, source: src });
+      undated.push({ date: null, value: t.value, status: 'upcoming', provisional: t.provisional ?? false, relative: t.relative ?? t.provisional ?? false, source: src });
     } else {
       dated.push({
         date: t.date,
         value: t.value,
         status: targetStatus({ date: t.date, value: t.value }, readings, node.direction, TODAY),
         provisional: t.provisional ?? false,
+        relative: t.relative ?? t.provisional ?? false,
         source: src,
       });
     }
@@ -483,12 +526,13 @@ export function getTimelineTargets(): TimelineTargetsData {
 /**
  * Record (or, with value=null, tombstone) a KPI reading. Appends one entry to
  * that KPI's field changelog — Option B: append-only, last-write-wins per date.
+ * Returns nothing, like the backend: the client applies the edit itself.
  */
-export function recordValue(kpiId: string, date: string, value: number | null): TimelineData {
+export function recordValue(kpiId: string, date: string, value: number | null): null {
   const log = readingChangelog.get(kpiId) ?? [];
   log.push({ created: Date.now(), to: encodeReadingValue(date, value), by: 'acc-jm' });
   readingChangelog.set(kpiId, log);
-  return getTimelineData();
+  return null;
 }
 
 function findKpiNode(nodes: KpiTreeNode[], kpiId: string): KpiTreeNode | undefined {
@@ -526,9 +570,10 @@ function nextIssueKey(): string {
 
 /**
  * Create a KPI (an issue in the KPI space). Appends a new tree node at the root
- * or under `parentKpiId`, with an empty reading changelog. Returns the timeline.
+ * or under `parentKpiId`, with an empty reading changelog. Returns just the new
+ * KPI, like the backend.
  */
-export function createKpi(input: CreateKpiInput): TimelineData {
+export function createKpi(input: CreateKpiInput): CreatedKpi {
   const kpiId = uniqueKpiId(slugifyKpi(input.name));
   const node: KpiTreeNode = {
     kpiId,
@@ -544,7 +589,15 @@ export function createKpi(input: CreateKpiInput): TimelineData {
   const parent = input.parentKpiId ? findKpiNode(kpiTree, input.parentKpiId) : undefined;
   if (parent) (parent.children ??= []).push(node);
   else kpiTree.push(node);
-  return getTimelineData();
+  return {
+    id: `created-${node.issueKey}`,
+    kpiId,
+    issueKey: node.issueKey,
+    name: node.name,
+    unit: node.unit,
+    direction: node.direction,
+    parentKpiId: parent ? parent.kpiId : null,
+  };
 }
 
 // ── Add target (issue picker) ────────────────────────────────────────────────
@@ -573,46 +626,45 @@ export function searchIssues(query: string): IssuePickerItem[] {
 
 /**
  * Add a target to a KPI, held on the chosen contributing issue. Pushes the
- * target onto the KPI's timeline row (recomputing its status) and keeps the
- * issue's assignment in sync so the panel stays consistent.
+ * target onto the KPI's timeline row and keeps the issue's assignment in sync so
+ * the panel stays consistent. Returns just the saved contribution, like the backend.
  */
-export function addTarget(input: AddTargetInput): TimelineData {
+export function addTarget(input: AddTargetInput): AddedTarget {
   const node = findKpiNode(kpiTree, input.kpiId);
-  if (node) {
-    node.targets = [
-      ...node.targets.filter(
-        (t) => !(t.date === input.date && t.source.issue === input.issueKey),
-      ),
-      {
-        date: input.date,
-        value: input.value,
-        source: {
-          issue: input.issueKey,
-          type: input.issueType ?? 'Issue',
-          title: input.issueSummary,
-          iconUrl: input.issueTypeIconUrl ?? issueTypeIconUri(input.issueType ?? 'Issue'),
-        },
-      },
-    ].sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''));
+  if (!node) throw new Error(`Unknown KPI ${input.kpiId}`);
+  // One target per (issue, KPI), as on Jira — replaces the issue's earlier one.
+  const target: KpiTreeNode['targets'][number] = {
+    date: input.date,
+    value: input.value,
+    source: {
+      issue: input.issueKey,
+      type: input.issueType ?? 'Issue',
+      title: input.issueSummary,
+      iconUrl: input.issueTypeIconUrl ?? issueTypeIconUri(input.issueType ?? 'Issue'),
+    },
+  };
+  node.targets = [...node.targets.filter((t) => t.source.issue !== input.issueKey), target].sort((a, b) =>
+    (a.date ?? '').localeCompare(b.date ?? ''),
+  );
 
-    const issue = findIssue(input.issueId);
-    if (issue) {
-      const assignment: Assignment = {
-        kpiId: input.kpiId,
-        inheritFromParent: false,
-        target: input.value,
-        targetType: 'absolute',
-        timing: {
-          start: null,
-          due: { mode: 'absolute', absolute: input.date, anchor: 'issueDueDate', offsetMonths: 0 },
-        },
-        updatedBy: 'acc-jm',
-        updatedAt: Date.now(),
-      };
-      const idx = issue.assignments.findIndex((a) => a.kpiId === input.kpiId);
-      if (idx >= 0) issue.assignments[idx] = assignment;
-      else issue.assignments.push(assignment);
-    }
+  const issue = findIssue(input.issueId);
+  if (issue) {
+    const assignment: Assignment = {
+      kpiId: input.kpiId,
+      inheritFromParent: false,
+      target: input.value,
+      targetType: 'absolute',
+      timing: {
+        start: null,
+        due: { mode: 'absolute', absolute: input.date, anchor: 'issueDueDate', offsetMonths: 0 },
+      },
+      updatedBy: 'acc-jm',
+      updatedAt: Date.now(),
+    };
+    const idx = issue.assignments.findIndex((a) => a.kpiId === input.kpiId);
+    if (idx >= 0) issue.assignments[idx] = assignment;
+    else issue.assignments.push(assignment);
   }
-  return getTimelineData();
+  const readings = readingsFor(node.kpiId).map((r) => ({ date: r.date, value: r.value }));
+  return fixtureContribution(node, target, readings);
 }

@@ -152,8 +152,8 @@ export function IssuePanel({
           defaultDate={today}
           today={today}
           onCancel={() => setRecordFor(null)}
-          onRecord={(date, value) => {
-            record(recordFor.kpiId, date, value);
+          onRecord={async (date, value) => {
+            await record(recordFor.kpiId, date, value);
             setRecordFor(null);
           }}
         />
@@ -180,7 +180,7 @@ function ValuesErrorBanner({ message, onRetry }: { message: string; onRetry: () 
   );
 }
 
-/** A save / remove / record failed: the panel still shows its previous data. */
+/** A save / remove failed: the panel still shows its previous data. */
 function ActionErrorBanner({ message, onDismiss }: { message: string; onDismiss: () => void }) {
   return (
     <div role="alert" className="mb-3 rounded-md border border-danger px-3 py-2 text-sm">

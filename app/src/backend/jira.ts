@@ -14,6 +14,7 @@ import {
   type DateFieldCatalog,
   type DateFieldOption,
   type DateFieldSelection,
+  type CreatedKpi,
   type CreateKpiInput,
   type IssueLinkRef,
   type IssuePickerItem,
@@ -131,6 +132,38 @@ export async function fetchAssignments(issueId: string): Promise<Assignment[]> {
   return parseAssignments(body.value);
 }
 
+/**
+ * What `addTarget` needs about the issue a target is held on, in ONE request:
+ * its current assignments (`properties=`) plus the type/summary/due the new
+ * marker shows — the picker's item omits the issue type.
+ */
+export async function fetchTargetSourceIssue(issueId: string): Promise<{
+  key: string;
+  typeName: string;
+  typeIconUrl: string | null;
+  summary: string;
+  due: string | null;
+  assignments: Assignment[];
+}> {
+  const res = await asUser().requestJira(
+    route`/rest/api/3/issue/${issueId}?fields=summary,issuetype,duedate&properties=${ASSIGNMENT_PROPERTY_KEY}`,
+  );
+  if (!res.ok) throw new Error(await jiraError(res, `load issue ${issueId}`));
+  const data = (await res.json()) as {
+    key: string;
+    fields?: { summary?: string; duedate?: string | null; issuetype?: { name?: string; iconUrl?: string } };
+    properties?: Record<string, unknown>;
+  };
+  return {
+    key: data.key,
+    typeName: data.fields?.issuetype?.name ?? 'Issue',
+    typeIconUrl: data.fields?.issuetype?.iconUrl ?? null,
+    summary: data.fields?.summary ?? data.key,
+    due: data.fields?.duedate ?? null,
+    assignments: parseAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
+  };
+}
+
 /** Persist the full assignment list for an issue (batched single write). */
 export async function writeAssignments(issueId: string, assignments: Assignment[]): Promise<void> {
   // Also persist a denormalized `kpiIds` list: the manifest indexes
@@ -141,12 +174,16 @@ export async function writeAssignments(issueId: string, assignments: Assignment[
     assignments,
     kpiIds: [...new Set(assignments.map((a) => a.kpiId))],
   });
-  await asUser()
+  const res = await asUser()
     .requestJira(route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(value),
     });
+  // Surface rejections (e.g. 403 when the user can view but not edit the issue):
+  // callers return the saved target and the client keeps it, so a swallowed
+  // failure would show an unsaved target as saved.
+  if (!res.ok) throw new Error(await jiraError(res, `save targets on issue ${issueId}`));
 }
 
 /**
@@ -559,7 +596,9 @@ export async function fetchKpiSpaceIssues(projectKey: string): Promise<KpiSpaceI
           ? route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
           : route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100`,
       );
-    if (!res.ok) break;
+    // Fail loudly rather than return a partial list: callers treat a KPI that's
+    // absent here as non-existent (catalog, timeline tree).
+    if (!res.ok) throw new Error(await jiraError(res, `list the KPIs in project ${projectKey}`));
     const data = (await res.json()) as {
       isLast?: boolean;
       nextPageToken?: string;
@@ -979,32 +1018,56 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
  * built-in `Parent` issue LINK (parent = link's outward end), because Jira
  * forbids a standard issue from being the native `parent` of another standard
  * issue. NOTE: unit/direction persist to the `kpi-meta` entity property (the
- * summary carries the KPI name).
+ * summary carries the KPI name) — set in the create request itself, so there's
+ * no separate property write.
  */
-export async function createKpiIssue(projectId: string, input: CreateKpiInput): Promise<string> {
+export async function createKpiIssue(projectId: string, input: CreateKpiInput): Promise<CreatedKpi> {
+  const name = input.name.trim() || 'Untitled KPI';
+  // unit/direction are descriptive, low-churn → issue entity property (not a field).
+  const meta: KpiMetaProperty = KpiMetaProperty.parse({
+    unit: input.unit.trim(),
+    direction: input.direction ?? null,
+  });
   const fields: Record<string, unknown> = {
     project: { id: projectId },
     issuetype: { name: KPI_ISSUE_TYPE },
-    summary: input.name.trim() || 'Untitled KPI',
+    summary: name,
   };
   const res = await asApp().requestJira(route`/rest/api/3/issue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields }),
+    body: JSON.stringify({ fields, properties: [{ key: KPI_META_PROPERTY_KEY, value: meta }] }),
   });
   // Surface Jira's rejection instead of returning `{ key: undefined }` — a
   // swallowed 4xx here is the same silent-failure class fixed in `writeReading`.
   if (!res.ok) {
     throw new Error(await jiraError(res, `create KPI issue "${input.name}"`));
   }
-  const created = (await res.json()) as { key: string };
-  // unit/direction are descriptive, low-churn → issue entity property (not a field).
-  await writeKpiMeta(created.key, {
-    unit: input.unit.trim(),
-    direction: input.direction ?? null,
-  });
-  if (input.parentKpiId) await linkKpiParent(input.parentKpiId, created.key);
-  return created.key;
+  const created = (await res.json()) as { id: string; key: string };
+  const parentKpiId = input.parentKpiId ?? null;
+  // The link can't ride in the create request: Jira silently drops
+  // `update.issuelinks` there (verified by the live E2E). So undo the create if
+  // the link fails. Otherwise an orphan root KPI is left behind, and retrying the
+  // (still open) modal would create a duplicate.
+  if (parentKpiId) {
+    try {
+      await linkKpiParent(parentKpiId, created.key);
+    } catch (err) {
+      await deleteIssue(created.key).catch(() => {
+        throw new Error(`${(err as Error).message}. ${created.key} was created without its parent; delete it in Jira.`);
+      });
+      throw err;
+    }
+  }
+  return {
+    id: String(created.id),
+    kpiId: created.key,
+    issueKey: created.key,
+    name,
+    unit: meta.unit,
+    direction: meta.direction ?? null,
+    parentKpiId,
+  };
 }
 
 /**
@@ -1028,14 +1091,26 @@ export async function linkKpiParent(parentKpiKey: string, childKpiKey: string): 
   }
 }
 
-/** Persist a KPI's unit/direction as the `kpi-meta` entity property. */
-export async function writeKpiMeta(kpiIssueKey: string, meta: KpiMetaProperty): Promise<void> {
-  const value: unknown = KpiMetaProperty.parse(meta);
-  await asApp().requestJira(route`/rest/api/3/issue/${kpiIssueKey}/properties/${KPI_META_PROPERTY_KEY}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(value),
-  });
+/** Delete an issue (used to roll back a half-created KPI). */
+async function deleteIssue(issueKey: string): Promise<void> {
+  const res = await asApp().requestJira(route`/rest/api/3/issue/${issueKey}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(await jiraError(res, `delete issue ${issueKey}`));
+}
+
+/**
+ * Of the given issue keys, the ones Jira says no longer exist (404). Any other
+ * outcome — found, or a transient error — counts as "not deleted", so a hiccup
+ * never makes the panel offer to remove a target on a live KPI.
+ */
+export async function fetchDeletedIssueKeys(keys: string[]): Promise<string[]> {
+  const unique = [...new Set(keys)];
+  const deleted = await Promise.all(
+    unique.map(async (key) => {
+      const res = await asApp().requestJira(route`/rest/api/3/issue/${key}?fields=summary`);
+      return res.status === 404 ? key : null;
+    }),
+  );
+  return deleted.filter((k): k is string => k !== null);
 }
 
 /** Read a KPI's unit/direction from the `kpi-meta` entity property (null if unset). */

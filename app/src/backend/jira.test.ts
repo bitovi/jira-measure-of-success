@@ -4,35 +4,39 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Stub it so we can unit-test the `writeReading` flow: it resolves the numeric
 // issue id via GET, then writes the reading through the app custom field value
 // API (PUT /rest/api/3/app/field/{id}/value?generateChangelog=true).
-let putResult: { ok: boolean; status: number; text?: () => Promise<string> };
+let putResult: {
+  ok: boolean;
+  status: number;
+  json?: () => Promise<unknown>;
+  text?: () => Promise<string>;
+};
 let postResult: {
   ok: boolean;
   status: number;
   json?: () => Promise<unknown>;
   text?: () => Promise<string>;
 };
-const requestJira = vi.fn<(route: unknown, options?: { method?: string }) => Promise<unknown>>(
-  async (route: unknown, options?: { method?: string }) => {
-    const url = String(route);
-    if (options?.method === 'POST') {
-      // Issue create (POST /rest/api/3/issue).
-      return postResult;
-    }
-    if (options?.method === 'PUT') {
-      // App custom field value write.
-      return putResult;
-    }
-    if (url.includes('/rest/api/3/issue/')) {
-      // Numeric-id resolution GET → returns the issue's numeric id.
-      return { ok: true, json: async () => ({ id: '10001' }) };
-    }
-    // getReadingFieldId() → GET /rest/api/3/field
-    return {
-      ok: true,
-      json: async () => [{ id: 'customfield_10837', key: 'kpi-reading', name: 'KPI Reading' }],
-    };
-  },
-);
+const defaultRequestJira = async (route: unknown, options?: { method?: string }): Promise<unknown> => {
+  const url = String(route);
+  if (options?.method === 'POST') {
+    // Issue create (POST /rest/api/3/issue).
+    return postResult;
+  }
+  if (options?.method === 'PUT') {
+    // App custom field value write.
+    return putResult;
+  }
+  if (url.includes('/rest/api/3/issue/')) {
+    // Numeric-id resolution GET → returns the issue's numeric id.
+    return { ok: true, json: async () => ({ id: '10001' }) };
+  }
+  // getReadingFieldId() → GET /rest/api/3/field
+  return {
+    ok: true,
+    json: async () => [{ id: 'customfield_10837', key: 'kpi-reading', name: 'KPI Reading' }],
+  };
+};
+const requestJira = vi.fn<(route: unknown, options?: { method?: string }) => Promise<unknown>>(defaultRequestJira);
 
 vi.mock('@forge/api', () => ({
   default: {
@@ -69,7 +73,7 @@ describe('createKpiIssue', () => {
 
   it('throws (not a silent half-create) when Jira rejects the issue POST', async () => {
     // e.g. a level-0 KPI `parent` link Jira won't accept — must surface, not
-    // fall through to writeKpiMeta with an undefined key.
+    // return a KPI with an undefined key.
     postResult = { ok: false, status: 400, json: async () => ({ errorMessages: ['boom'] }) };
     await expect(
       createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: 'increase', parentKpiId: 'KPI-1' }),
@@ -80,6 +84,65 @@ describe('createKpiIssue', () => {
       ([, opts]) => (opts as { method?: string } | undefined)?.method === 'PUT',
     );
     expect(putCall).toBeUndefined();
+  });
+
+  it('sets kpi-meta in the create request itself (no separate property PUT) and returns the new KPI', async () => {
+    postResult = { ok: true, status: 201, json: async () => ({ id: '10050', key: 'KPI-7' }) };
+    const created = await createKpiIssue('10000', {
+      name: ' Revenue ',
+      unit: ' $ ',
+      direction: 'increase',
+      parentKpiId: 'KPI-1',
+    });
+
+    expect(created).toEqual({
+      id: '10050',
+      kpiId: 'KPI-7',
+      issueKey: 'KPI-7',
+      name: 'Revenue',
+      unit: '$',
+      direction: 'increase',
+      parentKpiId: 'KPI-1',
+    });
+    const posts = requestJira.mock.calls.filter(([, o]) => o?.method === 'POST');
+    const createBody = JSON.parse((posts[0][1] as { body: string }).body) as {
+      fields: { summary: string };
+      properties: Array<{ key: string; value: unknown }>;
+    };
+    expect(createBody.fields.summary).toBe('Revenue');
+    expect(createBody.properties).toEqual([{ key: 'kpi-meta', value: { unit: '$', direction: 'increase' } }]);
+    // The nest is the only follow-up request: the Parent issue link.
+    expect(posts.map(([r]) => String(r))).toEqual(['/rest/api/3/issue', '/rest/api/3/issueLink']);
+    expect(requestJira.mock.calls.some(([, o]) => o?.method === 'PUT')).toBe(false);
+  });
+
+  describe('when the Parent link fails', () => {
+    const linkFails = (deleteResult: { ok: boolean; status: number }) =>
+      requestJira.mockImplementation(async (route, options) => {
+        const url = String(route);
+        if (options?.method === 'DELETE') return { ...deleteResult, json: async () => ({}) };
+        if (url === '/rest/api/3/issueLink') {
+          return { ok: false, status: 404, json: async () => ({ errorMessages: ['No issue KPI-1'] }) };
+        }
+        return { ok: true, status: 201, json: async () => ({ id: '10050', key: 'KPI-7' }) };
+      });
+    afterEach(() => requestJira.mockImplementation(defaultRequestJira));
+
+    it('deletes the just-created issue (no orphan root KPI, no duplicate on retry) and rethrows', async () => {
+      linkFails({ ok: true, status: 204 });
+      await expect(
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }),
+      ).rejects.toThrow('Jira 404 while trying to link KPI "KPI-7" under "KPI-1": No issue KPI-1');
+      const del = requestJira.mock.calls.find(([, o]) => o?.method === 'DELETE');
+      expect(String(del?.[0])).toBe('/rest/api/3/issue/KPI-7');
+    });
+
+    it('says the KPI was left behind when the rollback fails too', async () => {
+      linkFails({ ok: false, status: 403 });
+      await expect(
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }),
+      ).rejects.toThrow('KPI-7 was created without its parent; delete it in Jira.');
+    });
   });
 });
 
@@ -190,6 +253,17 @@ describe('writeAssignments', () => {
     const body = JSON.parse(putOpts.body) as { assignments: unknown[]; kpiIds: string[] };
     expect(body.kpiIds).toEqual(['revenue', 'costs']);
     expect(body.assignments).toHaveLength(2);
+  });
+
+  it('throws when Jira rejects the write (e.g. no Edit Issues permission)', async () => {
+    putResult = {
+      ok: false,
+      status: 403,
+      json: async () => ({ errorMessages: ['You do not have permission to edit issues.'] }),
+    };
+    await expect(writeAssignments('10001', [])).rejects.toThrow(
+      'Jira 403 while trying to save targets on issue 10001: You do not have permission to edit issues.',
+    );
   });
 });
 

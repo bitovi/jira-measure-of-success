@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import Button from '@atlaskit/button/new';
 import AddIcon from '@atlaskit/icon/core/add';
 import ArrowDownIcon from '@atlaskit/icon/core/arrow-down';
@@ -10,7 +10,12 @@ import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle, ModalTransition
 import Select, { AsyncSelect, CheckboxSelect, type ClearIndicatorProps } from '@atlaskit/select';
 import Textfield from '@atlaskit/textfield';
 import Tooltip from '@atlaskit/tooltip';
-import { useTimelineData, type UseTimeline, type TimelineActionError } from '@ui/data/useTimelineData/index.js';
+import {
+  toActionError,
+  useTimelineData,
+  type UseTimeline,
+  type TimelineActionError,
+} from '@ui/data/useTimelineData/index.js';
 import { openKpiSettings, openIssue, openIssueNewTab, getSiteUrl } from '@ui/bridge.js';
 import {
   buildAxis,
@@ -18,15 +23,24 @@ import {
   initialScrollLeft,
   scrollShiftForAxisChange,
   useBandScale,
+  useClientWidth,
   computeHover,
   fmtVal,
   ModalField,
   ModalSubtitle,
   PAD_R,
+  useModalSave,
   PlotCrosshair,
   PlotTooltip,
   ProjectionLine,
   ProjectionModal,
+  PlotKey,
+  KeyHighlightProvider,
+  Dimmable,
+  flattenNodes,
+  summarizeKey,
+  undatedKeyKinds,
+  useKeyHighlight,
   ReadingDot,
   RecordModal,
   EditReadingModal,
@@ -52,7 +66,8 @@ import {
  * date axis. The horizontal axis FITS THE DATA RANGE (Feature 04, §4a): the
  * domain is the union of every visible KPI's readings + dated targets (plus
  * today), snapped outward to whole quarters — so the plot scrolls only when the
- * range is genuinely wider than the viewport. Sparklines of recorded readings,
+ * range is genuinely wider than the viewport. A narrower range is padded with
+ * future quarters so the plot fills the viewport. Sparklines of recorded readings,
  * target markers (the source issue's type icon, tinted gray/green/red for
  * upcoming/hit/missed), drill-in to source issues, and a record-value modal.
  * The plot primitives (axis, sparkline, markers, hover, modals) are shared with
@@ -120,8 +135,6 @@ export function Timeline({
     targetsError,
     retryTargets,
     error,
-    actionError,
-    clearActionError,
     record: recordValue,
     createKpi,
     searchIssues,
@@ -154,7 +167,15 @@ export function Timeline({
   const [projecting, setProjecting] = useState<{ node: TimelineNodeDto; target: TimelineTargetDto } | null>(
     null,
   );
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [measureScroll, scrollWidth] = useClientWidth<HTMLDivElement>();
+  const setScrollEl = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollRef.current = el;
+      measureScroll(el);
+    },
+    [measureScroll],
+  );
   const [siteUrl, setSiteUrl] = useState('');
 
   // Site base URL for absolute /browse links (so hover/middle-click/copy don't
@@ -186,7 +207,8 @@ export function Timeline({
 
   // Fit-to-data-range date axis (Feature 04, §4a): the domain is the union of
   // every visible KPI's readings + dated targets (always including today),
-  // snapped outward to whole quarters. Built from the project-filtered tree (not
+  // snapped outward to whole quarters, then padded with future quarters to fill
+  // the visible plot width. Built from the project-filtered tree (not
   // collapse state) so expanding/collapsing rows never reflows the axis.
   const axis = useMemo(() => {
     const today = data?.today ?? new Date().toISOString().slice(0, 10);
@@ -198,8 +220,8 @@ export function Timeline({
       }
     };
     walk(filteredRoots);
-    return buildAxis(dates, today);
-  }, [data, filteredRoots]);
+    return buildAxis(dates, today, { minWidth: scrollWidth - PAD_R });
+  }, [data, filteredRoots, scrollWidth]);
 
   // Scroll behavior (spec 06 P4). Once per page load, open with the current
   // quarter at the left edge (the previous one during its first month). After
@@ -249,6 +271,11 @@ export function Timeline({
     return options;
   }, [data]);
 
+  // Key bar (spec 08): counts follow the project filter and include collapsed
+  // descendants, so expanding/collapsing rows never changes them.
+  const keySummary = useMemo(() => summarizeKey(flattenNodes(filteredRoots)), [filteredRoots]);
+  const highlight = useKeyHighlight(keySummary);
+
   const toggleCollapse = (id: string) =>
     setCollapsed((s) => {
       const next = new Set(s);
@@ -257,14 +284,14 @@ export function Timeline({
       return next;
     });
 
-  const record = (kpiId: string, date: string, value: number | null) => {
-    recordValue(kpiId, date, value);
+  const record = async (kpiId: string, date: string, value: number | null) => {
+    await recordValue(kpiId, date, value);
     setAdding(null);
     setEditing(null);
   };
 
-  const submitTarget = (input: AddTargetInput) => {
-    addTarget(input);
+  const submitTarget = async (input: AddTargetInput) => {
+    await addTarget(input);
     setAddingTarget(null);
   };
 
@@ -314,124 +341,120 @@ export function Timeline({
 
       {targetsError && <TargetsErrorBanner message={targetsError} onRetry={retryTargets} />}
 
-      {actionError && (
-        <ActionErrorBanner
-          error={actionError}
-          onDismiss={clearActionError}
-          onOpenSettings={onOpenSettings}
-        />
-      )}
-
-      <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
-        <div className="flex">
-          {/* Fixed label column — the KPI names. Deliberately OUTSIDE the scroll
-              container so only the quarter columns scroll horizontally. */}
-          <div className="flex-none" style={{ width: LABEL_W }}>
-            <div
-              className="flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-              style={{ height: HEADER_H }}
-            >
-              KPI
-            </div>
-            {flat.length === 0 ? (
-              <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
-                {data.roots.length === 0 ? (
-                  <>
-                    No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
-                    your first one.
-                  </>
-                ) : (
-                  <>
-                    No KPIs match the selected project filter — try{' '}
-                    <Button appearance="subtle" spacing="compact" onClick={() => setSelectedProjects(null)}>
-                      clearing it
-                    </Button>
-                    .
-                  </>
-                )}
-              </div>
-            ) : (
-              flat.map(({ node, hasChildren }) => (
-                <TimelineRowLabel
-                  key={node.id}
-                  node={node}
-                  hasChildren={hasChildren}
-                  collapsed={collapsed.has(node.id)}
-                  onToggleCollapse={() => toggleCollapse(node.id)}
-                  onRecord={() => setAdding({ node, date: data.today })}
-                  onAddTarget={() => setAddingTarget({ node, date: data.today })}
-                  onAddChild={() =>
-                    setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
-                  }
-                  onOpenIssue={onOpenIssue}
-                  siteUrl={siteUrl}
-                />
-              ))
-            )}
-          </div>
-
-          {/* Scrolling plot column — only the quarter columns pan horizontally. */}
-          <div ref={scrollRef} className="min-w-0 flex-1 overflow-x-auto">
-            <div style={{ width: axis.plotWidth + PAD_R }}>
-              {/* Header row: quarter labels */}
+      <KeyHighlightProvider active={highlight.active}>
+        <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
+          <PlotKey summary={keySummary} highlight={highlight} className="border-b border-border" />
+          <div className="flex">
+            {/* Fixed label column — the KPI names. Deliberately OUTSIDE the scroll
+                container so only the quarter columns scroll horizontally. */}
+            <div className="flex-none" style={{ width: LABEL_W }}>
               <div
-                className="relative border-b border-border bg-surface-sunken"
+                className="flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
                 style={{ height: HEADER_H }}
               >
-                {axis.quarters.map((q) => (
-                  <div
-                    key={q.startMs}
-                    className="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                    style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
-                  >
-                    {q.label}
-                  </div>
+                KPI
+              </div>
+              {flat.length === 0 ? (
+                <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
+                  {data.roots.length === 0 ? (
+                    <>
+                      No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
+                      your first one.
+                    </>
+                  ) : (
+                    <>
+                      No KPIs match the selected project filter — try{' '}
+                      <Button appearance="subtle" spacing="compact" onClick={() => setSelectedProjects(null)}>
+                        clearing it
+                      </Button>
+                      .
+                    </>
+                  )}
+                </div>
+              ) : (
+                flat.map(({ node, hasChildren }) => (
+                  <TimelineRowLabel
+                    key={node.id}
+                    node={node}
+                    hasChildren={hasChildren}
+                    collapsed={collapsed.has(node.id)}
+                    onToggleCollapse={() => toggleCollapse(node.id)}
+                    onRecord={() => setAdding({ node, date: data.today })}
+                    onAddTarget={() => setAddingTarget({ node, date: data.today })}
+                    onAddChild={() =>
+                      setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
+                    }
+                    onOpenIssue={onOpenIssue}
+                    siteUrl={siteUrl}
+                  />
+                ))
+              )}
+            </div>
+
+            {/* Scrolling plot column — only the quarter columns pan horizontally. */}
+            <div ref={setScrollEl} className="min-w-0 flex-1 overflow-x-auto">
+              <div style={{ width: axis.plotWidth + PAD_R }}>
+                {/* Header row: quarter labels (clipped — the last, viewport-filling
+                    quarter may be only partly visible) */}
+                <div
+                  className="relative overflow-hidden border-b border-border bg-surface-sunken"
+                  style={{ height: HEADER_H }}
+                >
+                  {axis.quarters.map((q) => (
+                    <div
+                      key={q.startMs}
+                      className="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                      style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
+                    >
+                      {q.label}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Data rows */}
+                {flat.map(({ node }) => (
+                  <TimelineRowTrack
+                    key={node.id}
+                    node={node}
+                    axis={axis}
+                    today={data.today}
+                    onAddValue={(date) => setAdding({ node, date })}
+                    onAddTarget={(date) => setAddingTarget({ node, date })}
+                    onEditReading={(reading) => setEditing({ node, reading })}
+                    onOpenIssueNewTab={onOpenIssueNewTab}
+                    siteUrl={siteUrl}
+                  />
                 ))}
               </div>
-
-              {/* Data rows */}
-              {flat.map(({ node }) => (
-                <TimelineRowTrack
-                  key={node.id}
-                  node={node}
-                  axis={axis}
-                  today={data.today}
-                  onAddValue={(date) => setAdding({ node, date })}
-                  onAddTarget={(date) => setAddingTarget({ node, date })}
-                  onEditReading={(reading) => setEditing({ node, reading })}
-                  onOpenIssueNewTab={onOpenIssueNewTab}
-                  siteUrl={siteUrl}
-                />
-              ))}
             </div>
-          </div>
 
-          {/* Right-pinned "Undated" lane — pending targets that can't sit on the
-              dated axis. Deliberately OUTSIDE the scroll container (Q10).
-              Hidden entirely when no KPI has an undated target. */}
-          {hasUndated && (
-            <div className="flex-none border-l border-border" style={{ width: UNDATED_W }}>
-              <div
-                className="flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                style={{ height: HEADER_H }}
-              >
-                Undated
+            {/* Right-pinned "Undated" lane — pending targets that can't sit on the
+                dated axis. Deliberately OUTSIDE the scroll container (Q10).
+                Hidden entirely when no KPI has an undated target. */}
+            {hasUndated && (
+              <div className="flex-none border-l border-border" style={{ width: UNDATED_W }}>
+                <div
+                  className="flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                  style={{ height: HEADER_H }}
+                >
+                  Undated
+                </div>
+                {flat.map(({ node }) => (
+                  <UndatedLane
+                    key={node.id}
+                    node={node}
+                    onOpenProjection={(target) => setProjecting({ node, target })}
+                  />
+                ))}
               </div>
-              {flat.map(({ node }) => (
-                <UndatedLane
-                  key={node.id}
-                  node={node}
-                  onOpenProjection={(target) => setProjecting({ node, target })}
-                />
-              ))}
-            </div>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      </KeyHighlightProvider>
 
       <p className="mt-3 text-xs text-text-subtle">
-        Target markers show the source issue's icon · the red line is today · green = hit, red =
-        missed, gray = upcoming · click a recorded value to edit or delete it.
+        <span className="font-semibold">Tip:</span> click a past date to record a value · click a
+        future date to add a target · click a value to edit it · click a target to open its issue.
       </p>
 
       <ModalTransition>
@@ -464,8 +487,9 @@ export function Timeline({
             presetParent={creating.presetParent}
             kpiOptions={kpiOptions}
             onCancel={() => setCreating(null)}
-            onCreate={(input) => {
-              createKpi(input);
+            onOpenSettings={onOpenSettings}
+            onCreate={async (input) => {
+              await createKpi(input);
               setCreating(null);
             }}
           />
@@ -478,6 +502,7 @@ export function Timeline({
             node={addingTarget.node}
             defaultDate={addingTarget.date}
             searchIssues={searchIssues}
+            onOpenSettings={onOpenSettings}
             onCancel={() => setAddingTarget(null)}
             onAdd={(issue, date, value) =>
               submitTarget({
@@ -634,7 +659,9 @@ function TimelineRowLabel({
         )}
       </div>
       <div className="flex items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP + 24 }}>
-        <span className="flex-none text-xs text-text-subtle">{node.unit}</span>
+        <span className="flex-none text-xs text-text-subtle" title={node.unit ? undefined : 'No unit'}>
+          {node.unit || '—'}
+        </span>
         {node.direction && (
           <span
             className={`flex-none ${node.direction === 'increase' ? 'text-success' : 'text-danger'}`}
@@ -707,7 +734,7 @@ function TimelineRowTrack({
   siteUrl: string;
 }) {
   const plotH = ROW_H;
-  // Timeline band scale: squeeze the value domain into 20–80% of the short row,
+  // Timeline band scale: squeeze the value domain into 25–75% of the short row,
   // no ticks/labels (the KPI View uses `niceScale` instead — see @ui/plot). It
   // glides to the wider range when the row's targets arrive (`settled` = done).
   const { yOf, settled } = useBandScale(node, plotH);
@@ -768,10 +795,10 @@ function TimelineRowTrack({
           style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
         />
       ))}
-      {/* today line */}
+      {/* today line — solid brand blue (red is reserved for "missed") */}
       <div
-        className="absolute top-0 bottom-0 w-0 border-l border-dashed border-danger opacity-80"
-        style={{ left: todayX }}
+        className="absolute top-0 bottom-0 w-0 border-l-2 border-brand opacity-60"
+        style={{ left: todayX - 1 }}
       />
 
       {/* sparkline */}
@@ -829,15 +856,16 @@ function UndatedLane({
       style={{ height: ROW_H }}
     >
       {node.undated.map((t, i) => (
-        <Tooltip
-          key={i}
-          content={`Projected ${t.provisional ? '≈ ' : ''}${fmtVal(t.value)} ${node.unit} · date TBD — click for details`}
-        >
-          <Button spacing="compact" onClick={() => onOpenProjection(t)}>
-            {t.provisional ? '≈ ' : ''}
-            {fmtVal(t.value)}
-          </Button>
-        </Tooltip>
+        <Dimmable key={i} kinds={undatedKeyKinds(t)}>
+          <Tooltip
+            content={`Projected ${t.provisional ? '≈ ' : ''}${fmtVal(t.value)} ${node.unit} · date TBD — click for details`}
+          >
+            <Button spacing="compact" onClick={() => onOpenProjection(t)}>
+              {t.provisional ? '≈ ' : ''}
+              {fmtVal(t.value)}
+            </Button>
+          </Tooltip>
+        </Dimmable>
       ))}
     </div>
   );
@@ -949,31 +977,43 @@ function CreateKpiModal({
   kpiOptions,
   onCancel,
   onCreate,
+  onOpenSettings,
 }: {
   /** Fixed parent from the row-level "add child" (⤵) trigger — no picker shown. */
   presetParent: { kpiId: string; name: string } | null;
   /** Every existing KPI, for the optional parent picker (only used when `presetParent` is null). */
   kpiOptions: KpiParentOption[];
   onCancel: () => void;
-  onCreate: (input: CreateKpiInput) => void;
+  /** Resolves once the KPI is saved; rejects with the failure (shown in the modal). */
+  onCreate: (input: CreateKpiInput) => Promise<void>;
+  onOpenSettings: () => void | Promise<void>;
 }) {
+  const { saving, error, clearError, run } = useModalSave();
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('');
   const [direction, setDirection] = useState<DirectionOption>(DIRECTION_OPTIONS[0]);
   const [parent, setParent] = useState<KpiParentOption | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const submit = () => {
-    if (name.trim() === '') return;
-    onCreate({
-      name: name.trim(),
-      unit: unit.trim(),
-      direction: direction.value === 'none' ? null : direction.value,
-      parentKpiId: presetParent ? presetParent.kpiId : (parent?.kpiId ?? null),
-    });
+    if (name.trim() === '' || saving) return;
+    void run(() =>
+      onCreate({
+        name: name.trim(),
+        unit: unit.trim(),
+        direction: direction.value === 'none' ? null : direction.value,
+        parentKpiId: presetParent ? presetParent.kpiId : (parent?.kpiId ?? null),
+      }),
+    );
   };
 
   return (
-    <Modal onClose={onCancel} width={380} autoFocus={nameRef}>
+    <Modal
+      onClose={onCancel}
+      width={380}
+      autoFocus={nameRef}
+      shouldCloseOnEscapePress={!saving}
+      shouldCloseOnOverlayClick={!saving}
+    >
       <ModalHeader>
         <ModalTitle>New KPI</ModalTitle>
       </ModalHeader>
@@ -987,6 +1027,15 @@ function CreateKpiModal({
             'A new top-level KPI, or choose a parent below'
           )}
         </ModalSubtitle>
+        {error !== null && (
+          <div className="-mt-2 mb-4">
+            <ActionErrorBanner
+              error={toActionError(error)}
+              onDismiss={clearError}
+              onOpenSettings={onOpenSettings}
+            />
+          </div>
+        )}
         <div className="flex flex-col gap-3">
           <ModalField label="Name" htmlFor="kpi-name">
             <Textfield
@@ -995,6 +1044,7 @@ function CreateKpiModal({
               value={name}
               placeholder="e.g. Revenue"
               aria-label="KPI name"
+              isDisabled={saving}
               onChange={(e: FormEvent<HTMLInputElement>) => setName(e.currentTarget.value)}
             />
           </ModalField>
@@ -1004,6 +1054,7 @@ function CreateKpiModal({
               value={unit}
               placeholder="e.g. USD"
               aria-label="KPI unit"
+              isDisabled={saving}
               onChange={(e: FormEvent<HTMLInputElement>) => setUnit(e.currentTarget.value)}
             />
           </ModalField>
@@ -1014,6 +1065,7 @@ function CreateKpiModal({
               options={DIRECTION_OPTIONS}
               value={direction}
               isSearchable={false}
+              isDisabled={saving}
               {...MODAL_MENU_PROPS}
               onChange={(o) => o && setDirection(o)}
             />
@@ -1027,16 +1079,26 @@ function CreateKpiModal({
               }
               htmlFor="kpi-parent"
             >
-              <KpiParentSelect options={kpiOptions} value={parent} onChange={setParent} />
+              <KpiParentSelect
+                options={kpiOptions}
+                value={parent}
+                onChange={setParent}
+                isDisabled={saving}
+              />
             </ModalField>
           )}
         </div>
       </ModalBody>
       <ModalFooter>
-        <Button appearance="subtle" onClick={onCancel}>
+        <Button appearance="subtle" onClick={onCancel} isDisabled={saving}>
           Cancel
         </Button>
-        <Button appearance="primary" onClick={submit} isDisabled={name.trim() === ''}>
+        <Button
+          appearance="primary"
+          onClick={submit}
+          isDisabled={name.trim() === ''}
+          isLoading={saving}
+        >
           Create KPI
         </Button>
       </ModalFooter>
@@ -1053,10 +1115,12 @@ function KpiParentSelect({
   options,
   value,
   onChange,
+  isDisabled = false,
 }: {
   options: KpiParentOption[];
   value: KpiParentOption | null;
   onChange: (option: KpiParentOption | null) => void;
+  isDisabled?: boolean;
 }) {
   return (
     <Select<KpiParentOption>
@@ -1066,6 +1130,7 @@ function KpiParentSelect({
       options={options}
       value={value}
       isClearable
+      isDisabled={isDisabled}
       {...MODAL_MENU_PROPS}
       components={{ ClearIndicator }}
       getOptionValue={(o) => o.kpiId}
@@ -1090,13 +1155,17 @@ function AddTargetModal({
   searchIssues,
   onCancel,
   onAdd,
+  onOpenSettings,
 }: {
   node: TimelineNodeDto;
   defaultDate: string;
   searchIssues: (query: string) => Promise<IssuePickerItem[]>;
   onCancel: () => void;
-  onAdd: (issue: IssuePickerItem, date: string, value: number) => void;
+  /** Resolves once the target is saved; rejects with the failure (shown in the modal). */
+  onAdd: (issue: IssuePickerItem, date: string, value: number) => Promise<void>;
+  onOpenSettings: () => void | Promise<void>;
 }) {
+  const { saving, error, clearError, run } = useModalSave();
   const [date, setDate] = useState(defaultDate);
   const [value, setValue] = useState('');
   const [issue, setIssue] = useState<IssuePickerItem | null>(null);
@@ -1116,18 +1185,32 @@ function AddTargetModal({
     !Number.isNaN(num);
 
   const submit = () => {
-    if (valid && issue) onAdd(issue, date, num);
+    if (valid && issue && !saving) void run(() => onAdd(issue, date, num));
   };
 
   return (
-    <Modal onClose={onCancel} width={420}>
+    <Modal
+      onClose={onCancel}
+      width={420}
+      shouldCloseOnEscapePress={!saving}
+      shouldCloseOnOverlayClick={!saving}
+    >
       <ModalHeader>
         <ModalTitle>Add target</ModalTitle>
       </ModalHeader>
       <ModalBody>
         <ModalSubtitle>
-          {node.name} · {node.unit}
+          {node.name} · {node.unit || '—'}
         </ModalSubtitle>
+        {error !== null && (
+          <div className="-mt-2 mb-4">
+            <ActionErrorBanner
+              error={toActionError(error)}
+              onDismiss={clearError}
+              onOpenSettings={onOpenSettings}
+            />
+          </div>
+        )}
         <div className="flex flex-col gap-3">
           <ModalField label="Issue" htmlFor="target-issue">
             <IssueSelect
@@ -1135,6 +1218,7 @@ function AddTargetModal({
               value={issue}
               onChange={setIssue}
               excludedKeys={excludedKeys}
+              isDisabled={saving}
             />
           </ModalField>
           <ModalField label="Date" htmlFor="target-date">
@@ -1142,6 +1226,7 @@ function AddTargetModal({
               id="target-date"
               type="date"
               value={date}
+              isDisabled={saving}
               onChange={(e: FormEvent<HTMLInputElement>) => setDate(e.currentTarget.value)}
             />
           </ModalField>
@@ -1151,16 +1236,17 @@ function AddTargetModal({
               value={value}
               placeholder="e.g. 1,300,000"
               aria-label="Target value"
+              isDisabled={saving}
               onChange={(e: FormEvent<HTMLInputElement>) => setValue(e.currentTarget.value)}
             />
           </ModalField>
         </div>
       </ModalBody>
       <ModalFooter>
-        <Button appearance="subtle" onClick={onCancel}>
+        <Button appearance="subtle" onClick={onCancel} isDisabled={saving}>
           Cancel
         </Button>
-        <Button appearance="primary" onClick={submit} isDisabled={!valid}>
+        <Button appearance="primary" onClick={submit} isDisabled={!valid} isLoading={saving}>
           Add target
         </Button>
       </ModalFooter>
@@ -1178,10 +1264,12 @@ function IssueSelect({
   value,
   onChange,
   excludedKeys,
+  isDisabled = false,
 }: {
   searchIssues: (query: string) => Promise<IssuePickerItem[]>;
   value: IssuePickerItem | null;
   onChange: (item: IssuePickerItem | null) => void;
+  isDisabled?: boolean;
   /** issue keys that already have a target for this KPI — shown but not selectable */
   excludedKeys?: ReadonlySet<string>;
 }) {
@@ -1209,6 +1297,7 @@ function IssueSelect({
       autoFocus
       openMenuOnFocus
       isClearable
+      isDisabled={isDisabled}
       {...MODAL_MENU_PROPS}
       components={{ ClearIndicator }}
       filterOption={null}

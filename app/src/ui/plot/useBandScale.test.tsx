@@ -24,7 +24,7 @@ const node = (over: Partial<TimelineNodeDto> = {}): TimelineNodeDto => ({
 const withTarget = (over: Partial<TimelineNodeDto> = {}) =>
   node({
     targets: [
-      { date: '2026-12-31', value: 1000, status: 'upcoming', provisional: false, source: { issue: 'A-1', type: 'Epic', title: 't' } },
+      { date: '2026-12-31', value: 1000, status: 'upcoming', provisional: false, relative: false, source: { issue: 'A-1', type: 'Epic', title: 't' } },
     ],
     ...over,
   });
