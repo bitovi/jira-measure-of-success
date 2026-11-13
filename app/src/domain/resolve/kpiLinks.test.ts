@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   breakParentCycles,
-  describeParentEnd,
+  defaultParentEnd,
+  findAppLinkType,
   isDirectionalLinkType,
   kpiParentLinkBody,
+  linkLabelsForParentEnd,
   parentFromIssueLinks,
   type IssueLinkRef,
 } from './kpiLinks';
@@ -79,15 +81,16 @@ describe('kpiParentLinkBody', () => {
   });
 });
 
-describe('isDirectionalLinkType / describeParentEnd', () => {
+describe('isDirectionalLinkType / linkLabelsForParentEnd', () => {
   it('rejects symmetric types like Relates', () => {
     expect(isDirectionalLinkType({ inward: 'relates to', outward: 'relates to' })).toBe(false);
     expect(isDirectionalLinkType({ inward: 'is blocked by', outward: 'blocks' })).toBe(true);
   });
 
-  it('phrases each end with the outward label', () => {
-    expect(describeParentEnd({ outward: 'blocks' }, 'inward')).toBe('Parent blocks child');
-    expect(describeParentEnd({ outward: 'blocks' }, 'outward')).toBe('Child blocks parent');
+  it('names the label Jira shows on the parent and on the child', () => {
+    const blocks = { inward: 'is blocked by', outward: 'blocks' };
+    expect(linkLabelsForParentEnd(blocks, 'inward')).toEqual({ parent: 'blocks', child: 'is blocked by' });
+    expect(linkLabelsForParentEnd(blocks, 'outward')).toEqual({ parent: 'is blocked by', child: 'blocks' });
   });
 });
 
@@ -125,5 +128,19 @@ describe('breakParentCycles', () => {
       { id: 'b', parentId: 'a' },
     ];
     expect(ids(breakParentCycles(two))).toEqual({ a: null, b: 'a' });
+  });
+});
+
+describe('defaultParentEnd / findAppLinkType', () => {
+  it('puts the parent on the inward end of the app type, or outward when its labels are reversed', () => {
+    expect(defaultParentEnd({ outward: 'is the parent KPI of' })).toBe('inward');
+    expect(defaultParentEnd({ outward: ' Is a child KPI of ' })).toBe('outward');
+    expect(defaultParentEnd(null)).toBe('inward');
+  });
+
+  it('finds the app type by name, case-insensitively', () => {
+    const types = [{ id: '1', name: 'Blocks' }, { id: '2', name: 'kpi hierarchy' }];
+    expect(findAppLinkType(types)).toEqual({ id: '2', name: 'kpi hierarchy' });
+    expect(findAppLinkType([{ id: '1', name: 'Blocks' }])).toBeNull();
   });
 });

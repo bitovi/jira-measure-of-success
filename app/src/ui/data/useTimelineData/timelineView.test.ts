@@ -121,7 +121,8 @@ describe('deriveTimelineView', () => {
   });
 
   describe('values recorded this session', () => {
-    // Target 150 due 2026-06-30 (past): missed on the loaded 100 reading.
+    // Target 150 due 2026-06-30 (past). The loaded 100 reading is from before that date, so
+    // it can't be judged yet; a value recorded on the date judges it.
     const pastTarget = {
       'KPI-1': [
         {
@@ -136,13 +137,13 @@ describe('deriveTimelineView', () => {
 
     it('appear in the series, and the targets are re-classified against them', () => {
       expect(deriveTimelineView({ ...none, skeleton, contributions: pastTarget }).data?.roots[0].targets[0].status).toBe(
-        'missed',
+        'upcoming',
       );
       const v = deriveTimelineView({
         ...none,
         skeleton,
         contributions: pastTarget,
-        readingEdits: [{ kpiId: 'KPI-1', date: '2026-06-15', value: 160 }],
+        readingEdits: [{ kpiId: 'KPI-1', date: '2026-06-30', value: 160 }],
       });
       expect(v.data?.roots[0].readings.map((r) => r.value)).toEqual([100, 160]);
       expect(v.data?.roots[0].targets[0].status).toBe('hit');

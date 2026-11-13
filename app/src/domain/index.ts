@@ -23,4 +23,5 @@ export * from './resolve/readingSeries';
 export * from './resolve/projectKey';
 export * from './resolve/timelineProjectFilter';
 export * from './resolve/kpiLinks';
+export * from './resolve/kpiAccess';
 export * from './contracts';

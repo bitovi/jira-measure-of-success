@@ -4,8 +4,10 @@ import Lozenge from '@atlaskit/lozenge';
 import Select from '@atlaskit/select';
 import {
   DEFAULT_KPI_LINK_TYPE,
-  describeParentEnd,
+  defaultParentEnd,
+  findAppLinkType,
   isDirectionalLinkType,
+  linkLabelsForParentEnd,
   type IssueLinkTypeInfo,
   type KpiHierarchyStatus,
   type KpiParentEnd,
@@ -31,10 +33,24 @@ const BADGE: Record<
 type TypeOption = { label: string; value: string; type: IssueLinkTypeInfo };
 type EndOption = { label: string; value: KpiParentEnd };
 
+// Each option names the label the parent KPI's end of the link carries. Spelling
+// the choice as a sentence ("Parent blocks child") reads as nonsense for types
+// whose labels are themselves "Parent" / "Child".
 const endOptions = (type: IssueLinkTypeInfo): EndOption[] => [
-  { label: describeParentEnd(type, 'inward'), value: 'inward' },
-  { label: describeParentEnd(type, 'outward'), value: 'outward' },
+  { label: `“${linkLabelsForParentEnd(type, 'inward').parent}”`, value: 'inward' },
+  { label: `“${linkLabelsForParentEnd(type, 'outward').parent}”`, value: 'outward' },
 ];
+
+/** How Jira's "Linked issues" panel will show the nesting, e.g. children under “blocks”, parent under “is blocked by”. */
+function JiraListing({ type, parentEnd }: { type: IssueLinkTypeInfo; parentEnd: KpiParentEnd }) {
+  const labels = linkLabelsForParentEnd(type, parentEnd);
+  return (
+    <>
+      In Jira, a KPI lists its children under <strong className="text-text">“{labels.parent}”</strong> and its
+      parent under <strong className="text-text">“{labels.child}”</strong>.
+    </>
+  );
+}
 
 const isAppType = (type: IssueLinkTypeInfo) => type.name.toLowerCase() === DEFAULT_KPI_LINK_TYPE.name.toLowerCase();
 
@@ -53,7 +69,8 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
   const [type, setType] = useState<IssueLinkTypeInfo | null>(initialType);
   const [parentEnd, setParentEnd] = useState<KpiParentEnd>(hierarchy.parentEnd);
   const badge = BADGE[hierarchy.state];
-  const appTypeExists = hierarchy.available.some(isAppType);
+  const appType = findAppLinkType(hierarchy.available);
+  const appTypeExists = appType !== null;
 
   const run = async (which: 'create' | 'save') => {
     setBusy(which);
@@ -84,6 +101,18 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
   const unchanged =
     hierarchy.state === 'ready' && type?.id === hierarchy.linkTypeId && parentEnd === hierarchy.parentEnd;
 
+  // What the "Use / Create KPI Hierarchy" button applies (the resolver's
+  // provisionDefaultHierarchy): the app type, with the direction its labels imply.
+  const defaultEnd = defaultParentEnd(appType);
+  const defaultIsCurrent =
+    hierarchy.state === 'ready' && appType !== null && appType.id === hierarchy.linkTypeId && defaultEnd === hierarchy.parentEnd;
+  const defaultWarning =
+    hierarchy.state !== 'ready' || defaultIsCurrent
+      ? null
+      : appType !== null && appType.id === hierarchy.linkTypeId
+        ? `This button also resets the direction: KPIs already nested will be read the other way round — parents become children.`
+        : `Switching to “${DEFAULT_KPI_LINK_TYPE.name}”: KPIs already nested with ${hierarchy.linkType?.name} links will lose their nesting.`;
+
   return (
     <section className="mt-6 rounded-lg border border-border bg-surface">
       <header className="flex items-center gap-2 border-b border-border px-5 py-3">
@@ -94,8 +123,8 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
         {hierarchy.state === 'ready' && hierarchy.linkType && !editing && (
           <div className="flex flex-wrap items-center gap-3 text-sm">
             <span className="text-text-subtle">
-              KPIs nest with <strong className="text-text">{hierarchy.linkType.name}</strong> links —{' '}
-              <span className="text-text">“{describeParentEnd(hierarchy.linkType, hierarchy.parentEnd)}”</span>.
+              KPIs nest with <strong className="text-text">{hierarchy.linkType.name}</strong> links.{' '}
+              <JiraListing type={hierarchy.linkType} parentEnd={hierarchy.parentEnd} />
             </span>
             <Button spacing="compact" onClick={() => setEditing(true)}>
               Change
@@ -128,7 +157,7 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
                 <Button
                   appearance="primary"
                   onClick={() => run('create')}
-                  isDisabled={busy !== null}
+                  isDisabled={busy !== null || defaultIsCurrent}
                   isLoading={busy === 'create'}
                 >
                   {appTypeExists
@@ -138,7 +167,9 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
               </div>
               <span className="text-xs text-text-subtle">
                 Reads “Revenue {DEFAULT_KPI_LINK_TYPE.outward} New Bookings” in Jira. Recommended.
+                {defaultIsCurrent && ' Already in use.'}
               </span>
+              {defaultWarning && <p className="mt-1 text-xs text-warning">{defaultWarning}</p>}
             </div>
 
             <div className="mt-5 border-t border-border pt-4">
@@ -160,10 +191,10 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
                   />
                 </label>
                 <label className="flex w-64 flex-col gap-1 text-sm">
-                  <span className="font-medium">Direction</span>
+                  <span className="font-medium">Parent KPI’s side</span>
                   <Select<EndOption>
                     inputId="kpi-hierarchy-end"
-                    aria-label="Direction"
+                    aria-label="Parent KPI’s side"
                     isSearchable={false}
                     options={type ? endOptions(type) : []}
                     value={type ? endOptions(type).find((o) => o.value === parentEnd) : null}
@@ -185,10 +216,15 @@ export function KpiHierarchyCard({ hierarchy, onSave, onCreate }: KpiHierarchyCa
                   </Button>
                 )}
               </div>
-              {type && !isAppType(type) && (
+              {type && (
                 <p className="mt-2 text-xs text-text-subtle">
-                  Every <strong className="text-text">{type.name}</strong> link between two KPIs will be read as
-                  nesting, and Jira will show it as “{type.outward}”.
+                  {!isAppType(type) && (
+                    <>
+                      Every <strong className="text-text">{type.name}</strong> link between two KPIs will be read as
+                      nesting.{' '}
+                    </>
+                  )}
+                  <JiraListing type={type} parentEnd={parentEnd} />
                 </p>
               )}
               {hierarchy.state === 'ready' && !unchanged && type && (

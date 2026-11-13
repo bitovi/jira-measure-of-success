@@ -19,14 +19,12 @@ import type { Trace } from './requestLog';
 const h = vi.hoisted(() => ({ jira: null as MockJira | null, routes: [] as string[] }));
 
 vi.mock('@forge/api', async () => {
-  const { forgeRouteHelpers } = await import('./testing/scaleFixture');
-  const requester = {
-    requestJira: (route: unknown, init?: { method?: string; body?: unknown }) => {
-      h.routes.push(decodeURIComponent(String((route as { value: string }).value)));
-      return h.jira!.requestJira(route, init);
-    },
-  };
-  return { default: { asUser: () => requester, asApp: () => requester }, ...forgeRouteHelpers };
+  const { forgeRouteHelpers, mockForgeApi } = await import('./testing/scaleFixture');
+  const api = mockForgeApi(
+    () => h.jira!,
+    (route) => h.routes.push(decodeURIComponent(String((route as { value: string }).value))),
+  );
+  return { default: api, ...forgeRouteHelpers };
 });
 
 vi.mock('@forge/kvs', () => ({

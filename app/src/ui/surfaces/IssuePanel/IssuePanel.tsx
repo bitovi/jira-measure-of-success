@@ -6,6 +6,7 @@ import { usePanelData, type UsePanel } from '@ui/data/usePanelData/index.js';
 import { openKpiTimeline } from '@ui/bridge.js';
 import { RecordModal } from '@ui/plot/modals.js';
 import { KpiView } from '@ui/surfaces/KpiView/index.js';
+import { kpiPermissionMessage, kpiSpaceNoAccessMessage } from '@domain/index.js';
 import type { Assignment, CatalogEntryDto, PanelRowDto } from '@domain/index.js';
 import { TargetCard } from './components/TargetCard/index.js';
 import { TargetEditor } from './components/TargetEditor/index.js';
@@ -81,7 +82,12 @@ export function IssuePanel({
     return (
       <>
         {actionBanner && <div className="px-4 pt-4">{actionBanner}</div>}
-        <KpiView node={data.kpiView.node} today={data.kpiView.today} onRecord={record} />
+        <KpiView
+          node={data.kpiView.node}
+          today={data.kpiView.today}
+          onRecord={record}
+          recordBlocked={data.access && !data.access.edit ? kpiPermissionMessage('record') : null}
+        />
       </>
     );
   }
@@ -89,6 +95,9 @@ export function IssuePanel({
   const tracked = data.rows.filter((r) => r.relationship !== 'onParentNotTracked');
   const isEmpty = tracked.length === 0;
   const noCatalog = data.catalog.length === 0;
+  // Spec 10: no Browse on the KPI space — explain that instead of "define a KPI".
+  const noBrowse = data.access?.browse === false;
+  const recordBlocked = data.access && !data.access.edit ? kpiPermissionMessage('record') : null;
   const currentValueOf = (kpiId: string) => data.catalog.find((c) => c.id === kpiId)?.currentValue ?? null;
   const today = localToday();
 
@@ -126,6 +135,7 @@ export function IssuePanel({
                   onSave={(draft) => save(buildAssignment(row.kpiId, draft, row.start))}
                   onRemove={() => remove(row.kpiId)}
                   onRecord={() => setRecordFor(row)}
+                  recordBlocked={recordBlocked}
                 />
               ),
             )}
@@ -133,7 +143,11 @@ export function IssuePanel({
         </section>
       ))}
 
-      {noCatalog ? (
+      {noBrowse ? (
+        <p role="status" className="rounded border border-dashed border-border p-3 text-sm text-text-subtle">
+          {kpiSpaceNoAccessMessage()}
+        </p>
+      ) : noCatalog ? (
         <p className="rounded border border-dashed border-border p-3 text-sm text-text-subtle">
           KPIs are not defined yet. You must first{' '}
           <Button appearance="default" spacing="compact" onClick={() => void openKpiTimeline()}>

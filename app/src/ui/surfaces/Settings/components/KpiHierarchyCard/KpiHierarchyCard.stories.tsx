@@ -13,6 +13,8 @@ const KPI_HIER: IssueLinkTypeInfo = {
   inward: 'is a child KPI of',
   outward: 'is the parent KPI of',
 };
+/** Jira's "Parent" type: its labels are themselves "Parent" / "Child". */
+const PARENT: IssueLinkTypeInfo = { id: '10600', name: 'Parent', inward: 'Child', outward: 'Parent' };
 /** Jira Cloud's out-of-the-box link types. */
 const STOCK = [BLOCKS, CLONERS, DUPLICATE, RELATES];
 
@@ -54,7 +56,7 @@ export const Ready: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     await expect(c.getByText('Connected')).toBeInTheDocument();
-    await expect(c.getByText('“Parent is the parent KPI of child”')).toBeInTheDocument();
+    await expect(canvasElement).toHaveTextContent('In Jira, a KPI lists its children under “is the parent KPI of” and its parent under “is a child KPI of”.');
     await expect(c.queryByRole('button', { name: /Create/ })).not.toBeInTheDocument();
   },
 };
@@ -63,7 +65,9 @@ export const Ready: Story = {
 export const ReadyWithBlocks: Story = {
   args: { hierarchy: status({ state: 'ready', linkType: BLOCKS, linkTypeId: BLOCKS.id, parentEnd: 'outward' }) },
   play: async ({ canvasElement }) => {
-    await expect(within(canvasElement).getByText('“Child blocks parent”')).toBeInTheDocument();
+    await expect(canvasElement).toHaveTextContent(
+      'In Jira, a KPI lists its children under “is blocked by” and its parent under “blocks”.',
+    );
   },
 };
 
@@ -108,7 +112,7 @@ export const CreateInteraction: Story = {
 };
 
 const saveSpy = fn(async () => READY);
-/** Pick "Blocks", flip it to "Child blocks parent", save. Symmetric "Relates" isn't offered. */
+/** Pick "Blocks", put the parent on its “is blocked by” side, save. Symmetric "Relates" isn't offered. */
 export const UseExistingInteraction: Story = {
   args: { onSave: saveSpy },
   play: async ({ canvasElement }) => {
@@ -118,10 +122,28 @@ export const UseExistingInteraction: Story = {
     await expect(c.queryByText('Relates')).not.toBeInTheDocument();
     await userEvent.click(await c.findByText('Blocks'));
     await expect(c.getByText(/Every/)).toHaveTextContent('Every Blocks link between two KPIs will be read as nesting');
-    await userEvent.click(c.getByRole('combobox', { name: 'Direction' }));
-    await userEvent.click(await c.findByText('Child blocks parent'));
+    await userEvent.click(c.getByRole('combobox', { name: 'Parent KPI’s side' }));
+    await userEvent.click(await c.findByRole('option', { name: '“is blocked by”' }));
+    await expect(canvasElement).toHaveTextContent('a KPI lists its children under “is blocked by” and its parent under “blocks”');
     await userEvent.click(c.getByRole('button', { name: 'Use this link type' }));
     await waitFor(() => expect(saveSpy).toHaveBeenCalledWith({ linkTypeId: '10000', parentEnd: 'outward' }));
+  },
+};
+
+/**
+ * Jira's own "Parent" type labels its ends "Parent" / "Child", so the side picker
+ * offers those labels rather than a sentence like "Parent Parent child".
+ */
+export const ParentLinkTypeInteraction: Story = {
+  args: { hierarchy: status({ available: [...STOCK, PARENT] }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('combobox', { name: 'Link type' }));
+    await userEvent.click(await c.findByRole('option', { name: 'Parent' }));
+    await userEvent.click(c.getByRole('combobox', { name: 'Parent KPI’s side' }));
+    await expect(await c.findByRole('option', { name: '“Parent”' })).toBeInTheDocument();
+    await userEvent.click(await c.findByRole('option', { name: '“Child”' }));
+    await expect(canvasElement).toHaveTextContent('a KPI lists its children under “Child” and its parent under “Parent”');
   },
 };
 
@@ -136,7 +158,7 @@ export const ChangeInteraction: Story = {
     await userEvent.click(await c.findByText('Duplicate'));
     await expect(c.getByText(/will lose their nesting/)).toBeInTheDocument();
     await userEvent.click(c.getByRole('button', { name: 'Cancel' }));
-    await expect(c.getByText('“Parent is the parent KPI of child”')).toBeInTheDocument();
+    await expect(canvasElement).toHaveTextContent('In Jira, a KPI lists its children under “is the parent KPI of” and its parent under “is a child KPI of”.');
     // Cancel discards the abandoned pick
     await userEvent.click(c.getByRole('button', { name: 'Change' }));
     await expect(c.getByRole('button', { name: 'Use this link type' })).toBeDisabled();
@@ -150,8 +172,8 @@ export const FlipDirectionInteraction: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     await userEvent.click(c.getByRole('button', { name: 'Change' }));
-    await userEvent.click(c.getByRole('combobox', { name: 'Direction' }));
-    await userEvent.click(await c.findByText('Child is the parent KPI of parent'));
+    await userEvent.click(c.getByRole('combobox', { name: 'Parent KPI’s side' }));
+    await userEvent.click(await c.findByRole('option', { name: '“is a child KPI of”' }));
     await expect(c.getByText(/read the other way round/)).toBeInTheDocument();
     await expect(c.queryByText(/will lose their nesting/)).not.toBeInTheDocument();
   },
@@ -166,5 +188,49 @@ export const CreateError: Story = {
     const c = within(canvasElement);
     await userEvent.click(c.getByRole('button', { name: 'Create “KPI Hierarchy” link type' }));
     await expect(await c.findByText(/Jira 403/)).toBeInTheDocument();
+  },
+};
+
+/**
+ * The "Use “KPI Hierarchy”" button switches the configuration in one click, so
+ * it warns about what IT would change — not only what the picker would.
+ */
+export const DefaultButtonWarnsWhenSwitchingType: Story = {
+  args: {
+    hierarchy: status({ state: 'ready', linkType: BLOCKS, linkTypeId: BLOCKS.id, parentEnd: 'outward', available: [...STOCK, KPI_HIER] }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Change' }));
+    // the picker still shows the current (Blocks) setting, so it has nothing to warn about…
+    await expect(c.getByRole('button', { name: 'Use this link type' })).toBeDisabled();
+    // …but the default button would switch to KPI Hierarchy
+    await expect(c.getByRole('button', { name: 'Use “KPI Hierarchy” link type' })).toBeEnabled();
+    await expect(
+      c.getByText('Switching to “KPI Hierarchy”: KPIs already nested with Blocks links will lose their nesting.'),
+    ).toBeInTheDocument();
+  },
+};
+
+/** Already on KPI Hierarchy but the other way round: the default button would flip it back. */
+export const DefaultButtonWarnsWhenResettingDirection: Story = {
+  args: { hierarchy: { ...READY, parentEnd: 'outward' } },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Change' }));
+    await expect(c.getByText(/This button also resets the direction/)).toBeInTheDocument();
+    await expect(c.queryByText(/will lose their nesting/)).not.toBeInTheDocument();
+  },
+};
+
+/** Already using exactly what the default button applies: it's disabled, with no warning. */
+export const DefaultButtonAlreadyInUse: Story = {
+  args: { hierarchy: READY },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: 'Change' }));
+    await expect(c.getByRole('button', { name: 'Use “KPI Hierarchy” link type' })).toBeDisabled();
+    await expect(c.getByText(/Already in use/)).toBeInTheDocument();
+    await expect(c.queryByText(/This button also resets|Switching to/)).not.toBeInTheDocument();
   },
 };

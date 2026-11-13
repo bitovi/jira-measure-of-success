@@ -1,9 +1,8 @@
 import type { Assignment, IsoDate, KpiDirection } from '../models/index';
 import type { DatedValue } from './targetStatus';
-import { valueAt } from './targetStatus';
-import { resolveRelativeTargetValue, type ResolvedTargetValue } from './relativeTargetValue';
+import { isBaselineRelative, resolveRelativeTargetValue, type ResolvedTargetValue } from './relativeTargetValue';
 import type { StackStep } from './baseline';
-import { displayState, type DisplayState, type TargetWarning } from './displayState';
+import { displayState, resultReading, type DisplayState, type TargetWarning } from './displayState';
 import { freezeIfDone } from './freeze';
 
 /**
@@ -36,12 +35,13 @@ export interface ResolvedPanelTarget {
   displayState: DisplayState;
   warning: TargetWarning;
   frozen: boolean;
-  /** recorded value in effect at the target date (for met/missed/unknown rows) */
+  /** the reading the target is judged by (`resultReading`), for met/missed/unknown rows */
   actual: number | null;
 }
 
 export function resolvePanelTarget(input: PanelTargetInput): ResolvedPanelTarget {
   const { assignment, dueDate, targetDate, readings, direction, closed, today, steps } = input;
+  const fixedValue = !isBaselineRelative(assignment.targetType);
 
   const resolvedValue = resolveRelativeTargetValue(assignment, { dueDate, readings, steps });
   const { state, warning } = displayState({
@@ -52,9 +52,10 @@ export function resolvePanelTarget(input: PanelTargetInput): ResolvedPanelTarget
     readings,
     direction,
     target: resolvedValue.value,
+    fixedValue,
   });
   const frozen = freezeIfDone(assignment, { closed, dueDate, today, readings }) !== null;
-  const actual = targetDate !== null ? valueAt(readings, targetDate) : null;
+  const actual = targetDate !== null ? resultReading(readings, targetDate, dueDate, fixedValue).actual : null;
 
   return { resolvedValue, displayState: state, warning, frozen, actual };
 }

@@ -9,14 +9,17 @@ import {
   fetchChildren,
   fetchHierarchyLevels,
   fetchIconDataUrl,
+  fetchIsJiraAdmin,
   fetchIssueMeta,
   fetchKpiMeta,
+  fetchKpiSpaceAccess,
   fetchKpiSpaceIssues,
   fetchReadingChangelog,
   fetchSubtreeTimingNodes,
   fetchTargetContributions,
   findProjectByKey,
   writeAssignments,
+  writeReading,
   KPI_ISSUE_TYPE,
 } from '../src/backend/jira';
 import { DEFAULT_KPI_LINK_TYPE, type Assignment, type KpiHierarchyLink } from '../src/domain/index';
@@ -138,6 +141,15 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     await ensureKpiIssueTypeOnProject(ctx.projectId!);
     const project = await findProjectByKey(PROJECT_KEY);
     expect(project?.issueTypeNames).toContain(KPI_ISSUE_TYPE);
+  });
+
+  it('fetchKpiSpaceAccess → the token user (project lead) has full access to the space it created', async () => {
+    expect(ctx.projectId, 'requires createKpiProject to have succeeded').toBeTruthy();
+    expect(await fetchKpiSpaceAccess(PROJECT_KEY)).toEqual({ browse: true, create: true, edit: true, link: true });
+  });
+
+  it('fetchIsJiraAdmin → true for the token user (who just provisioned a project)', async () => {
+    expect(await fetchIsJiraAdmin()).toBe(true);
   });
 
   it('createKpiIssue → creates a root KPI (kpi-meta set in the create request)', async () => {
@@ -293,9 +305,18 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     expect(byIssue).toBeInstanceOf(Map);
   });
 
-  // writeReading targets the app-managed, read-only `kpi-reading` custom field.
-  // Only the DEPLOYED Forge app identity can write it — a personal API token
-  // (any user) is structurally forbidden, so there is nothing meaningful to
-  // assert here. Verify the reading WRITE path via `forge tunnel` on a dev site.
-  it.skip('writeReading → app-managed read-only field; verify via forge tunnel', () => {});
+  // Spec 10 (Path A): readings are written AS THE USER through the standard issue
+  // edit, so a personal API token exercises the real write path. Needs the
+  // deployed `kpi-reading` field to be editable (`readOnly: false`).
+  it('writeReading → records as the user; the changelog names them as the author', async () => {
+    expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
+    await writeReading(ctx.rootId!, '2026-01-15', 123);
+    const changes = await pollFor(
+      () => fetchReadingChangelog([ctx.rootId!]).then((m) => m.get(ctx.rootId!) ?? []),
+      (c) => c.length > 0,
+    );
+    const last = changes[changes.length - 1];
+    expect(last.to).toBe(JSON.stringify({ d: '2026-01-15', v: 123 }));
+    expect(last.by).toBe(ctx.leadAccountId);
+  });
 });

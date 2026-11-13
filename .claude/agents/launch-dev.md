@@ -85,22 +85,31 @@ Only for work against a live site. Preconditions and steps:
    set -a && source .env && set +a
    forge login --non-interactive -u "$FORGE_EMAIL" -t "$FORGE_API_TOKEN"
    ```
-4. **Docker must be running** — `forge tunnel` uses it:
+4. **App id (`APP_ID` in `.env`)** — the manifest uses `ari:cloud:ecosystem::app/${APP_ID}`; no app id is committed, so a fresh clone/fork must register its own app:
+   ```bash
+   grep -E '^APP_ID=' .env | sed 's/=.*/=<set>/'
+   ```
+   If it's missing or still the all-zeros placeholder, register a new app (this also writes `APP_ID` into `.env` and keeps the manifest placeholder intact):
+   ```bash
+   npm --prefix app run forge -- register "Measure of Success"
+   ```
+   Don't use bare `forge register` — Forge parses the manifest after creating the app and fails halfway if `${APP_ID}` is unresolved. Bitovi developers use the shared app id instead (ask a teammate) so they deploy to the existing app.
+5. **Docker must be running** — `forge tunnel` uses it:
    ```bash
    docker info >/dev/null 2>&1 && echo "docker up" || open -a Docker
    ```
    If it wasn't up, wait for Docker Desktop to finish booting before continuing.
-5. **Build the Custom UI bundles** (the tunnel serves the built static resources for the frontend):
+6. **Build the Custom UI bundles** (the tunnel serves the built static resources for the frontend):
    ```bash
    npm --prefix app run build:forge
    ```
-6. **Make sure the app is deployed + installed** on the dev site (only needed the first time or after manifest/scope changes):
+7. **Make sure the app is deployed + installed** on the dev site (only needed the first time or after manifest/scope changes):
    ```bash
    npm --prefix app run deploy:dev     # builds + deploys with the " (dev)" title suffix
-   npm --prefix app exec -- forge install list
+   npm --prefix app run forge -- install list
    ```
-   If not installed: `forge install --non-interactive --site <your-site>.atlassian.net --product Jira --environment development`.
-7. **Start the tunnel** (long-running, background) via the npm script so it runs with `app/` as cwd:
+   If not installed: `npm --prefix app run forge -- install --non-interactive --site <your-site>.atlassian.net --product Jira --environment development`.
+8. **Start the tunnel** (long-running, background) via the npm script so it runs with `app/` as cwd:
    ```bash
    npm --prefix app run tunnel        # = forge tunnel with the " (dev)" title suffix (Node.js runtime tunnel needs no Docker)
    ```

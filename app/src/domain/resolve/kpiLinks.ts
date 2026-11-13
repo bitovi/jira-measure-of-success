@@ -56,9 +56,35 @@ export function isDirectionalLinkType(type: Pick<IssueLinkTypeInfo, 'inward' | '
   return type.inward.trim().toLowerCase() !== type.outward.trim().toLowerCase();
 }
 
-/** "Parent blocks child" / "Child blocks parent" — how a parentEnd choice reads with a type's labels. */
-export function describeParentEnd(type: Pick<IssueLinkTypeInfo, 'outward'>, parentEnd: KpiParentEnd): string {
-  return parentEnd === 'inward' ? `Parent ${type.outward} child` : `Child ${type.outward} parent`;
+/**
+ * The label Jira's "Linked issues" panel groups a link under on each end, for a
+ * parentEnd choice: the parent KPI lists its children under `parent`, a child
+ * KPI lists its parent under `child`. With Blocks / `'inward'` that's
+ * `{ parent: 'blocks', child: 'is blocked by' }`.
+ */
+export function linkLabelsForParentEnd(
+  type: Pick<IssueLinkTypeInfo, 'inward' | 'outward'>,
+  parentEnd: KpiParentEnd,
+): { parent: string; child: string } {
+  return parentEnd === 'inward'
+    ? { parent: type.outward, child: type.inward }
+    : { parent: type.inward, child: type.outward };
+}
+
+/**
+ * Which end is the parent when the app adopts (or creates) its `KPI Hierarchy`
+ * type. A pre-existing same-named type may have its labels the other way round
+ * ("is a child KPI of" as its outward label). Shared by the resolver, which
+ * applies it, and Settings, which warns about what it would change.
+ */
+export function defaultParentEnd(type: Pick<IssueLinkTypeInfo, 'outward'> | null): KpiParentEnd {
+  const reversed = type?.outward.trim().toLowerCase() === DEFAULT_KPI_LINK_TYPE.inward.toLowerCase();
+  return reversed ? 'outward' : DEFAULT_KPI_LINK_TYPE.parentEnd;
+}
+
+/** The app's own `KPI Hierarchy` type among a site's link types (matched by name), if it exists. */
+export function findAppLinkType<T extends Pick<IssueLinkTypeInfo, 'name'>>(types: readonly T[]): T | null {
+  return types.find((t) => t.name.toLowerCase() === DEFAULT_KPI_LINK_TYPE.name.toLowerCase()) ?? null;
 }
 
 /** Minimal shape of a Jira issue link as returned in an issue's `issuelinks`. */

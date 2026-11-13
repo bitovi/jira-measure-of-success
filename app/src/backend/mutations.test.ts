@@ -18,9 +18,8 @@ import type {
 const h = vi.hoisted(() => ({ jira: null as MockJira | null }));
 
 vi.mock('@forge/api', async () => {
-  const { forgeRouteHelpers } = await import('./testing/scaleFixture');
-  const requester = { requestJira: (route: unknown, init?: { method?: string; body?: unknown }) => h.jira!.requestJira(route, init) };
-  return { default: { asUser: () => requester, asApp: () => requester }, ...forgeRouteHelpers };
+  const { forgeRouteHelpers, mockForgeApi } = await import('./testing/scaleFixture');
+  return { default: mockForgeApi(() => h.jira!), ...forgeRouteHelpers };
 });
 
 vi.mock('@forge/kvs', () => ({
@@ -122,7 +121,8 @@ describe('recordValue', () => {
     const { data, error, jira } = await invoke('recordValue', { kpiId: 'KPI-1', date: '2026-06-01', value: 42 });
     expect(error).toBeUndefined();
     expect(data).toBeNull();
-    expect(jira.writes).toEqual(['PUT /rest/api/3/app/field/customfield_10837/value']);
+    // Spec 10 Path A: the standard issue edit, as the user (not the app-only field API).
+    expect(jira.writes).toEqual(['PUT /rest/api/3/issue/1000']);
   });
 
   it.each([

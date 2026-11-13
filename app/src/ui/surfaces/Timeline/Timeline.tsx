@@ -17,6 +17,7 @@ import {
   type TimelineActionError,
 } from '@ui/data/useTimelineData/index.js';
 import { openKpiSettings, openIssue, openIssueNewTab, getSiteUrl } from '@ui/bridge.js';
+import { DisabledReason } from '@ui/components/DisabledReason/index.js';
 import {
   buildAxis,
   axisDatesOf,
@@ -53,7 +54,10 @@ import {
 import {
   collectContributingProjects,
   filterTimelineByProjects,
+  kpiPermissionMessage,
+  kpiSpaceNoAccessMessage,
   projectSeries,
+  type KpiSpaceAccess,
   type AddTargetInput,
   type CreateKpiInput,
   type IssuePickerItem,
@@ -114,6 +118,24 @@ function writeSelectedProjectsToUrl(selected: Set<string> | null): void {
 interface FlatRow {
   node: TimelineNodeDto;
   hasChildren: boolean;
+}
+
+/**
+ * Why each KPI-space action is unavailable to this user (spec 10), or null when
+ * allowed. No `access` (no KPI space yet, or an older backend) allows everything.
+ */
+function blockedReasons(access: KpiSpaceAccess | undefined): {
+  browse: string | null;
+  add: string | null;
+  record: string | null;
+  nest: string | null;
+} {
+  return {
+    browse: access && !access.browse ? kpiSpaceNoAccessMessage() : null,
+    add: access && !access.create ? kpiPermissionMessage('add') : null,
+    record: access && !access.edit ? kpiPermissionMessage('record') : null,
+    nest: access && !access.link ? kpiPermissionMessage('nest') : null,
+  };
 }
 
 export function Timeline({
@@ -323,6 +345,7 @@ export function Timeline({
   // Only show the right-pinned Undated lane when at least one KPI actually has
   // undated (pending) targets — otherwise it's just dead space.
   const hasUndated = flat.some(({ node }) => node.undated.length > 0);
+  const blocked = blockedReasons(data.access);
 
   return (
     <div className="p-6 text-text">
@@ -339,13 +362,16 @@ export function Timeline({
             selected={selectedProjects}
             onChange={setSelectedProjects}
           />
-          <Button
-            appearance="primary"
-            iconBefore={AddIcon}
-            onClick={() => setCreating({ presetParent: null })}
-          >
-            Add KPI
-          </Button>
+          <DisabledReason reason={blocked.add}>
+            <Button
+              appearance="primary"
+              iconBefore={AddIcon}
+              isDisabled={blocked.add !== null}
+              onClick={() => setCreating({ presetParent: null })}
+            >
+              Add KPI
+            </Button>
+          </DisabledReason>
         </div>
       </div>
 
@@ -366,7 +392,9 @@ export function Timeline({
               </div>
               {flat.length === 0 ? (
                 <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
-                  {data.roots.length === 0 ? (
+                  {blocked.browse ? (
+                    blocked.browse
+                  ) : data.roots.length === 0 ? (
                     <>
                       No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
                       your first one.
@@ -390,6 +418,8 @@ export function Timeline({
                     collapsed={collapsed.has(node.id)}
                     onToggleCollapse={() => toggleCollapse(node.id)}
                     onRecord={() => setAdding({ node, date: data.today })}
+                    recordBlocked={blocked.record}
+                    addChildBlocked={blocked.add ?? blocked.nest}
                     onAddTarget={() => setAddingTarget({ node, date: data.today })}
                     onAddChild={() =>
                       setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
@@ -428,6 +458,7 @@ export function Timeline({
                     node={node}
                     axis={axis}
                     today={data.today}
+                    recordBlocked={blocked.record}
                     onAddValue={(date) => setAdding({ node, date })}
                     onAddTarget={(date) => setAddingTarget({ node, date })}
                     onEditReading={(reading) => setEditing({ node, reading })}
@@ -462,10 +493,14 @@ export function Timeline({
         </div>
       </KeyHighlightProvider>
 
-      <p className="mt-3 text-xs text-text-subtle">
-        <span className="font-semibold">Tip:</span> click a past date to record a value · click a
-        future date to add a target · click a value to edit it · click a target to open its issue.
-      </p>
+      {!blocked.browse && (
+        <p className="mt-3 text-xs text-text-subtle">
+          <span className="font-semibold">Tip:</span>{' '}
+          {blocked.record
+            ? 'click a future date to add a target · click a target to open its issue.'
+            : 'click a past date to record a value · click a future date to add a target · click a value to edit it · click a target to open its issue.'}
+        </p>
+      )}
 
       <ModalTransition>
         {adding && (
@@ -496,6 +531,7 @@ export function Timeline({
           <CreateKpiModal
             presetParent={creating.presetParent}
             kpiOptions={kpiOptions}
+            nestBlocked={blocked.nest}
             onCancel={() => setCreating(null)}
             onOpenSettings={onOpenSettings}
             onCreate={async (input) => {
@@ -614,6 +650,8 @@ function TimelineRowLabel({
   collapsed,
   onToggleCollapse,
   onRecord,
+  recordBlocked = null,
+  addChildBlocked = null,
   onAddTarget,
   onAddChild,
   onOpenIssue,
@@ -624,6 +662,10 @@ function TimelineRowLabel({
   collapsed: boolean;
   onToggleCollapse: () => void;
   onRecord: () => void;
+  /** why recording a value is disabled (spec 10), or null */
+  recordBlocked?: string | null;
+  /** why adding a child KPI is disabled (spec 10), or null */
+  addChildBlocked?: string | null;
   onAddTarget: () => void;
   onAddChild: () => void;
   onOpenIssue: (issueKey: string) => void | Promise<void>;
@@ -686,8 +728,22 @@ function TimelineRowLabel({
         )}
         {/* Overlaid (not in flow) so long units get the full width at rest; actions cover the tail on hover/focus. */}
         <div className="absolute inset-y-0 right-0 flex items-center gap-2 bg-surface pl-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <RowAction tooltip="Create child KPI" label="Add child KPI" glyph="+" glyphClass="text-[13px]" onClick={onAddChild} />
-          <RowAction tooltip="Record a value" label="Record a value" glyph="●" glyphClass="text-[13px]" onClick={onRecord} />
+          <RowAction
+            tooltip="Create child KPI"
+            label="Add child KPI"
+            glyph="+"
+            glyphClass="text-[13px]"
+            onClick={onAddChild}
+            disabledReason={addChildBlocked}
+          />
+          <RowAction
+            tooltip="Record a value"
+            label="Record a value"
+            glyph="●"
+            glyphClass="text-[13px]"
+            onClick={onRecord}
+            disabledReason={recordBlocked}
+          />
           <RowAction tooltip="Add a target" label="Add a target" glyph="◇" glyphClass="text-[11px]" onClick={onAddTarget} />
         </div>
       </div>
@@ -702,21 +758,29 @@ function RowAction({
   glyph,
   glyphClass,
   onClick,
+  disabledReason = null,
 }: {
   tooltip: string;
   label: string;
   glyph: string;
   glyphClass: string;
   onClick: () => void;
+  /** when set, the action is disabled and its tooltip says why (spec 10) */
+  disabledReason?: string | null;
 }) {
+  const disabled = disabledReason !== null;
   return (
-    <Tooltip content={tooltip}>
+    // aria-disabled (not `disabled`) keeps the button focusable and hoverable so the reason can show.
+    <Tooltip content={disabledReason ?? tooltip}>
       {(tooltipProps) => (
         <button
           {...tooltipProps}
-          className="grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle hover:bg-surface-sunken hover:text-brand"
-          onClick={onClick}
+          className={`grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle ${
+            disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-surface-sunken hover:text-brand'
+          }`}
+          onClick={disabled ? undefined : onClick}
           aria-label={label}
+          aria-disabled={disabled || undefined}
         >
           <span className={`${glyphClass} leading-none`}>{glyph}</span>
         </button>
@@ -729,6 +793,7 @@ function TimelineRowTrack({
   node,
   axis,
   today,
+  recordBlocked = null,
   onAddValue,
   onAddTarget,
   onEditReading,
@@ -738,6 +803,8 @@ function TimelineRowTrack({
   node: TimelineNodeDto;
   axis: Axis;
   today: string;
+  /** why the user can't record values (spec 10); past dates and dots are then inert */
+  recordBlocked?: string | null;
   onAddValue: (date: string) => void;
   onAddTarget: (date: string) => void;
   onEditReading: (reading: TimelineReadingDto) => void;
@@ -780,8 +847,8 @@ function TimelineRowTrack({
     if (node.targets.some((tg) => tg.date !== null && Math.abs(axis.xOf(tg.date) - rawX) < 8)) return;
     // Past/today opens the record-a-value modal; a future date opens the
     // add-a-target modal — both pre-filled with the clicked date.
-    if (dateISO <= today) onAddValue(dateISO);
-    else onAddTarget(dateISO);
+    if (dateISO > today) onAddTarget(dateISO);
+    else if (!recordBlocked) onAddValue(dateISO);
   };
 
   return (
@@ -811,11 +878,20 @@ function TimelineRowTrack({
         className="absolute top-0 bottom-0 w-0 border-l-2 border-brand opacity-60"
         style={{ left: todayX - 1 }}
       />
+      {/* Can't record: the past side of the track isn't clickable (future clicks
+          still add targets), so drop the pointer cursor there. Clicks pass through
+          to the track, which ignores past dates. */}
+      {recordBlocked && (
+        <div
+          className="absolute top-0 bottom-0 left-0 cursor-default"
+          style={{ width: Math.max(0, Math.min(todayX, axis.plotWidth + PAD_R)) }}
+        />
+      )}
 
       {/* sparkline */}
       {node.readings.length === 0 ? (
         <span className="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">
-          No values yet — click a past date to add
+          {recordBlocked ? 'No values yet' : 'No values yet — click a past date to add'}
         </span>
       ) : (
         <Sparkline readings={node.readings} axis={axis} yOf={yOf} plotH={plotH} />
@@ -826,7 +902,15 @@ function TimelineRowTrack({
 
       {/* clickable reading dots — click to edit or delete the value */}
       {node.readings.map((r, i) => (
-        <ReadingDot key={i} reading={r} node={node} axis={axis} y={yOf(r.value)} onEdit={onEditReading} />
+        <ReadingDot
+          key={i}
+          reading={r}
+          node={node}
+          axis={axis}
+          y={yOf(r.value)}
+          onEdit={onEditReading}
+          editBlocked={recordBlocked}
+        />
       ))}
 
       {/* target markers (dated only; undated go to the Undated lane) */}
@@ -992,6 +1076,7 @@ const DIRECTION_OPTIONS: DirectionOption[] = [
 function CreateKpiModal({
   presetParent,
   kpiOptions,
+  nestBlocked = null,
   onCancel,
   onCreate,
   onOpenSettings,
@@ -1000,6 +1085,8 @@ function CreateKpiModal({
   presetParent: { kpiId: string; name: string } | null;
   /** Every existing KPI, for the optional parent picker (only used when `presetParent` is null). */
   kpiOptions: KpiParentOption[];
+  /** why nesting is disabled (no Link Issues, spec 10): the parent picker is disabled with this reason */
+  nestBlocked?: string | null;
   onCancel: () => void;
   /** Resolves once the KPI is saved; rejects with the failure (shown in the modal). */
   onCreate: (input: CreateKpiInput) => Promise<void>;
@@ -1096,12 +1183,16 @@ function CreateKpiModal({
               }
               htmlFor="kpi-parent"
             >
-              <KpiParentSelect
-                options={kpiOptions}
-                value={parent}
-                onChange={setParent}
-                isDisabled={saving}
-              />
+              <DisabledReason reason={nestBlocked}>
+                <div className="w-full">
+                  <KpiParentSelect
+                    options={kpiOptions}
+                    value={parent}
+                    onChange={setParent}
+                    isDisabled={saving || nestBlocked !== null}
+                  />
+                </div>
+              </DisabledReason>
             </ModalField>
           )}
         </div>

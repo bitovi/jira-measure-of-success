@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { expect, fn, userEvent, waitFor, within } from '@storybook/test';
+import { expect, fn, screen, userEvent, waitFor, within } from '@storybook/test';
 import type { PanelRowDto } from '@domain/index.js';
 import { TargetCard } from './TargetCard.js';
 
@@ -139,5 +139,64 @@ export const KpiDeleted: Story = {
     const body = within(canvasElement.ownerDocument.body);
     await userEvent.click(await body.findByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(onRemoveDeleted).toHaveBeenCalledTimes(1));
+  },
+};
+
+/** A target whose KPI the user may not see (spec 10): only the stored bet and the raw key. */
+const hiddenKpi: PanelRowDto = { ...deletedKpi, kpiId: 'KPI-7', name: 'KPI-7', kpiMissing: undefined, kpiNoAccess: true };
+const onRemoveHidden = fn();
+
+/** No permission to view the KPI: read-only bet, a permission notice with a tooltip, Edit disabled, Remove works. */
+export const KpiNoAccess: Story = {
+  args: { width: 360 },
+  render: ({ width }) => (
+    <div style={{ width }}>
+      <TargetCard row={hiddenKpi} currentValue={null} onSave={fn()} onRemove={onRemoveHidden} onRecord={fn()} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    onRemoveHidden.mockClear();
+    const c = within(canvasElement);
+    const card = c.getByRole('group', { name: 'KPI-7' });
+    const notice = within(card).getByText("You don't have permission to view this KPI");
+    await expect(within(card).queryByText('KPI deleted')).not.toBeInTheDocument();
+    await expect(within(card).queryByRole('button', { name: /^Edit target/ })).not.toBeInTheDocument();
+    await expect(within(card).queryByRole('button', { name: 'Record a value' })).not.toBeInTheDocument();
+    await expect(within(card).queryByText(/Estimated target/)).not.toBeInTheDocument();
+
+    await userEvent.hover(notice);
+    await expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'Viewing KPI-7 needs Browse Projects permission on the KPI space project. Ask a Jira admin.',
+    );
+    await userEvent.unhover(notice);
+
+    await userEvent.click(within(card).getByRole('button', { name: 'Actions for KPI-7' }));
+    await waitFor(() => expect(c.getByRole('menuitem', { name: /Edit/ })).toBeInTheDocument());
+    await expect(c.getByRole('menuitem', { name: /Edit/ })).toBeDisabled();
+    await userEvent.keyboard('{Escape}');
+
+    await userEvent.click(within(card).getByRole('button', { name: 'Remove target' }));
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByRole('button', { name: 'Remove' }));
+    await expect(onRemoveHidden).toHaveBeenCalledTimes(1);
+  },
+};
+
+const RECORD_REASON = 'Recording a value needs Edit Issues permission on the KPI space project. Ask a Jira admin.';
+
+/** No Edit Issues on the KPI: the nudge's Record a value is disabled with the reason. */
+export const RecordBlocked: Story = {
+  args: { width: 360 },
+  render: ({ width }) => (
+    <div style={{ width }}>
+      <TargetCard row={STATES[3][1]} currentValue={262} onRecord={fn()} recordBlocked={RECORD_REASON} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const btn = c.getByRole('button', { name: 'Record a value' });
+    await expect(btn).toBeDisabled();
+    await userEvent.hover(btn.closest('[data-disabled-reason]') as HTMLElement);
+    await expect(await screen.findByRole('tooltip')).toHaveTextContent(RECORD_REASON);
   },
 };

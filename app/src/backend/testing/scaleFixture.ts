@@ -78,6 +78,43 @@ export interface FixtureIssue {
   properties: Record<string, unknown>;
 }
 
+/** Who a mock request runs as — mirrors `api.asUser()` / `api.asApp()`. */
+export type MockPrincipal = 'user' | 'app';
+
+/** The invoking user's project permissions in the mock (Jira project permission keys). */
+export interface MockProjectAccess {
+  browse: boolean;
+  create: boolean;
+  edit: boolean;
+  link: boolean;
+}
+
+/**
+ * What the invoking user may see and do. App requests ignore this entirely,
+ * like `asApp()`; user requests are filtered and permission-checked like Jira.
+ * Defaults allow everything, so tests that don't care see no difference.
+ */
+export interface MockUserView {
+  accountId: string;
+  /** global ADMINISTER (Administer Jira) */
+  isAdmin: boolean;
+  /** per project key; projects not listed get full access */
+  access: Record<string, MockProjectAccess>;
+  /** issue ids hidden from the user (stands in for issue security levels) */
+  hidden: Set<string>;
+}
+
+export const MOCK_USER_ACCOUNT_ID = 'acc-1';
+export const MOCK_APP_ACCOUNT_ID = 'app-measure-of-success';
+export const FULL_ACCESS: MockProjectAccess = { browse: true, create: true, edit: true, link: true };
+
+export interface ReadingChangeEntry {
+  created: number;
+  to: string;
+  /** changelog author account id (absent for fixture-seeded history) */
+  by?: string;
+}
+
 export interface ScaleFixture {
   options: ScaleOptions;
   issues: Map<string, FixtureIssue>;
@@ -85,10 +122,15 @@ export interface ScaleFixture {
   kpiIds: string[];
   /** contributing (target-carrying) issue ids, in creation order */
   contributorIds: string[];
-  readingChanges: Map<string, Array<{ created: number; to: string }>>;
+  readingChanges: Map<string, ReadingChangeEntry[]>;
   kvs: Map<string, unknown>;
   /** the site's issue link types (global in Jira) */
   linkTypes: IssueLinkTypeInfo[];
+  userView: MockUserView;
+  /** projects by key, for KPI-space provisioning (`issueTypeNames` = types in its scheme) */
+  projects: Map<string, { id: string; name: string; issueTypeNames: string[] }>;
+  /** the site's issue types (global in Jira) */
+  issueTypes: Array<{ id: string; name: string; hierarchyLevel?: number }>;
 }
 
 const DAY = 86_400_000;
@@ -110,7 +152,7 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
 
   // KPI space: groups of 5, the first of each group is a root.
   const kpiIds: string[] = [];
-  const readingChanges = new Map<string, Array<{ created: number; to: string }>>();
+  const readingChanges = new Map<string, ReadingChangeEntry[]>();
   for (let k = 0; k < options.kpis; k += 1) {
     const id = String(1000 + k);
     const direction: KpiDirection = k % 2 === 0 ? 'increase' : 'decrease';
@@ -127,7 +169,7 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
       rank: `0|i${String(options.kpis - k).padStart(5, '0')}:`,
       properties: { 'kpi-meta': { unit: k % 3 === 0 ? '%' : 'count', direction } },
     });
-    const changes: Array<{ created: number; to: string }> = [];
+    const changes: ReadingChangeEntry[] = [];
     for (let r = 0; r < options.readingsPerKpi; r += 1) {
       const date = isoDay(-300 + r * 45);
       changes.push({ created: BASE + r * DAY, to: encodeReadingValue(date, 100 + k + r * (k % 2 === 0 ? 5 : -3)) });
@@ -206,7 +248,26 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
     ['kpi:hierarchy', { linkTypeId: KPI_HIERARCHY_LINK_TYPE.id, parentEnd: 'inward' }],
   ]);
   const linkTypes = SITE_LINK_TYPES.map((t) => ({ ...t }));
-  return { options, issues, childrenOf, kpiIds, contributorIds, readingChanges, kvs, linkTypes };
+  const userView: MockUserView = { accountId: MOCK_USER_ACCOUNT_ID, isAdmin: true, access: {}, hidden: new Set() };
+  const projects = new Map([[KPI_PROJECT.key, { id: KPI_PROJECT.id, name: KPI_PROJECT.name, issueTypeNames: ['KPI'] }]]);
+  const issueTypes = (Object.keys(ICON_ID) as Array<FixtureIssue['type']>).map((name) => ({
+    id: String(ICON_ID[name]),
+    name,
+    hierarchyLevel: HIERARCHY_LEVEL[name],
+  }));
+  return {
+    options,
+    issues,
+    childrenOf,
+    kpiIds,
+    contributorIds,
+    readingChanges,
+    kvs,
+    linkTypes,
+    userView,
+    projects,
+    issueTypes,
+  };
 }
 
 /** One target per epic, cycling absolute / relative-to-own-due / relative-to-parent-due / percent. */
@@ -291,6 +352,7 @@ function issueJson(
 ): Record<string, unknown> {
   const all: Record<string, unknown> = {
     summary: issue.summary,
+    project: { key: projectKeyOf(issue) },
     issuetype: {
       name: issue.type,
       hierarchyLevel: HIERARCHY_LEVEL[issue.type],
@@ -343,7 +405,12 @@ function runJql(fixture: ScaleFixture, jql: string): FixtureIssue[] | null {
 
 export interface MockJira {
   fixture: ScaleFixture;
-  requestJira(route: unknown, init?: { method?: string; body?: unknown }): Promise<MockResponse>;
+  /** `as` defaults to `'app'` (no user filtering), matching the pre-identity behavior */
+  requestJira(
+    route: unknown,
+    init?: { method?: string; body?: unknown },
+    as?: MockPrincipal,
+  ): Promise<MockResponse>;
   /** requests that hit no mock handler (should stay empty) */
   unhandled: string[];
   /** every non-GET request, in order (`METHOD path`) */
@@ -352,10 +419,37 @@ export interface MockJira {
    * Answer a request before the mock handlers do (return undefined to fall
    * through) — e.g. to make a write fail.
    */
-  intercept?: (method: string, path: string, body: unknown, raw: string) => { status: number; body?: unknown } | undefined;
+  intercept?: (
+    method: string,
+    path: string,
+    body: unknown,
+    raw: string,
+    as: MockPrincipal,
+  ) => { status: number; body?: unknown } | undefined;
 }
 
 export { respond as mockResponse };
+
+/** Jira project key an issue belongs to (KPI-space issues live in KPI_PROJECT). */
+function projectKeyOf(issue: FixtureIssue): string {
+  return issue.type === 'KPI' ? KPI_PROJECT.key : issue.key.split('-')[0];
+}
+
+/** Jira project-permission key → MockProjectAccess flag. */
+const PROJECT_PERMISSION: Record<string, keyof MockProjectAccess> = {
+  BROWSE_PROJECTS: 'browse',
+  CREATE_ISSUES: 'create',
+  EDIT_ISSUES: 'edit',
+  LINK_ISSUES: 'link',
+};
+
+/** Writes that Jira only allows for Administer Jira (KPI-space provisioning). */
+const ADMIN_ONLY_WRITES: Array<[string, RegExp]> = [
+  ['POST', /^\/rest\/api\/3\/project$/],
+  ['POST', /^\/rest\/api\/3\/issuetype$/],
+  ['PUT', /^\/rest\/api\/3\/issuetypescheme\/[^/]+\/issuetype$/],
+  ['POST', /^\/rest\/api\/3\/issueLinkType$/],
+];
 
 export function createMockJira(fixture: ScaleFixture): MockJira {
   const unhandled: string[] = [];
@@ -363,13 +457,45 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
   const findIssue = (idOrKey: string) =>
     fixture.issues.get(idOrKey) ?? [...fixture.issues.values()].find((i) => i.key === idOrKey);
   let nextIssueId = 900_000;
+  let clock = Date.UTC(2026, 6, 1);
 
-  const handle = (method: string, raw: string, body: unknown): MockResponse => {
+  const accessTo = (projectKey: string): MockProjectAccess => fixture.userView.access[projectKey] ?? FULL_ACCESS;
+  /** Can this principal see the issue at all? (Jira answers 404 when not.) */
+  const visible = (issue: FixtureIssue, as: MockPrincipal): boolean =>
+    as === 'app' || (!fixture.userView.hidden.has(issue.id) && accessTo(projectKeyOf(issue)).browse);
+  const may = (issue: FixtureIssue, as: MockPrincipal, permission: keyof MockProjectAccess): boolean =>
+    as === 'app' || accessTo(projectKeyOf(issue))[permission];
+  const notFound = () => respond(404, { errorMessages: ['Issue does not exist or you do not have permission to see it.'] });
+  const forbidden = (what: string) => respond(403, { errorMessages: [`You do not have permission to ${what}.`] });
+
+  const handle = (method: string, raw: string, body: unknown, as: MockPrincipal): MockResponse => {
     const [path, query = ''] = raw.split('?');
     const params = new URLSearchParams(query);
     if (method !== 'GET') writes.push(`${method} ${path}`);
-    const intercepted = mock.intercept?.(method, path, body, raw);
+    const intercepted = mock.intercept?.(method, path, body, raw, as);
     if (intercepted) return respond(intercepted.status, intercepted.body ?? {});
+
+    if (as === 'user' && !fixture.userView.isAdmin && ADMIN_ONLY_WRITES.some(([m, re]) => m === method && re.test(path))) {
+      return forbidden('administer Jira');
+    }
+
+    if (method === 'GET' && path === '/rest/api/3/mypermissions') {
+      const keys = (params.get('permissions') ?? '').split(',').filter(Boolean);
+      const issueRef = params.get('issueId') ?? params.get('issueKey');
+      const issue = issueRef ? findIssue(issueRef) : undefined;
+      if (issueRef && (!issue || !visible(issue, as))) return notFound();
+      const projectKey = issue ? projectKeyOf(issue) : params.get('projectKey');
+      const permissions: Record<string, { key: string; havePermission: boolean }> = {};
+      for (const key of keys) {
+        let have: boolean;
+        if (as === 'app') have = true;
+        else if (key === 'ADMINISTER') have = fixture.userView.isAdmin;
+        else if (PROJECT_PERMISSION[key] && projectKey) have = accessTo(projectKey)[PROJECT_PERMISSION[key]];
+        else have = false;
+        permissions[key] = { key, havePermission: have };
+      }
+      return respond(200, { permissions });
+    }
 
     if (method === 'GET' && path === '/rest/api/3/field') {
       return respond(200, [
@@ -380,14 +506,21 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     }
 
     if (method === 'GET' && path === '/rest/api/3/search/jql') {
-      const matched = runJql(fixture, params.get('jql') ?? '');
-      if (!matched) return respond(400, { errorMessages: [`Unsupported JQL: ${params.get('jql')}`] });
+      const jql = params.get('jql') ?? '';
+      const project = /^project\s*=\s*(\w+)/i.exec(jql.trim())?.[1];
+      // Jira rejects JQL naming a project the user can't browse, rather than returning no issues.
+      if (as === 'user' && project && !accessTo(project).browse) {
+        return respond(400, { errorMessages: [`The value '${project}' does not exist for the field 'project'.`] });
+      }
+      const matched = runJql(fixture, jql);
+      if (!matched) return respond(400, { errorMessages: [`Unsupported JQL: ${jql}`] });
+      const seen = matched.filter((i) => visible(i, as));
       const fields = (params.get('fields') ?? '').split(',').filter(Boolean);
       const properties = (params.get('properties') ?? '').split(',').filter(Boolean);
       const maxResults = Number(params.get('maxResults') ?? 50);
       const offset = Number(params.get('nextPageToken') ?? 0);
-      const page = matched.slice(offset, offset + maxResults);
-      const more = offset + maxResults < matched.length;
+      const page = seen.slice(offset, offset + maxResults);
+      const more = offset + maxResults < seen.length;
       return respond(200, {
         issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture))),
         isLast: !more,
@@ -397,10 +530,8 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     const single = /^\/rest\/api\/3\/issue\/([^/]+)$/.exec(path);
     if (single && method === 'GET') {
-      const idOrKey = decodeURIComponent(single[1]);
-      const issue =
-        fixture.issues.get(idOrKey) ?? [...fixture.issues.values()].find((i) => i.key === idOrKey);
-      if (!issue) return respond(404, { errorMessages: ['not found'] });
+      const issue = findIssue(decodeURIComponent(single[1]));
+      if (!issue || !visible(issue, as)) return notFound();
       const fields = (params.get('fields') ?? '').split(',').filter(Boolean);
       const properties = (params.get('properties') ?? '').split(',').filter(Boolean);
       return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture)));
@@ -408,21 +539,25 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     const prop = /^\/rest\/api\/3\/issue\/([^/]+)\/properties\/([^/]+)$/.exec(path);
     if (prop && method === 'GET') {
-      const idOrKey = decodeURIComponent(prop[1]);
-      const issue =
-        fixture.issues.get(idOrKey) ?? [...fixture.issues.values()].find((i) => i.key === idOrKey);
+      const issue = findIssue(decodeURIComponent(prop[1]));
       const key = decodeURIComponent(prop[2]);
-      if (!issue || !(key in issue.properties)) return respond(404, { errorMessages: ['not found'] });
+      if (!issue || !visible(issue, as) || !(key in issue.properties)) return notFound();
       return respond(200, { key, value: issue.properties[key] });
     }
 
     if (method === 'POST' && path === '/rest/api/3/changelog/bulkfetch') {
       const req = JSON.parse(String(body)) as { issueIdsOrKeys: string[] };
+      // Jira silently leaves out issues the caller can't see.
+      const ids = req.issueIdsOrKeys.filter((id) => {
+        const issue = findIssue(id);
+        return issue ? visible(issue, as) : true;
+      });
       return respond(200, {
-        issueChangeLogs: req.issueIdsOrKeys.map((id) => ({
+        issueChangeLogs: ids.map((id) => ({
           issueId: id,
           changeHistories: (fixture.readingChanges.get(id) ?? []).map((c) => ({
             created: c.created,
+            ...(c.by ? { author: { accountId: c.by } } : {}),
             items: [{ fieldId: READING_FIELD_ID, to: c.to, toString: c.to }],
           })),
         })),
@@ -431,16 +566,38 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     if (prop && method === 'PUT') {
       const issue = findIssue(decodeURIComponent(prop[1]));
-      if (!issue) return respond(404, { errorMessages: ['not found'] });
+      if (!issue || !visible(issue, as)) return notFound();
+      if (!may(issue, as, 'edit')) return forbidden(`edit ${issue.key}`);
       issue.properties[decodeURIComponent(prop[2])] = JSON.parse(String(body));
       return respond(200);
     }
 
+    // Standard issue edit — the KPI Reading field is user-editable (spec 10, Path A).
+    if (single && method === 'PUT') {
+      const issue = findIssue(decodeURIComponent(single[1]));
+      if (!issue || !visible(issue, as)) return notFound();
+      if (!may(issue, as, 'edit')) return forbidden(`edit ${issue.key}`);
+      const req = JSON.parse(String(body)) as { fields?: Record<string, unknown> };
+      const reading = req.fields?.[READING_FIELD_ID];
+      if (typeof reading === 'string') {
+        const changes = fixture.readingChanges.get(issue.id) ?? [];
+        clock += 1000;
+        changes.push({
+          created: clock,
+          to: reading,
+          by: as === 'user' ? fixture.userView.accountId : MOCK_APP_ACCOUNT_ID,
+        });
+        fixture.readingChanges.set(issue.id, changes);
+      }
+      return respond(204);
+    }
+
     if (method === 'POST' && path === '/rest/api/3/issue') {
       const req = JSON.parse(String(body)) as {
-        fields: { summary: string };
+        fields: { summary: string; project?: { id?: string; key?: string } };
         properties?: Array<{ key: string; value: unknown }>;
       };
+      if (as === 'user' && !accessTo(KPI_PROJECT.key).create) return forbidden('create issues in this project');
       const id = String(nextIssueId++);
       const key = `${KPI_PROJECT.key}-${fixture.kpiIds.length + 1}`;
       fixture.issues.set(id, {
@@ -471,7 +628,10 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const parentOnOutward = cfg?.parentEnd === 'outward';
       const parent = findIssue(parentOnOutward ? req.outwardIssue.key : req.inwardIssue.key);
       const child = findIssue(parentOnOutward ? req.inwardIssue.key : req.outwardIssue.key);
-      if (!parent || !child) return respond(404, { errorMessages: ['Issue does not exist'] });
+      if (!parent || !child || !visible(parent, as) || !visible(child, as)) {
+        return respond(404, { errorMessages: ['Issue does not exist'] });
+      }
+      if (!may(child, as, 'link')) return forbidden('link issues');
       child.kpiParentId = parent.id;
       return respond(201);
     }
@@ -489,13 +649,56 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     if (single && method === 'DELETE') {
       const issue = findIssue(decodeURIComponent(single[1]));
-      if (!issue) return respond(404, { errorMessages: ['not found'] });
+      if (!issue || !visible(issue, as)) return notFound();
+      // Delete Issues is admin-only in the default scheme; the app's rollback runs asApp.
+      if (as === 'user' && !fixture.userView.isAdmin) return forbidden(`delete ${issue.key}`);
       fixture.issues.delete(issue.id);
       fixture.kpiIds = fixture.kpiIds.filter((id) => id !== issue.id);
       return respond(204);
     }
 
     if (method === 'PUT' && path === `/rest/api/3/app/field/${READING_FIELD_ID}/value`) {
+      // Only the owning app may call the app custom field value API.
+      if (as === 'user') return forbidden('update app custom field values');
+      return respond(204);
+    }
+
+    // ── KPI-space provisioning (Settings) ──
+    const project = /^\/rest\/api\/3\/project\/([^/]+)$/.exec(path);
+    if (project && method === 'GET') {
+      const p = fixture.projects.get(decodeURIComponent(project[1]));
+      if (!p) return respond(404, { errorMessages: ['No project could be found.'] });
+      return respond(200, { id: p.id, name: p.name, issueTypes: p.issueTypeNames.map((name) => ({ name })) });
+    }
+    if (method === 'POST' && path === '/rest/api/3/project') {
+      const req = JSON.parse(String(body)) as { key: string; name: string };
+      const id = String(20_000 + fixture.projects.size);
+      fixture.projects.set(req.key, { id, name: req.name, issueTypeNames: [] });
+      return respond(201, { id, key: req.key });
+    }
+    if (method === 'GET' && path === '/rest/api/3/issuetype') {
+      return respond(200, fixture.issueTypes);
+    }
+    if (method === 'POST' && path === '/rest/api/3/issuetype') {
+      const req = JSON.parse(String(body)) as { name: string };
+      const created = { id: String(30_000 + fixture.issueTypes.length), name: req.name, hierarchyLevel: 0 };
+      fixture.issueTypes.push(created);
+      return respond(201, created);
+    }
+    if (method === 'GET' && path === '/rest/api/3/issuetypescheme/project') {
+      const projectId = params.get('projectId');
+      // One scheme per project in the mock; its id is the project id.
+      return respond(200, { values: projectId ? [{ issueTypeScheme: { id: projectId } }] : [] });
+    }
+    const scheme = /^\/rest\/api\/3\/issuetypescheme\/(\d+)\/issuetype$/.exec(path);
+    if (scheme && method === 'PUT') {
+      const p = [...fixture.projects.values()].find((x) => x.id === scheme[1]);
+      if (!p) return respond(404, { errorMessages: ['No issue type scheme'] });
+      const req = JSON.parse(String(body)) as { issueTypeIds: string[] };
+      for (const id of req.issueTypeIds) {
+        const t = fixture.issueTypes.find((x) => x.id === id);
+        if (t && !p.issueTypeNames.includes(t.name)) p.issueTypeNames.push(t.name);
+      }
       return respond(204);
     }
 
@@ -511,15 +714,33 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     fixture,
     unhandled,
     writes,
-    async requestJira(route, init) {
+    async requestJira(route, init, as = 'app') {
       if (fixture.options.latencyMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, fixture.options.latencyMs));
       }
       const raw = typeof route === 'string' ? route : String((route as { value: string }).value);
-      return handle((init?.method ?? 'GET').toUpperCase(), raw, init?.body);
+      return handle((init?.method ?? 'GET').toUpperCase(), raw, init?.body, as);
     },
   };
   return mock;
+}
+
+/**
+ * `@forge/api`'s default export for tests: `asUser()` / `asApp()` both route to
+ * the mock Jira, tagged with the principal so user requests get Jira's
+ * permission filtering. `onRequest` sees every route (e.g. to log them).
+ */
+export function mockForgeApi(
+  getJira: () => MockJira,
+  onRequest?: (route: unknown, as: MockPrincipal) => void,
+): { asUser: () => { requestJira: MockJira['requestJira'] }; asApp: () => { requestJira: MockJira['requestJira'] } } {
+  const requester = (as: MockPrincipal) => ({
+    requestJira: (route: unknown, init?: { method?: string; body?: unknown }) => {
+      onRequest?.(route, as);
+      return getJira().requestJira(route, init, as);
+    },
+  });
+  return { asUser: () => requester('user'), asApp: () => requester('app') };
 }
 
 /** `@forge/api` stand-ins that build routes like the real module (query params URI-encoded). */
@@ -537,4 +758,8 @@ export const forgeRouteHelpers = {
     return { value: `${u.pathname}${u.search}` };
   },
   assumeTrustedRoute: (path: string) => ({ value: path }),
+  /** Outside Forge there is no app context (the real call throws too). */
+  getAppContext: (): never => {
+    throw new Error('getAppContext: not running in Forge');
+  },
 };

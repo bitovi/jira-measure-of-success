@@ -13,6 +13,7 @@ import type { HoverState } from './hover.js';
 import { dimStyle, useIsDimmed } from './useKeyHighlight.js';
 import { targetKeyKinds } from './keyKinds.js';
 import { TargetTooltipBody } from './targetTooltip.js';
+import { tooltipPlacement, type TooltipPlacement } from './tooltipPlacement.js';
 
 /**
  * Recorded values + the projected trend are drawn in a neutral color so green
@@ -126,7 +127,8 @@ export function ProjectionLine({
 /**
  * A recorded value on the track — a transparent, accessible hit target over the
  * sparkline dot so clicking a value opens the edit/delete modal (the dot itself
- * is drawn by the Sparkline, which is click-through).
+ * is drawn by the Sparkline, which is click-through). With `editBlocked` (the
+ * user can't record values, spec 10) the dot is disabled and its tooltip says why.
  */
 export function ReadingDot({
   reading,
@@ -134,24 +136,29 @@ export function ReadingDot({
   axis,
   y,
   onEdit,
+  editBlocked = null,
 }: {
   reading: TimelineReadingDto;
   node: TimelineNodeDto;
   axis: Axis;
   y: number;
   onEdit: (reading: TimelineReadingDto) => void;
+  editBlocked?: string | null;
 }) {
+  const value = `${fmtVal(reading.value)} ${node.unit}`;
   return (
     <button
       type="button"
       data-reading
-      className="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full"
+      className={`absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full ${editBlocked ? 'cursor-default' : 'cursor-pointer'}`}
       style={{ left: axis.xOf(reading.date), top: y }}
-      aria-label={`Edit value ${fmtVal(reading.value)} ${node.unit} on ${reading.date}`}
-      title={`${fmtVal(reading.value)} ${node.unit} · ${reading.date} — click to edit or delete`}
+      aria-label={editBlocked ? `Value ${value} on ${reading.date}` : `Edit value ${value} on ${reading.date}`}
+      aria-disabled={editBlocked ? true : undefined}
+      title={`${value} · ${reading.date} — ${editBlocked ?? 'click to edit or delete'}`}
       onClick={(e) => {
+        // Swallow the click either way so it never reaches the track's add-value handler.
         e.stopPropagation();
-        onEdit(reading);
+        if (!editBlocked) onEdit(reading);
       }}
     />
   );
@@ -260,13 +267,13 @@ export function TargetMarker({
   onOpenIssueNewTab: (issueKey: string) => void | Promise<void>;
   siteUrl: string;
 }) {
-  const [tip, setTip] = useState<{ clientX: number; clientY: number; flipX: boolean } | null>(null);
+  const [tip, setTip] = useState<{ clientY: number; place: TooltipPlacement } | null>(null);
   const dimmed = useIsDimmed(targetKeyKinds(target));
   const statusLabel =
     target.status === 'hit' ? 'Target hit' : target.status === 'missed' ? 'Target missed' : 'Upcoming';
 
   const track = (e: React.MouseEvent) =>
-    setTip({ clientX: e.clientX, clientY: e.clientY, flipX: e.clientX > window.innerWidth - 420 });
+    setTip({ clientY: e.clientY, place: tooltipPlacement(e.clientX, window.innerWidth) });
 
   const issueKey = target.source.issue;
   const href = siteUrl ? `${siteUrl}/browse/${issueKey}` : `/browse/${issueKey}`;
@@ -304,12 +311,8 @@ export function TargetMarker({
       </a>
       {tip && (
         <div
-          className="pointer-events-none fixed z-50 w-max max-w-[400px] whitespace-normal rounded border border-border bg-surface px-2.5 py-2 text-xs text-text shadow-md"
-          style={{
-            left: tip.flipX ? undefined : tip.clientX + 14,
-            right: tip.flipX ? window.innerWidth - tip.clientX + 14 : undefined,
-            top: tip.clientY + 14,
-          }}
+          className="pointer-events-none fixed z-50 w-max whitespace-normal rounded border border-border bg-surface px-2.5 py-2 text-xs text-text shadow-md"
+          style={{ ...tip.place, top: tip.clientY + 14 }}
           role="tooltip"
         >
           <TargetTooltipBody target={target} node={node} />

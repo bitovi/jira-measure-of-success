@@ -5,6 +5,8 @@ import {
   dateFieldSelection,
   effectiveTiming,
   isValidProjectKey,
+  kpiNotVisibleMessage,
+  kpiPermissionMessage,
   needsParentDue,
   normalizeProjectKey,
   projectKeyOfIssueKey,
@@ -16,8 +18,10 @@ import {
   type CreateKpiInput,
   type IssueLinkTypeInfo,
   type KpiHierarchyStatus,
+  type KpiSpaceAccess,
   type KpiSpaceStatus,
   DEFAULT_KPI_LINK_TYPE,
+  defaultParentEnd,
   isDirectionalLinkType,
   KPI_HIERARCHY_NOT_SET_UP,
   KpiHierarchyLink,
@@ -36,10 +40,14 @@ import {
 import {
   fetchAssignments,
   fetchDateFieldCatalog,
-  fetchDeletedIssueKeys,
+  classifyUnlistedKpis,
   fetchHierarchyLevels,
+  fetchIsJiraAdmin,
   fetchIssueWithAssignments,
+  fetchKpiIssueRef,
+  fetchKpiSpaceAccess,
   fetchKpiSpaceIssues,
+  PermissionLookupError,
   fetchReadingChangelog,
   fetchSubtreeTimingNodes,
   fetchSubtreeTimingNodesForRoots,
@@ -52,6 +60,7 @@ import {
   listIssueLinkTypes,
   ensureKpiIssueTypeOnProject,
   inlineIssueTypeIcons,
+  JiraForbiddenError,
   KPI_ISSUE_TYPE,
   searchIssuePicker,
   writeAssignments,
@@ -107,12 +116,34 @@ function requireSettingsPage(context: unknown): void {
 }
 
 /**
+ * Every Settings write also requires the invoking user to be a Jira admin,
+ * checked by Jira as the USER (spec 10). The page check above only says which
+ * module made the call; this makes Jira the authority, including for writes that
+ * only touch app storage (rollup config, KPI space key, hierarchy choice).
+ */
+async function requireJiraAdmin(): Promise<void> {
+  let isAdmin: boolean;
+  try {
+    isAdmin = await fetchIsJiraAdmin();
+  } catch (error) {
+    // Still refuse the write, but don't tell an admin they aren't one.
+    if (error instanceof PermissionLookupError) {
+      throw new Error("Couldn't check whether you're a Jira admin, so the change wasn't saved. Try again.");
+    }
+    throw error;
+  }
+  if (!isAdmin) throw new Error('Only Jira admins can change KPI settings.');
+}
+
+/**
  * `define` for Settings writes: rejects calls from any module other than the
- * admin Settings page before the handler runs.
+ * admin Settings page, and from anyone who isn't a Jira admin, before the
+ * handler runs.
  */
 const defineSettingsWrite = (functionKey: string, cb: ResolverFunction<unknown, unknown>): void => {
-  define(functionKey, (request) => {
+  define(functionKey, async (request) => {
     requireSettingsPage(request.context);
+    await requireJiraAdmin();
     return cb(request);
   });
 };
@@ -201,14 +232,50 @@ function observed<T>(promise: Promise<T>): Promise<T> {
  * A KPI issue gets its complete panel (the KPI chart) instead — unchanged from
  * before spec 07, it still builds the whole timeline.
  */
+/**
+ * The user's KPI-space permissions (spec 10), or null when no space is set up
+ * or Jira couldn't answer the lookup. Null means "unknown": the UI disables
+ * nothing up front and Jira's own refusals (403s) explain any denied action.
+ */
+function kpiSpaceAccess(spaceKey: string | null): Promise<KpiSpaceAccess | null> {
+  if (!spaceKey) return Promise.resolve(null);
+  return stage('access', () => fetchKpiSpaceAccess(spaceKey)).catch((error: unknown) => {
+    if (error instanceof PermissionLookupError) return null;
+    throw error;
+  });
+}
+
+/**
+ * The KPI-space issues the user may see. The permission lookup and the search
+ * run at the same time (no extra round trip on the critical path). The search
+ * runs as the user, so a successful result is already filtered by Jira and is
+ * trusted as-is. The lookup only explains a refused search: Jira rejects JQL
+ * naming a project the user can't browse, which becomes the no-access state.
+ */
+async function visibleKpiSpaceIssues(
+  spaceKey: string,
+  hierarchy: KpiHierarchyLink | null,
+  accessP: Promise<KpiSpaceAccess | null>,
+): Promise<KpiSpaceIssue[]> {
+  const search = fetchKpiSpaceIssues(spaceKey, hierarchy).then(
+    (issues) => ({ issues }),
+    (error: unknown) => ({ error }),
+  );
+  const [access, result] = await Promise.all([accessP, search]);
+  if ('issues' in result) return result.issues;
+  if (access?.browse === false) return [];
+  throw result.error;
+}
+
 async function buildPanelList(issueId: string): Promise<PanelListData> {
   const issueP = stage('issue', () => fetchIssueWithAssignments(issueId));
   const spaceP = readKpiSpaceConfig();
   const hierarchyP = readKpiHierarchyConfig();
+  const accessP = observed(spaceP.then((space) => kpiSpaceAccess(space.key)));
   const kpiIssuesP = observed(
     stage('kpiSpaceIssues', async () => {
       const [space, hierarchy] = await Promise.all([spaceP, hierarchyP]);
-      return space.key ? fetchKpiSpaceIssues(space.key, hierarchy) : [];
+      return space.key ? visibleKpiSpaceIssues(space.key, hierarchy, accessP) : [];
     }),
   );
   const parentKpiIdsP = observed(
@@ -220,7 +287,11 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
 
   const [issue, space] = await Promise.all([issueP, spaceP]);
   if (isKpiIssue(issue.issueKey, space.key)) {
-    const [{ skeleton, contributions }, kpiIssues] = await Promise.all([buildTimelineParts(), kpiIssuesP]);
+    const [{ skeleton, contributions }, kpiIssues, access] = await Promise.all([
+      buildTimelineParts(),
+      kpiIssuesP,
+      accessP,
+    ]);
     const timeline = applyTargetContributions(skeleton, contributions);
     const node = findTimelineNodeByIssueKey(timeline.roots, issue.issueKey);
     if (node) {
@@ -233,18 +304,21 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
           issueDueRolledUp: false,
           // The raw targets ride along so recording a value can rebuild the markers client-side.
           kpiView: { node, today: timeline.today, contributions: contributions[node.kpiId] ?? [] },
+          ...(access ? { access } : {}),
         },
       };
     }
   }
 
-  const [kpiIssues, parentKpiIds] = await Promise.all([kpiIssuesP, parentKpiIdsP]);
+  const [kpiIssues, parentKpiIds, access] = await Promise.all([kpiIssuesP, parentKpiIdsP, accessP]);
   const catalog = buildKpiCatalog(kpiIssues);
   const known = new Set(catalog.map((c) => c.id));
   // Only check the (rare) targeted KPIs the catalog doesn't list: they may be
-  // deleted, or just too new for the search index.
+  // deleted, hidden from this user (spec 10), or just too new for the search index.
   const unlisted = [...issue.assignments.map((a) => a.kpiId), ...parentKpiIds].filter((id) => !known.has(id));
-  const deletedKpiIds = unlisted.length ? await stage('deletedKpis', () => fetchDeletedIssueKeys(unlisted)) : [];
+  const { deleted: deletedKpiIds, noAccess: noAccessKpiIds } = unlisted.length
+    ? await stage('unlistedKpis', () => classifyUnlistedKpis(unlisted, access?.browse ?? true))
+    : { deleted: [], noAccess: [] };
   return {
     basis: {
       issueKey: issue.issueKey,
@@ -253,6 +327,8 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
       parentKpiIds: [...new Set(parentKpiIds)],
       catalog,
       ...(deletedKpiIds.length ? { deletedKpiIds } : {}),
+      ...(noAccessKpiIds.length ? { noAccessKpiIds } : {}),
+      ...(access ? { access } : {}),
     },
   };
 }
@@ -276,7 +352,9 @@ async function buildPanelValues(issueId: string): Promise<PanelValuesData> {
   const readingsP = observed(
     stage('readings', async () => {
       const [space, hierarchy] = await Promise.all([spaceP, readKpiHierarchyConfig()]);
-      const kpiIssues = space.key ? await fetchKpiSpaceIssues(space.key, hierarchy) : [];
+      const kpiIssues = space.key
+        ? await visibleKpiSpaceIssues(space.key, hierarchy, kpiSpaceAccess(space.key))
+        : [];
       const changelog = await fetchReadingChangelog(kpiIssues.map((i) => i.id));
       const readings: PanelValuesData['readings'] = {};
       for (const k of kpiIssues) {
@@ -354,9 +432,21 @@ define('getPanelValues', async ({ payload, context }) => {
   return buildPanelValues(issueId);
 });
 
+/**
+ * A target may only point at a KPI the user can see, in the KPI space (spec 10).
+ * Looked up as the USER, so Jira applies Browse Projects + issue security.
+ */
+async function requireTargetableKpi(kpiId: string): Promise<void> {
+  const [kpi, space] = await Promise.all([fetchKpiIssueRef(kpiId), readKpiSpaceConfig()]);
+  if (!kpi) throw new Error(kpiNotVisibleMessage(kpiId, space.name ?? space.key));
+  if (!space.key || kpi.projectKey !== space.key) {
+    throw new Error(`${kpi.key} isn't a KPI: targets can only point at KPIs in the KPI space.`);
+  }
+}
+
 define('saveAssignment', async ({ payload }) => {
   const { issueId, assignment } = payload as { issueId: string; assignment: Assignment };
-  const existing = await fetchAssignments(issueId);
+  const [existing] = await Promise.all([fetchAssignments(issueId), requireTargetableKpi(assignment.kpiId)]);
   const idx = existing.findIndex((a) => a.kpiId === assignment.kpiId);
   const next = [...existing];
   if (idx >= 0) next[idx] = assignment;
@@ -422,8 +512,9 @@ defineSettingsWrite('createKpiSpace', async ({ payload, context }) => {
   const key = normalizeProjectKey(String((payload as { key?: string })?.key ?? ''));
   if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
   const existing = await findProjectByKey(key);
-  // The invoking user (from context) leads a newly-created project — this keeps
-  // provisioning a pure `asApp` flow with no 3LO/`asUser` consent prompt.
+  // The invoking admin (from context) leads a newly-created project. The
+  // provisioning writes run as that user, so Jira requires Administer Jira for
+  // each one (spec 10).
   const leadAccountId = (context as { accountId?: string })?.accountId;
   if (!existing && !leadAccountId) {
     throw new Error('Could not determine the current user to lead the new KPI project.');
@@ -462,10 +553,7 @@ async function kpiHierarchyStatus(): Promise<KpiHierarchyStatus> {
 /** Create (or adopt) the app's `KPI Hierarchy` link type and point the config at it. */
 async function provisionDefaultHierarchy(): Promise<void> {
   const type = await ensureKpiHierarchyLinkType();
-  // A pre-existing same-named type may have its labels the other way round.
-  const reversed = type.outward.trim().toLowerCase() === DEFAULT_KPI_LINK_TYPE.inward.toLowerCase();
-  const parentEnd = reversed ? 'outward' : 'inward';
-  await writeKpiHierarchyConfig({ linkTypeId: type.id, parentEnd });
+  await writeKpiHierarchyConfig({ linkTypeId: type.id, parentEnd: defaultParentEnd(type) });
 }
 
 define('getKpiHierarchy', async () => kpiHierarchyStatus());
@@ -517,8 +605,11 @@ async function buildTimelineSkeleton(): Promise<TimelineData> {
   if (!space.key || !space.projectId) return { today, roots: [] } satisfies TimelineData;
   const spaceKey = space.key;
 
-  const issues = await stage('kpiSpaceIssues', () => fetchKpiSpaceIssues(spaceKey, hierarchy));
-  if (issues.length === 0) return { today, roots: [] } satisfies TimelineData;
+  const accessP = observed(kpiSpaceAccess(spaceKey));
+  const issues = await stage('kpiSpaceIssues', () => visibleKpiSpaceIssues(spaceKey, hierarchy, accessP));
+  const access = await accessP;
+  const withAccess = access ? { access } : {};
+  if (issues.length === 0) return { today, roots: [], ...withAccess } satisfies TimelineData;
 
   const changelogByIssue = await stage('readings', () => fetchReadingChangelog(issues.map((i) => i.id)));
 
@@ -557,7 +648,7 @@ async function buildTimelineSkeleton(): Promise<TimelineData> {
     resolving: true,
   });
 
-  return { today, roots: roots.map((r) => toNode(r, 0)) } satisfies TimelineData;
+  return { today, roots: roots.map((r) => toNode(r, 0)), ...withAccess } satisfies TimelineData;
 }
 
 /**
@@ -662,7 +753,21 @@ define('recordValue', async ({ payload }) => {
   const { kpiId, date, value } = RecordValueInput.parse(payload);
   // Readings are KPI-global (storage-model.md): kpiId identifies the KPI issue
   // whose reading-field changelog holds the series. value=null tombstones a date.
-  await writeReading(kpiId, date, value);
+  // Spec 10: the KPI must be visible to the user AND in the KPI space (the field
+  // exists on every issue), and the write runs as the user so Jira requires
+  // Edit Issues on it.
+  const [space, kpi] = await Promise.all([readKpiSpaceConfig(), fetchKpiIssueRef(kpiId)]);
+  const spaceLabel = space.name ?? space.key;
+  if (!kpi) throw new Error(kpiNotVisibleMessage(kpiId, spaceLabel));
+  if (!space.key || kpi.projectKey !== space.key) {
+    throw new Error(`${kpi.key} isn't a KPI: values can only be recorded on KPIs in the KPI space.`);
+  }
+  try {
+    await writeReading(kpi.id, date, value);
+  } catch (e) {
+    if (e instanceof JiraForbiddenError) throw new Error(kpiPermissionMessage('record', spaceLabel, kpi.key));
+    throw e;
+  }
   return null;
 });
 
@@ -682,7 +787,7 @@ define('searchIssues', async ({ payload }) => {
 // re-discover targets through the `kpiIds` search index, which lags this write.
 define('addTarget', async ({ payload, context }) => {
   const input = payload as AddTargetInput;
-  const issue = await fetchTargetSourceIssue(input.issueId);
+  const [issue] = await Promise.all([fetchTargetSourceIssue(input.issueId), requireTargetableKpi(input.kpiId)]);
   const assignment: Assignment = {
     kpiId: input.kpiId,
     inheritFromParent: false,
@@ -726,6 +831,18 @@ define('createKpi', async ({ payload }) => {
   const [space, hierarchy] = await Promise.all([readResolvedKpiSpaceConfig(), readKpiHierarchyConfig()]);
   if (!space.key || !space.projectId)
     throw new Error('KPI space is not set up — configure it in Settings first.');
+  // Spec 10: say which permission is missing before Jira refuses the create (or,
+  // worse, accepts the create and refuses the link). If Jira can't answer, refuse
+  // without blaming permissions.
+  const access = await fetchKpiSpaceAccess(space.key).catch((error: unknown) => {
+    if (error instanceof PermissionLookupError) {
+      throw new Error("Couldn't check your permissions on the KPI space, so the KPI wasn't created. Try again.");
+    }
+    throw error;
+  });
+  const spaceLabel = space.name ?? space.key;
+  if (!access.create) throw new Error(kpiPermissionMessage('add', spaceLabel));
+  if (input.parentKpiId && !access.link) throw new Error(kpiPermissionMessage('nest', spaceLabel));
   // A deleted link type would otherwise create the issue, fail the link with a
   // raw Jira 404 and roll back — catch it up front with the actionable error.
   if (input.parentKpiId && hierarchy) {

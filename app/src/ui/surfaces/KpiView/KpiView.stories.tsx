@@ -122,6 +122,34 @@ export const Undated: Story = {
 
 /** Interaction: the Record a value button opens the modal and Record calls back. */
 const recordSpy = fn();
+const RECORD_REASON = 'Recording a value needs Edit Issues permission on the KPI space project. Ask a Jira admin.';
+const blockedRecordSpy = fn();
+
+/** Spec 10: no Edit Issues on this KPI — the chart reads fine, recording is disabled with the reason. */
+export const RecordBlocked: Story = {
+  args: { node: REVENUE, onRecord: blockedRecordSpy, recordBlocked: RECORD_REASON },
+  play: async ({ canvasElement }) => {
+    blockedRecordSpy.mockClear();
+    const c = within(canvasElement);
+    const btn = c.getByRole('button', { name: 'Record a value' });
+    await expect(btn).toBeDisabled();
+    await userEvent.hover(btn.closest('[data-disabled-reason]') as HTMLElement);
+    await expect(await screen.findByRole('tooltip')).toHaveTextContent(RECORD_REASON);
+    await expect(screen.queryByRole('dialog')).toBeNull();
+
+    // The chart's value dots are disabled too: the reason is their tooltip, and clicking does nothing.
+    const dots = canvasElement.querySelectorAll<HTMLElement>('[data-reading]');
+    await expect(dots.length).toBeGreaterThan(0);
+    const dot = dots[0];
+    await expect(dot).toHaveAttribute('aria-disabled', 'true');
+    await expect(dot.getAttribute('title')).toContain(RECORD_REASON);
+    await expect(dot.className).not.toContain('cursor-pointer');
+    await userEvent.click(dot);
+    await expect(screen.queryByRole('dialog')).toBeNull();
+    await expect(blockedRecordSpy).not.toHaveBeenCalled();
+  },
+};
+
 export const RecordValue: Story = {
   args: { node: REVENUE, onRecord: recordSpy },
   play: async ({ canvasElement }) => {

@@ -395,7 +395,7 @@ export function getPanelValues(issueId: string): PanelValuesData {
 }
 
 /** The panel's two phases, unassembled — what save/remove return, like the backend. */
-function panelParts(issueId: string): PanelParts {
+export function panelParts(issueId: string): PanelParts {
   return { list: getPanelList(issueId), values: getPanelValues(issueId) };
 }
 
@@ -469,6 +469,7 @@ const linkTypes: IssueLinkTypeInfo[] = [
   { id: '10001', name: 'Cloners', inward: 'is cloned by', outward: 'clones' },
   { id: '10002', name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' },
   { id: '10003', name: 'Relates', inward: 'relates to', outward: 'relates to' },
+  { id: '10004', name: 'Parent', inward: 'Child', outward: 'Parent' },
 ];
 const hierarchyParam = () => new URLSearchParams(globalThis.location?.search ?? '').get('hierarchy');
 let hierarchyLink: KpiHierarchyLink | null = (() => {

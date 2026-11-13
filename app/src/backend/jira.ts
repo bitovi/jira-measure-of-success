@@ -1,4 +1,4 @@
-import { assumeTrustedRoute, route, routeFromAbsolute } from '@forge/api';
+import { assumeTrustedRoute, getAppContext, route, routeFromAbsolute } from '@forge/api';
 import { asApp, asUser } from './requestLog';
 import {
   AssignmentProperty,
@@ -25,6 +25,7 @@ import {
   type IssueLinkTypeInfo,
   type IssuePickerItem,
   type KpiHierarchyLink,
+  type KpiSpaceAccess,
   type ReadingChange,
   type TimingNode,
 } from '../domain/index';
@@ -241,10 +242,10 @@ export async function searchIssuePicker(query: string): Promise<IssuePickerItem[
 
 /**
  * Reading storage — Option B (specs/01-initial-build/storage-model.md). Each KPI
- * issue has one app-only field whose CHANGELOG holds the reading series: every
+ * issue has one app-defined field whose CHANGELOG holds the reading series: every
  * recorded value is an embedded-date payload, so each write is one changelog
  * entry. The series is reconstructed by the pure `readingsFromChangelog` reducer.
- * The field id is assigned when the KPI space is provisioned (Phase 5).
+ * Since spec 10 the field is written and read AS THE USER (see `writeReading`).
  */
 /**
  * Field ids this app needs from `GET /rest/api/3/field` — ONE request serves
@@ -280,10 +281,38 @@ async function loadFieldIds(): Promise<FieldIds> {
   if (!res.ok) throw new Error(`Failed to list Jira fields (${res.status})`);
   const fields = (await res.json()) as RawField[];
   return {
-    reading:
-      fields.find((f) => (f.key ?? '').includes('kpi-reading') || f.name === 'KPI Reading')?.id ?? null,
+    reading: pickReadingField(fields, currentEnvironmentType())?.id ?? null,
     rank: fields.find((f) => f.schema?.custom === 'com.pyxis.greenhopper.jira:gh-lexo-rank')?.id ?? null,
   };
+}
+
+/** The Forge environment this code runs in (`DEVELOPMENT`, `STAGING`, `PRODUCTION`); null outside Forge. */
+function currentEnvironmentType(): string | null {
+  try {
+    return getAppContext().environmentType?.toUpperCase() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const ENV_TAG = /__(DEVELOPMENT|STAGING|PRODUCTION)__/i;
+
+/**
+ * This install's KPI Reading field. Each Forge environment installed on a site
+ * gets its own field (key `<appId>__<ENV>__kpi-reading`), so a site with dev and
+ * staging installs has two. Since readings are written as the user (spec 10), a
+ * wrong pick would silently record into the other install's field — so prefer
+ * the running environment's field, then one without an environment tag, then
+ * any match.
+ */
+export function pickReadingField<F extends RawField>(fields: F[], environmentType: string | null): F | undefined {
+  const candidates = fields.filter((f) => (f.key ?? '').includes('kpi-reading') || f.name === 'KPI Reading');
+  const env = environmentType?.toUpperCase();
+  return (
+    (env ? candidates.find((f) => (f.key ?? '').toUpperCase().includes(`__${env}__`)) : undefined) ??
+    candidates.find((f) => !ENV_TAG.test(f.key ?? '')) ??
+    candidates[0]
+  );
 }
 
 function getFieldIds(): Promise<FieldIds> {
@@ -333,42 +362,53 @@ async function getReadingFieldId(): Promise<string> {
   return reading;
 }
 
-/** Record a reading on a KPI issue (value=null = tombstone/delete) by writing the encoded payload. */
+/** Jira refused a write because the user lacks the permission (403). */
+export class JiraForbiddenError extends Error {}
+
+/**
+ * Record a reading on a KPI issue (value=null = tombstone/delete) by writing the
+ * encoded payload to the KPI Reading field — as the USER, through the standard
+ * issue edit (spec 10, Path A). Jira itself requires Edit Issues on the KPI, and
+ * the changelog entry the series is rebuilt from names the person who recorded it.
+ * The field is editable (manifest `readOnly: false`) but on no screen; Jira
+ * accepts the REST edit regardless (verified live, spec 10 Step 0).
+ *
+ * `kpiIssueId` is the numeric id or key of a KPI the caller has already checked
+ * is in the KPI space (see the `recordValue` resolver).
+ */
 export async function writeReading(kpiIssueId: string, date: string, value: number | null): Promise<void> {
   const fieldId = await getReadingFieldId();
   const encoded = encodeReadingValue(date, value);
-  // The KPI Reading field is app-managed + readOnly, so it CANNOT be written via
-  // the standard issue-edit PUT /rest/api/3/issue/{id} (Jira returns 400 "Field
-  // does not support update"). It must be written through the dedicated app
-  // custom field value API, which only the owning app can call.
-  //
-  // That API requires the NUMERIC issue id. The resolver may hand us either a
-  // key (e.g. KPI-1) or a numeric id, so resolve it via a GET (which accepts
-  // both) and read the numeric `.id` back.
-  const idRes = await asApp().requestJira(route`/rest/api/3/issue/${kpiIssueId}?fields=`);
-  if (!idRes.ok) {
-    const body = await idRes.text().catch(() => '');
-    throw new Error(`Failed to resolve KPI issue id for "${kpiIssueId}" (${idRes.status}): ${body}`);
-  }
-  const { id: numericId } = (await idRes.json()) as { id: string };
-  // App custom field value API. `generateChangelog=true` is REQUIRED: readings
-  // are reconstructed from this field's changelog (Option B), so every write must
-  // emit a changelog entry. Success is 204 No Content.
-  const res = await asApp()
-    .requestJira(route`/rest/api/3/app/field/${fieldId}/value?generateChangelog=true`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ updates: [{ issueIds: [Number(numericId)], value: encoded }] }),
-    });
+  const res = await asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { [fieldId]: encoded } }),
+  });
   // A silently-ignored 4xx/5xx here is exactly what made "record value did
-  // nothing": the write failed, the field stayed empty, yet the resolver still
-  // returned unchanged timeline data. Surface the failure so the UI banner /
-  // Forge logs reveal Jira's actual message.
+  // nothing" once: surface the failure so the UI banner / Forge logs reveal it.
+  if (res.status === 403) throw new JiraForbiddenError(await jiraError(res, `record a value on ${kpiIssueId}`));
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`Failed to write reading (${res.status}): ${body}`);
   }
 }
+
+/**
+ * Look up an issue AS THE USER: its numeric id, key and project key. null when
+ * the user can't see it (Jira answers 404 for "doesn't exist" and "no
+ * permission" alike). Used to check a KPI is visible and in the KPI space before
+ * writing anything that points at it.
+ */
+export async function fetchKpiIssueRef(
+  idOrKey: string,
+): Promise<{ id: string; key: string; projectKey: string | null } | null> {
+  const res = await asUser().requestJira(route`/rest/api/3/issue/${idOrKey}?fields=project`);
+  if (res.status === 404 || res.status === 403) return null;
+  if (!res.ok) throw new Error(await jiraError(res, `look up ${idOrKey}`));
+  const body = (await res.json()) as { id: string; key: string; fields?: { project?: { key?: string } } };
+  return { id: String(body.id), key: body.key, projectKey: body.fields?.project?.key ?? null };
+}
+
 /**
  * Fetch the reading-field changelog for KPI issues via the bulk endpoint
  * (`POST /rest/api/3/changelog/bulkfetch`, filtered to the reading field). Up to
@@ -379,10 +419,10 @@ export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<
   const byIssue = new Map<string, ReadingChange[]>();
   if (kpiIssueIds.length === 0) return byIssue;
   const fieldId = await getReadingFieldId();
-  // Read asApp to match writeReading: the app-managed read-only reading field's
-  // values/changelog are generally NOT visible to asUser, so an asUser read
-  // comes back empty even after a successful write.
-  const res = await asApp().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
+  // As the USER (spec 10): the changelog of the (now editable) reading field is
+  // readable as the user, and Jira leaves out issues they may not see. Step 0 of
+  // spec 10 verified this on a live site, including history written by the app.
+  const res = await asUser().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -615,7 +655,9 @@ export async function fetchKpiSpaceIssues(
   const raw: RawIssue[] = [];
   let nextPageToken: string | undefined;
   for (let page = 0; page < 50; page += 1) {
-    const res = await asApp()
+    // As the USER: Jira applies Browse Projects + issue security, so KPIs the
+    // user may not see never reach them (spec 10).
+    const res = await asUser()
       .requestJira(
         nextPageToken
           ? route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
@@ -927,6 +969,58 @@ export async function fetchAncestorChain(
   return chain;
 }
 
+// ── Current user's permissions (spec 10) ─────────────────────────────────────
+
+type MyPermissions = { permissions?: Record<string, { havePermission?: boolean }> };
+type JiraRoute = ReturnType<typeof route>;
+
+/**
+ * The permission lookup itself failed (rate limit, outage, missing project) —
+ * which says nothing about what the user may do. Distinct from a "no".
+ */
+export class PermissionLookupError extends Error {}
+
+/** `GET /mypermissions` as the user; throws `PermissionLookupError` when the call fails. */
+async function fetchMyPermissions(path: JiraRoute): Promise<MyPermissions> {
+  let res: Awaited<ReturnType<ReturnType<typeof asUser>['requestJira']>>;
+  try {
+    res = await asUser().requestJira(path);
+  } catch (error) {
+    console.warn('[measure-of-success] permission lookup failed', error);
+    throw new PermissionLookupError(`Couldn't check your Jira permissions: ${String(error)}`);
+  }
+  if (!res.ok) {
+    const message = await jiraError(res, 'check your permissions');
+    console.warn(`[measure-of-success] ${message}`);
+    throw new PermissionLookupError(message);
+  }
+  return (await res.json()) as MyPermissions;
+}
+
+const has = (body: MyPermissions, key: string): boolean => body.permissions?.[key]?.havePermission === true;
+
+/**
+ * What the current user may do in the KPI project — one `asUser` call. Throws
+ * `PermissionLookupError` when Jira can't answer; callers then rely on Jira's
+ * own enforcement instead of guessing "no access".
+ */
+export async function fetchKpiSpaceAccess(projectKey: string): Promise<KpiSpaceAccess> {
+  const body = await fetchMyPermissions(
+    route`/rest/api/3/mypermissions?projectKey=${projectKey}&permissions=BROWSE_PROJECTS,CREATE_ISSUES,EDIT_ISSUES,LINK_ISSUES`,
+  );
+  return {
+    browse: has(body, 'BROWSE_PROJECTS'),
+    create: has(body, 'CREATE_ISSUES'),
+    edit: has(body, 'EDIT_ISSUES'),
+    link: has(body, 'LINK_ISSUES'),
+  };
+}
+
+/** Whether the current user has the global Administer Jira permission; throws `PermissionLookupError` on failure. */
+export async function fetchIsJiraAdmin(): Promise<boolean> {
+  return has(await fetchMyPermissions(route`/rest/api/3/mypermissions?permissions=ADMINISTER`), 'ADMINISTER');
+}
+
 // ── KPI space provisioning (storage-model.md) ────────────────────────────────
 
 /**
@@ -974,18 +1068,19 @@ export async function findProjectByKey(key: string): Promise<ProjectInfo | null>
 }
 
 /**
- * Create the KPI project shell for `key`. `leadAccountId` is the invoking user
- * (from the resolver context) — passed in so this stays a pure `asApp` call and
- * never triggers 3LO/`asUser` consent. The `KPI` issue type is provisioned and
- * associated separately by `ensureKpiIssueTypeOnProject`; the app-only reading
- * field is installed globally by the manifest `jira:customField` module.
+ * Create the KPI project shell for `key`, led by `leadAccountId` (the invoking
+ * admin, from the resolver context). Runs AS THE USER (spec 10): Jira itself
+ * requires Administer Jira, on top of the Settings-page + admin checks in the
+ * resolver. The `KPI` issue type is provisioned and associated separately by
+ * `ensureKpiIssueTypeOnProject`; the reading field is installed globally by the
+ * manifest `jira:customField` module.
  */
 export async function createKpiProject(
   key: string,
   leadAccountId: string,
 ): Promise<{ id: string; name: string }> {
   const name = `KPIs (${key})`;
-  const res = await asApp().requestJira(route`/rest/api/3/project`, {
+  const res = await asUser().requestJira(route`/rest/api/3/project`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ key, name, projectTypeKey: 'software', leadAccountId }),
@@ -1005,7 +1100,8 @@ async function ensureKpiIssueType(): Promise<string> {
   const types = (await listRes.json()) as Array<{ id: string; name: string }>;
   const found = types.find((t) => t.name === KPI_ISSUE_TYPE);
   if (found) return found.id;
-  const createRes = await asApp().requestJira(route`/rest/api/3/issuetype`, {
+  // Write as the USER (Administer Jira, spec 10); the list above stays asApp.
+  const createRes = await asUser().requestJira(route`/rest/api/3/issuetype`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1040,7 +1136,8 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
       'No issue-type scheme found for this project. Team-managed projects cannot be used as a KPI space — use a company-managed project.',
     );
   }
-  const addRes = await asApp()
+  // Write as the USER (Administer Jira, spec 10); the scheme read above stays asApp.
+  const addRes = await asUser()
     .requestJira(route`/rest/api/3/issuetypescheme/${schemeId}/issuetype`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1080,7 +1177,8 @@ export async function createKpiIssue(
     issuetype: { name: KPI_ISSUE_TYPE },
     summary: name,
   };
-  const res = await asApp().requestJira(route`/rest/api/3/issue`, {
+  // As the USER: Jira requires Create Issues in the KPI project (spec 10).
+  const res = await asUser().requestJira(route`/rest/api/3/issue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ fields, properties: [{ key: KPI_META_PROPERTY_KEY, value: meta }] }),
@@ -1126,7 +1224,8 @@ export async function linkKpiParent(
   parentKpiKey: string,
   childKpiKey: string,
 ): Promise<void> {
-  const res = await asApp().requestJira(route`/rest/api/3/issueLink`, {
+  // As the USER: Jira requires Link Issues (spec 10).
+  const res = await asUser().requestJira(route`/rest/api/3/issueLink`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(kpiParentLinkBody(hierarchy, parentKpiKey, childKpiKey)),
@@ -1170,7 +1269,8 @@ export async function ensureKpiHierarchyLinkType(): Promise<IssueLinkTypeInfo> {
     }
     return existing;
   }
-  const res = await asApp().requestJira(route`/rest/api/3/issueLinkType`, {
+  // Write as the USER (Administer Jira, spec 10); listing link types stays asApp.
+  const res = await asUser().requestJira(route`/rest/api/3/issueLinkType`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1191,26 +1291,45 @@ export async function ensureKpiHierarchyLinkType(): Promise<IssueLinkTypeInfo> {
   };
 }
 
-/** Delete an issue (used to roll back a half-created KPI). */
+/**
+ * Delete an issue (used to roll back a half-created KPI). Stays `asApp` on
+ * purpose (spec 10): Delete Issues is usually admin-only, so an `asUser` rollback
+ * would fail and leave the orphan it exists to prevent. It only ever deletes the
+ * key the user's own create call just returned.
+ */
 async function deleteIssue(issueKey: string): Promise<void> {
   const res = await asApp().requestJira(route`/rest/api/3/issue/${issueKey}`, { method: 'DELETE' });
   if (!res.ok && res.status !== 404) throw new Error(await jiraError(res, `delete issue ${issueKey}`));
 }
 
 /**
- * Of the given issue keys, the ones Jira says no longer exist (404). Any other
- * outcome — found, or a transient error — counts as "not deleted", so a hiccup
- * never makes the panel offer to remove a target on a live KPI.
+ * Sort the targeted KPI keys the user's catalog doesn't list into:
+ * - `deleted`: the app can't find them either (404 asApp) — gone from Jira;
+ * - `noAccess`: they exist, but the user may not see them (404 asUser, or no
+ *   Browse on the KPI space at all).
+ * Anything else is just too new for the search index and is in neither list. The
+ * app lookup is needed because `asUser` alone answers 404 for both cases; a
+ * transient error counts as "exists" so a hiccup never offers to remove a target
+ * on a live KPI.
  */
-export async function fetchDeletedIssueKeys(keys: string[]): Promise<string[]> {
+export async function classifyUnlistedKpis(
+  keys: string[],
+  canBrowseSpace: boolean,
+): Promise<{ deleted: string[]; noAccess: string[] }> {
   const unique = [...new Set(keys)];
-  const deleted = await Promise.all(
-    unique.map(async (key) => {
-      const res = await asApp().requestJira(route`/rest/api/3/issue/${key}?fields=summary`);
-      return res.status === 404 ? key : null;
+  const results = await Promise.all(
+    unique.map(async (key): Promise<'deleted' | 'noAccess' | null> => {
+      const appRes = await asApp().requestJira(route`/rest/api/3/issue/${key}?fields=summary`);
+      if (appRes.status === 404) return 'deleted';
+      if (!canBrowseSpace) return 'noAccess';
+      const userRes = await asUser().requestJira(route`/rest/api/3/issue/${key}?fields=summary`);
+      return userRes.status === 404 || userRes.status === 403 ? 'noAccess' : null;
     }),
   );
-  return deleted.filter((k): k is string => k !== null);
+  return {
+    deleted: unique.filter((_, i) => results[i] === 'deleted'),
+    noAccess: unique.filter((_, i) => results[i] === 'noAccess'),
+  };
 }
 
 /** Read a KPI's unit/direction from the `kpi-meta` entity property (null if unset). */

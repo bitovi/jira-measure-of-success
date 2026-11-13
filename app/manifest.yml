@@ -32,11 +32,16 @@ modules:
     - key: kpi-reading
       name: KPI Reading${TITLE_SUFFIX}
       description: >-
-        Append-only KPI reading value (app-managed). Each recorded value is an
-        embedded-date entry; the reading series is reconstructed from this
-        field's changelog (storage-model.md, Option B).
+        Append-only KPI reading value, written by the Measure of Success app as
+        the person recording it. Each recorded value is an embedded-date entry;
+        the reading series is reconstructed from this field's changelog
+        (storage-model.md, Option B). Don't edit it by hand.
       type: string
-      readOnly: true
+      # Editable on purpose (spec 10, Path A): readings are written AS THE USER
+      # through the standard issue edit, so Jira requires Edit Issues on the KPI
+      # and the changelog names who recorded each value. The field is on no
+      # screen, so Jira doesn't show it.
+      readOnly: false
   function:
     - key: resolver
       handler: index.handler
@@ -81,9 +86,9 @@ permissions:
 app:
   runtime:
     name: nodejs22.x
-  id: ari:cloud:ecosystem::app/f92bb5d3-136d-4f6d-9245-fc31f4e8fdec
-
-# id assigned by `forge register` (deferred until a dev site is provisioned).
+  # Not committed: each fork registers its own app (`npm run forge -- register`)
+  # which stores the UUID in the repo-root `.env` as APP_ID. See README.md.
+  id: ari:cloud:ecosystem::app/${APP_ID}
 
 # Per-environment label appended to every user-visible title so dev/staging
 # installs on the same site are distinguishable (e.g. "KPIs (staging)" in the
@@ -91,5 +96,6 @@ app:
 # deploys leave it empty.
 environment:
   variables:
+    - APP_ID
     - key: TITLE_SUFFIX
       default: ''

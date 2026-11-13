@@ -28,12 +28,8 @@ import type { Trace } from './requestLog';
 const h = vi.hoisted(() => ({ jira: null as MockJira | null }));
 
 vi.mock('@forge/api', async () => {
-  const { forgeRouteHelpers } = await import('./testing/scaleFixture');
-  const requester = {
-    requestJira: (route: unknown, init?: { method?: string; body?: unknown }) =>
-      h.jira!.requestJira(route, init),
-  };
-  return { default: { asUser: () => requester, asApp: () => requester }, ...forgeRouteHelpers };
+  const { forgeRouteHelpers, mockForgeApi } = await import('./testing/scaleFixture');
+  return { default: mockForgeApi(() => h.jira!), ...forgeRouteHelpers };
 });
 
 vi.mock('@forge/kvs', () => ({
@@ -106,6 +102,8 @@ describe('getTimelineData at scale', () => {
       // per-issue `kpi-assignments` GETs (was one per contributing epic)
       // step 2: kpi-meta arrives with the KPI-space search; one shared /field lookup
       'GET /rest/api/3/field': 1,
+      // spec 10: the user's KPI-space permissions, fetched alongside the KPI search
+      'GET /rest/api/3/mypermissions': 1,
       'GET /rest/api/3/search/jql [project]': 1,
       'GET /rest/api/3/search/jql [kpi-assignments index]': ceil(epics, 100),
       // + the separate parent fetch in fetchTargetContributions
@@ -138,11 +136,14 @@ describe('getTimelineData at scale', () => {
 
     // Changed by spec 08 (targets carry `relative`); identical to the previous digest with it stripped.
     // Changed by spec 09 (same-level relative targets stack); identical to the previous digest with chains disabled.
+    // Changed by PR #3 review (marker status uses the shared displayState rule); identical to the previous digest with `status` stripped.
     // `detail` (the tooltip's bet + resolution) is left out so this still guards the rest of the output.
+    // Spec 10 added `access` (the user's KPI-space permissions); left out, so the digest is unchanged.
+    expect(data.access).toEqual({ browse: true, create: true, edit: true, link: true });
     const digest = createHash('sha256')
-      .update(JSON.stringify(data, (key, value) => (key === 'detail' ? undefined : value)))
+      .update(JSON.stringify(data, (key, value) => (key === 'detail' || key === 'access' ? undefined : value)))
       .digest('hex');
-    expect(digest).toMatchInlineSnapshot(`"0e0631704229daa51ef39d7ce15e64cdc1261f0ee4308fc1b69e6b841dc2ed4b"`);
+    expect(digest).toMatchInlineSnapshot(`"d1eb83616cf65f687391c5f7297dc8cb1cb2e9ca27f449acf3b3db414fdbe0ad"`);
   });
 
   it('the contributions search asks for the kpi-assignments property and never reads it per issue', async () => {
@@ -169,10 +170,11 @@ describe('getTimelineData at scale', () => {
 
       expect(summary.byEndpoint).toEqual({
         'GET /rest/api/3/field': 1,
+        'GET /rest/api/3/mypermissions': 1,
         'GET /rest/api/3/search/jql [project]': 1,
         'POST /rest/api/3/changelog/bulkfetch': 1,
       });
-      expect(summary.totalRequests).toBe(3);
+      expect(summary.totalRequests).toBe(4);
       expect(Object.keys(summary.stages)).toEqual(
         expect.arrayContaining(['config', 'fields', 'kpiSpaceIssues', 'readings']),
       );

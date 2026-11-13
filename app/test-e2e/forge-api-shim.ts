@@ -14,8 +14,8 @@
  *
  * NOTE: `asApp()` and `asUser()` resolve to the SAME token-authenticated client
  * here — a PAT can only ever act as its user. App-identity-only capabilities
- * (e.g. writing the read-only `kpi-reading` field) therefore cannot be covered
- * by this shim; the test skips those with an explanation.
+ * can't be covered by this shim. (Readings used to be one; since spec 10 they
+ * are written as the user, so `writeReading` is covered.)
  */
 
 interface RequestOptions {
@@ -92,4 +92,9 @@ export function routeFromAbsolute(absolutePath: string): string {
  */
 export function assumeTrustedRoute(path: string): string {
   return path;
+}
+
+/** No Forge app context outside Forge (the real `getAppContext` throws there too). */
+export function getAppContext(): never {
+  throw new Error('getAppContext: not running in Forge');
 }

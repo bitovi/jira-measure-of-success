@@ -141,8 +141,9 @@ is now configured like the KPI space (Settings → **KPI Hierarchy**):
   a same-named) type reading “is the parent KPI of” / “is a child KPI of”.
   **Create space** also does this when nothing is configured yet.
 - **Or use an existing link type** — any type whose two labels differ (symmetric
-  ones like Relates are excluded), plus which end is the parent
-  (e.g. “Parent blocks child” vs “Child blocks parent”).
+  ones like Relates are excluded), plus which end is the parent — picked by the
+  label on the parent KPI's side (e.g. “blocks” vs “is blocked by”), with a preview
+  of how Jira will list children and parent.
 
 Stored in KVS `kpi:hierarchy` as `{ linkTypeId, parentEnd }` — by **id**, so an
 admin renaming the type doesn't break nesting. Until one is set, every KPI is a

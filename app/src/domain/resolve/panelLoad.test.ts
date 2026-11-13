@@ -147,6 +147,42 @@ describe('assemblePanel', () => {
     });
   });
 
+  describe('a target on a KPI the user may not see (spec 10)', () => {
+    const hidden: PanelBasis = {
+      ...basis,
+      own: [assignment('KPI-1', ownDue), assignment('KPI-9', ownDue)],
+      parentKpiIds: ['KPI-9', 'KPI-8'],
+      noAccessKpiIds: ['KPI-9', 'KPI-8'],
+    };
+
+    it.each([
+      ['Phase 1 only', null],
+      ['with Phase 2', values],
+    ])('%s: keeps the bet, flags it no-access, and never resolves values', (_label, phase2) => {
+      const row = assemblePanel(hidden, phase2).rows.find((r) => r.kpiId === 'KPI-9')!;
+      expect(row).toMatchObject({
+        kpiNoAccess: true,
+        name: 'KPI-9',
+        relationship: 'shared',
+        target: 10,
+        resolvedValue: null,
+        displayState: null,
+      });
+      expect(row.kpiMissing).toBeUndefined();
+      expect(row.resolving).toBeUndefined();
+    });
+
+    it("doesn't offer to track a parent's target on a KPI the user may not see", () => {
+      expect(assemblePanel(hidden, values).rows.some((r) => r.kpiId === 'KPI-8')).toBe(false);
+    });
+
+    it('passes the KPI-space access through to the panel', () => {
+      const access = { browse: true, create: false, edit: false, link: false };
+      expect(assemblePanel({ ...hidden, access }, values).access).toEqual(access);
+      expect(assemblePanel(basis, values).access).toBeUndefined();
+    });
+  });
+
   describe('a KPI missing from the catalog but not confirmed deleted (e.g. search-index lag)', () => {
     const lagging: PanelBasis = {
       ...basis,

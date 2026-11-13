@@ -84,6 +84,13 @@ export interface PanelRowDto {
    * stored bet so it can be removed, but has no values, status or record action.
    */
   kpiMissing?: boolean;
+  /**
+   * true when the target points at a KPI the user doesn't have permission to see
+   * (no Browse on the KPI project, or an issue security level) — spec 10. Like
+   * `kpiMissing` it shows only the stored bet: no values, status or record
+   * action; it can still be removed (the target lives on this work issue).
+   */
+  kpiNoAccess?: boolean;
 }
 
 export interface CatalogEntryDto {
@@ -114,6 +121,11 @@ export interface PanelData {
   kpiView?: KpiViewDto | null;
   /** true while Phase 2 (readings + rolled-up dates) is outstanding — spec 07 */
   resolving?: boolean;
+  /**
+   * The user's permissions in the KPI space (spec 10). Absent when no KPI space
+   * is set up (or from older callers) — the UI then behaves as if allowed.
+   */
+  access?: KpiSpaceAccess;
 }
 
 /**
@@ -137,6 +149,13 @@ export interface PanelBasis {
    * KPIs — so only these are shown as "KPI deleted".
    */
   deletedKpiIds?: string[];
+  /**
+   * Targeted KPI ids (own or parent's) that exist but the user may not see
+   * (spec 10). Shown as "You don't have permission to view this KPI".
+   */
+  noAccessKpiIds?: string[];
+  /** the user's KPI-space permissions (spec 10); absent when no space is set up */
+  access?: KpiSpaceAccess;
 }
 
 /**
@@ -255,6 +274,8 @@ export interface TimelineData {
   /** ISO date treated as "today" for status classification + the axis marker */
   today: string;
   roots: TimelineNodeDto[];
+  /** the user's KPI-space permissions (spec 10); absent when no space is set up */
+  access?: KpiSpaceAccess;
 }
 
 /**
@@ -281,6 +302,24 @@ export interface KpiSpaceStatus {
   name: string | null;
   state: KpiSpaceState;
 }
+
+/**
+ * What the current user may do in the KPI space — their Jira project
+ * permissions on the KPI project (spec 10). The server enforces these; the UI
+ * uses them to disable controls with a reason.
+ */
+export interface KpiSpaceAccess {
+  /** BROWSE_PROJECTS: see KPIs and their readings */
+  browse: boolean;
+  /** CREATE_ISSUES: Add KPI */
+  create: boolean;
+  /** EDIT_ISSUES: record / delete a value */
+  edit: boolean;
+  /** LINK_ISSUES: nest a new KPI under a parent */
+  link: boolean;
+}
+
+export const FULL_KPI_SPACE_ACCESS: KpiSpaceAccess = { browse: true, create: true, edit: true, link: true };
 
 // ── KPI hierarchy link (resolve/kpiLinks) ───────────────────────────────
 // KPIs nest via an issue link type. Link types are global to the site; an admin
