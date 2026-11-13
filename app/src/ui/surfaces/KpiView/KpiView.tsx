@@ -5,6 +5,7 @@ import ArrowUpIcon from '@atlaskit/icon/core/arrow-up';
 import { ModalTransition } from '@atlaskit/modal-dialog';
 import Tooltip from '@atlaskit/tooltip';
 import { openIssue, openIssueNewTab, getSiteUrl } from '@ui/bridge.js';
+import { DisabledReason } from '@ui/components/DisabledReason/index.js';
 import {
   axisDatesOf,
   buildAxis,
@@ -52,12 +53,18 @@ export function KpiView({
   node,
   today,
   onRecord,
+  recordBlocked = null,
   onOpenIssue = openIssue,
   onOpenIssueNewTab = openIssueNewTab,
   loadSiteUrl = getSiteUrl,
 }: {
   node: TimelineNodeDto;
   today: string;
+  /**
+   * Why the user can't record or edit values on this KPI (no Edit Issues, spec
+   * 10), or null. The chart stays readable; recording is disabled with this reason.
+   */
+  recordBlocked?: string | null;
   /**
    * Record (or, with value=null, delete) a reading on this KPI. Resolves once
    * saved; the modal stays open (saving) until then and shows a rejection.
@@ -136,7 +143,7 @@ export function KpiView({
     const x = Math.max(0, Math.min(e.clientX - rect.left, axis.plotWidth));
     const t = axis.msAt(x);
     const dateISO = new Date(t).toISOString().slice(0, 10);
-    if (dateISO <= today) setAdding({ date: dateISO });
+    if (dateISO <= today && !recordBlocked) setAdding({ date: dateISO });
   };
 
   const href = node.issueKey
@@ -193,9 +200,15 @@ export function KpiView({
               {nextTarget.date}
             </span>
           )}
-          <Button appearance="primary" onClick={() => setAdding({ date: today })}>
-            Record a value
-          </Button>
+          <DisabledReason reason={recordBlocked}>
+            <Button
+              appearance="primary"
+              isDisabled={recordBlocked !== null}
+              onClick={() => setAdding({ date: today })}
+            >
+              Record a value
+            </Button>
+          </DisabledReason>
         </div>
       </div>
 
@@ -283,7 +296,9 @@ export function KpiView({
                     node={node}
                     axis={axis}
                     y={yOf(r.value)}
-                    onEdit={setEditing}
+                    onEdit={(reading) => {
+                      if (!recordBlocked) setEditing(reading);
+                    }}
                   />
                 ))}
 

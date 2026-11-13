@@ -60,9 +60,28 @@ Write each reading into a dedicated **app-only field** on the KPI issue as an em
 
 ### Decision & rationale
 
-**Adopted: Option B (changelog field).** Readings accumulate for years, so the unbounded, natively-audited, race-free model fits better; the bulk endpoint also collapses timeline enumeration into a single call. The embedded-date encoding neutralizes the ordering concern, and append + tombstone recovers edit/delete. Accepted costs: history can't be purged, and the field's raw value is just the last write (so it must be an app-only field users don't hand-edit).
+**Adopted: Option B (changelog field).** Readings accumulate for years, so the unbounded, natively-audited, race-free model fits better; the bulk endpoint also collapses timeline enumeration into a single call. The embedded-date encoding neutralizes the ordering concern, and append + tombstone recovers edit/delete. Accepted costs: history can't be purged, and the field's raw value is just the last write (so it must be a field users don't hand-edit).
+
+> **Revised by [spec 10](../10-kpi-space-permissions/plan.md) (Path A):** the field is no longer app-only. It's an editable (`readOnly: false`) app-defined field on no screen, written and read **as the recording user** through the standard issue edit. Jira enforces Edit Issues on the KPI, each changelog entry's author is the person who recorded it, and CascadeMCP can write readings over standard REST. Anyone with Edit Issues could also write the field over REST (or by hand if an admin adds it to a screen); unparseable values are ignored by `decodeReadingValue`.
 
 Option A was rejected: its 32 KB (~800-point) ceiling and read-modify-write race outweigh its easier in-place edit/purge for a long-lived, externally-writable series.
+
+---
+
+## Permissions (spec 10)
+
+The KPI project's **permission scheme** decides who can do what with KPIs; admins manage it in Jira and the app follows it, because KPI-space calls run **as the user** (`asUser`):
+
+| Action | Jira permission (on the KPI project / KPI issue) |
+|---|---|
+| See KPIs and their readings (timeline, panel catalog) | Browse Projects (+ issue security levels) |
+| Add a KPI | Create Issues |
+| Nest a KPI under another | Link Issues |
+| Record / edit / delete a value | Edit Issues |
+| Point a target at a KPI | Browse Projects on that KPI (+ Edit on the work issue, as before) |
+| Settings writes (space, hierarchy, rollup, provisioning) | Administer Jira |
+
+**Still `asApp`, on purpose:** site-wide lookups (`/field`, `/issuetype`, `/issueLinkType`, the project and issue-type-scheme reads) that carry nothing per-user; the rollback delete of a just-created KPI whose link failed (Delete Issues is usually admin-only); and the "is this targeted KPI deleted?" check, because `asUser` answers 404 for both deleted and hidden.
 
 ---
 

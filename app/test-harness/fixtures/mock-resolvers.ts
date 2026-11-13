@@ -469,6 +469,7 @@ const linkTypes: IssueLinkTypeInfo[] = [
   { id: '10001', name: 'Cloners', inward: 'is cloned by', outward: 'clones' },
   { id: '10002', name: 'Duplicate', inward: 'is duplicated by', outward: 'duplicates' },
   { id: '10003', name: 'Relates', inward: 'relates to', outward: 'relates to' },
+  { id: '10004', name: 'Parent', inward: 'Child', outward: 'Parent' },
 ];
 const hierarchyParam = () => new URLSearchParams(globalThis.location?.search ?? '').get('hierarchy');
 let hierarchyLink: KpiHierarchyLink | null = (() => {

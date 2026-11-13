@@ -56,9 +56,19 @@ export function isDirectionalLinkType(type: Pick<IssueLinkTypeInfo, 'inward' | '
   return type.inward.trim().toLowerCase() !== type.outward.trim().toLowerCase();
 }
 
-/** "Parent blocks child" / "Child blocks parent" — how a parentEnd choice reads with a type's labels. */
-export function describeParentEnd(type: Pick<IssueLinkTypeInfo, 'outward'>, parentEnd: KpiParentEnd): string {
-  return parentEnd === 'inward' ? `Parent ${type.outward} child` : `Child ${type.outward} parent`;
+/**
+ * The label Jira's "Linked issues" panel groups a link under on each end, for a
+ * parentEnd choice: the parent KPI lists its children under `parent`, a child
+ * KPI lists its parent under `child`. With Blocks / `'inward'` that's
+ * `{ parent: 'blocks', child: 'is blocked by' }`.
+ */
+export function linkLabelsForParentEnd(
+  type: Pick<IssueLinkTypeInfo, 'inward' | 'outward'>,
+  parentEnd: KpiParentEnd,
+): { parent: string; child: string } {
+  return parentEnd === 'inward'
+    ? { parent: type.outward, child: type.inward }
+    : { parent: type.inward, child: type.outward };
 }
 
 /**

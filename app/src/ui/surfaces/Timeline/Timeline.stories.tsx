@@ -406,6 +406,69 @@ export const EmptyTree: Story = {
   },
 };
 
+// ── Spec 10: the KPI space follows the user's Jira permissions ──────────────
+
+/** No Browse on the KPI project: the backend returns no KPIs and says why; Add KPI is disabled with the reason. */
+export const NoAccess: Story = {
+  args: {
+    useData: stub({
+      data: { today: '2026-07-10', roots: [], access: { browse: false, create: false, edit: false, link: false } },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText(/You don't have permission to view the KPI space/)).toBeInTheDocument();
+    await expect(c.queryByText(/No KPIs yet/i)).toBeNull();
+    await expect(c.getByRole('button', { name: /Add KPI/i })).toBeDisabled();
+  },
+};
+
+const readOnlyRecordSpy = fn();
+/** Browse only: KPIs are visible, but Add KPI, add-child and record are disabled, each with its reason. */
+export const ReadOnly: Story = {
+  args: {
+    useData: stub({
+      data: { ...POPULATED, access: { browse: true, create: false, edit: false, link: false } },
+      record: readOnlyRecordSpy,
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    readOnlyRecordSpy.mockClear();
+    const c = within(canvasElement);
+    const addKpi = c.getByRole('button', { name: /Add KPI/i });
+    await expect(addKpi).toBeDisabled();
+    await userEvent.hover(addKpi.closest('[data-disabled-reason]') as HTMLElement);
+    await expect(await screen.findByRole('tooltip')).toHaveTextContent(/Adding a KPI needs Create Issues permission/);
+    await userEvent.unhover(addKpi.closest('[data-disabled-reason]') as HTMLElement);
+
+    const recordBtn = c.getAllByRole('button', { name: 'Record a value' })[0];
+    await expect(recordBtn).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.click(recordBtn);
+    await expect(screen.queryByRole('dialog')).toBeNull();
+    await expect(c.getAllByRole('button', { name: 'Add child KPI' })[0]).toHaveAttribute('aria-disabled', 'true');
+    // The tip no longer offers recording.
+    await expect(c.queryByText(/click a past date to record a value/)).toBeNull();
+    await expect(readOnlyRecordSpy).not.toHaveBeenCalled();
+  },
+};
+
+/** Create but no Link Issues: Add KPI works, but the parent picker is disabled with the reason. */
+export const CanAddButNotNest: Story = {
+  args: {
+    useData: stub({ data: { ...POPULATED, access: { browse: true, create: true, edit: true, link: false } } }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
+    const dialog = await screen.findByRole('dialog');
+    await expect(dialog.querySelector('[data-disabled-reason]')).toHaveAttribute(
+      'data-disabled-reason',
+      expect.stringMatching(/^Nesting a KPI under another needs Link Issues permission/),
+    );
+    await expect(c.getAllByRole('button', { name: 'Add child KPI' })[0]).toHaveAttribute('aria-disabled', 'true');
+  },
+};
+
 export const Loading: Story = {
   args: { useData: stub({ data: null, pending: true }) },
   play: async ({ canvasElement }) => {

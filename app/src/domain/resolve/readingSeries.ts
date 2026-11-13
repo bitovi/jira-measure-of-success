@@ -4,8 +4,9 @@ import { IsoDate } from '../models/assignment';
 /**
  * Reading series storage — Option B (specs/01-initial-build/storage-model.md).
  *
- * A KPI's readings live in the Jira changelog of a dedicated, app-only field on
- * the KPI issue. Each recorded value is written as an embedded-date payload, so
+ * A KPI's readings live in the Jira changelog of a dedicated, app-defined field
+ * on the KPI issue (written as the recording user since spec 10, so each entry's
+ * author is who recorded it). Each recorded value is written as an embedded-date payload, so
  * every write becomes one changelog entry; the series is reconstructed here from
  * the field's history. This module is pure (no @forge/*): the backend fetches
  * the raw changelog (`POST /rest/api/3/changelog/bulkfetch`, filtered to the

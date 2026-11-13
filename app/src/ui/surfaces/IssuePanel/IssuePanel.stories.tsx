@@ -324,6 +324,45 @@ export const NoCatalog: Story = {
   },
 };
 
+// ── Spec 10: the KPI space follows the user's Jira permissions ──────────────
+
+/** No Browse on the KPI project: explain that instead of "define a KPI", and offer no form. */
+export const NoAccess: Story = {
+  args: {
+    usePanel: stub({ data: { ...NO_CATALOG, access: { browse: false, create: false, edit: false, link: false } } }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(c.getByText(/You don't have permission to view the KPI space/)).toBeInTheDocument();
+    await expect(c.queryByText(/KPIs are not defined yet/i)).not.toBeInTheDocument();
+    await expect(c.queryByRole('button', { name: /define a KPI/i })).not.toBeInTheDocument();
+  },
+};
+
+/** Browse only: targets still show, but the nudge's Record a value is disabled with the reason. */
+export const ReadOnly: Story = {
+  args: {
+    usePanel: stub({ data: { ...SAVED_STATES, access: { browse: true, create: false, edit: false, link: false } } }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const buttons = c.getAllByRole('button', { name: 'Record a value' });
+    await expect(buttons.length).toBeGreaterThan(0);
+    for (const b of buttons) await expect(b).toBeDisabled();
+  },
+};
+
+/** The issue IS a KPI, but the user can't edit it: the chart shows, Record a value is disabled. */
+export const KpiViewReadOnly: Story = {
+  args: {
+    usePanel: stub({ data: { ...KPI_VIEW, access: { browse: true, create: false, edit: false, link: false } } }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(await c.findByRole('button', { name: 'Record a value' })).toBeDisabled();
+  },
+};
+
 export const PendingTargetDate: Story = {
   args: { usePanel: stub({ data: PENDING_DATE }) },
   play: async ({ canvasElement }) => {

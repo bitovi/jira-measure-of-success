@@ -22,6 +22,13 @@ import {
   searchIssues,
   addTarget,
 } from './fixtures/mock-resolvers.js';
+import {
+  accessMode,
+  applyAccessToPanelList,
+  applyAccessToPanelValues,
+  applyAccessToTimeline,
+  assertKpiWriteAllowed,
+} from './access-modes.js';
 
 /**
  * Mock `@forge/bridge` — Vite aliases `@forge/bridge` to this module in the
@@ -32,10 +39,21 @@ import {
  */
 type Handler = (payload: any) => unknown;
 
+/**
+ * `?access=none|readonly|hiddenKpi` (spec 10): answer as the backend would for a
+ * user with limited KPI-space permissions — see access-modes.ts. `hiddenKpi`
+ * hides the first KPI targeted on the default panel issue (10048).
+ */
+function hiddenKpiId(): string | null {
+  if (accessMode() !== 'hiddenKpi') return null;
+  const list = getPanelList('10048');
+  return list.basis?.own[0]?.kpiId ?? null;
+}
+
 const resolvers: Record<string, Handler> = {
   // Issue panel
   getPanelData: (p) => getPanelData(p?.issueId ?? '10048'),
-  getPanelList: (p) => getPanelList(p?.issueId ?? '10048'),
+  getPanelList: (p) => applyAccessToPanelList(getPanelList(p?.issueId ?? '10048'), accessMode(), hiddenKpiId()),
   // `?valuesDelayMs=3000` slows Phase 2 so the progressive load is visible in
   // the harness (estimates shimmer first); `?valuesFail=1` makes it reject.
   getPanelValues: async (p) => {
@@ -43,9 +61,12 @@ const resolvers: Record<string, Handler> = {
     const delay = Number(params.get('valuesDelayMs') ?? 0);
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     if (params.get('valuesFail') === '1') throw new Error('Simulated Phase 2 failure');
-    return getPanelValues(p?.issueId ?? '10048');
+    return applyAccessToPanelValues(getPanelValues(p?.issueId ?? '10048'), accessMode(), hiddenKpiId());
   },
-  saveAssignment: (p) => saveAssignment(p?.issueId, p?.assignment),
+  saveAssignment: (p) => {
+    assertKpiWriteAllowed('target', accessMode(), p?.assignment?.kpiId ?? null, hiddenKpiId());
+    return saveAssignment(p?.issueId, p?.assignment);
+  },
   removeAssignment: (p) => removeAssignment(p?.issueId, p?.kpiId),
   // Settings
   getHierarchyLevels: () => getHierarchyLevels(),
@@ -59,8 +80,8 @@ const resolvers: Record<string, Handler> = {
   saveKpiHierarchy: (p) => saveKpiHierarchy(p),
   createKpiHierarchyLinkType: () => createKpiHierarchyLinkType(),
   // Timeline
-  getTimelineData: () => getTimelineData(),
-  getTimelineSkeleton: () => getTimelineSkeleton(),
+  getTimelineData: () => applyAccessToTimeline(getTimelineData(), accessMode(), hiddenKpiId()),
+  getTimelineSkeleton: () => applyAccessToTimeline(getTimelineSkeleton(), accessMode(), hiddenKpiId()),
   // `?targetsDelayMs=3000` slows Phase 2 so the progressive load is visible in
   // the harness (rows shimmer first); `?targetsFail=1` makes it reject.
   getTimelineTargets: async () => {
@@ -72,6 +93,7 @@ const resolvers: Record<string, Handler> = {
   },
   recordValue: async (p) => {
     await simulateMutation();
+    assertKpiWriteAllowed('record', accessMode(), p?.kpiId ?? null, hiddenKpiId());
     return recordValue(p?.kpiId, p?.date, p?.value);
   },
   // `?mutationDelayMs=3000` slows the modal saves (createKpi / addTarget /
@@ -79,11 +101,14 @@ const resolvers: Record<string, Handler> = {
   // reject (error shown in the modal).
   createKpi: async (p) => {
     await simulateMutation();
+    assertKpiWriteAllowed('add', accessMode(), null, null);
+    if (p?.parentKpiId) assertKpiWriteAllowed('nest', accessMode(), null, null);
     return createKpi(p);
   },
   searchIssues: (p) => searchIssues(p?.query ?? ''),
   addTarget: async (p) => {
     await simulateMutation();
+    assertKpiWriteAllowed('target', accessMode(), p?.kpiId ?? null, hiddenKpiId());
     return addTarget(p);
   },
 };

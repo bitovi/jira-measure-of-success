@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // `jira.ts` imports `@forge/api`, which is only available inside a Forge runtime.
-// Stub it so we can unit-test the `writeReading` flow: it resolves the numeric
-// issue id via GET, then writes the reading through the app custom field value
-// API (PUT /rest/api/3/app/field/{id}/value?generateChangelog=true).
+// Stub it so we can unit-test the `writeReading` flow: it writes the encoded
+// reading through the standard issue edit (PUT /rest/api/3/issue/{id}).
 let putResult: {
   ok: boolean;
   status: number;
@@ -23,7 +22,7 @@ const defaultRequestJira = async (route: unknown, options?: { method?: string })
     return postResult;
   }
   if (options?.method === 'PUT') {
-    // App custom field value write.
+    // Issue edit (the reading write).
     return putResult;
   }
   if (url.includes('/rest/api/3/issue/')) {
@@ -53,9 +52,13 @@ vi.mock('@forge/api', () => ({
     return `${u.pathname}${u.search}`;
   },
   assumeTrustedRoute: (path: string) => path,
+  getAppContext: () => {
+    throw new Error('not running in Forge');
+  },
 }));
 
 import {
+  JiraForbiddenError,
   writeReading,
   createKpiIssue,
   writeAssignments,
@@ -64,6 +67,7 @@ import {
   fetchSubtreeTimingNodesForRoots,
   fetchIconDataUrl,
   fetchHierarchyLevels,
+  pickReadingField,
 } from './jira.js';
 import { dateFieldSelection } from '../domain/index.js';
 
@@ -213,24 +217,28 @@ describe('writeReading', () => {
 
   it('throws a descriptive error when the reading PUT fails (not silently swallowed)', async () => {
     putResult = { ok: false, status: 400, text: async () => 'boom' };
-    await expect(writeReading('KPI-1', '2026-07-13', 42)).rejects.toThrow(
-      'Failed to write reading (400): boom',
-    );
+    await expect(writeReading('10001', '2026-07-13', 42)).rejects.toThrow('Failed to write reading (400): boom');
   });
 
-  it('writes via the app custom field value API with the numeric issue id', async () => {
+  it('throws JiraForbiddenError when Jira refuses the edit (no Edit Issues)', async () => {
+    putResult = { ok: false, status: 403, json: async () => ({ errorMessages: ['nope'] }) };
+    await expect(writeReading('10001', '2026-07-13', 42)).rejects.toBeInstanceOf(JiraForbiddenError);
+  });
+
+  it('writes the encoded reading through the standard issue edit (spec 10, Path A)', async () => {
     putResult = { ok: true, status: 204 };
-    await expect(writeReading('KPI-1', '2026-07-13', 42)).resolves.toBeUndefined();
+    await expect(writeReading('10001', '2026-07-13', 42)).resolves.toBeUndefined();
 
     const putCall = requestJira.mock.calls.find(
       ([, opts]) => (opts as { method?: string } | undefined)?.method === 'PUT',
     );
     expect(putCall).toBeDefined();
     const [putRoute, putOpts] = putCall as [unknown, { body: string }];
-    expect(String(putRoute)).toContain('/app/field/customfield_10837/value?generateChangelog=true');
-    expect(JSON.parse(putOpts.body)).toMatchObject({
-      updates: [{ issueIds: [10001] }],
+    expect(String(putRoute)).toBe('/rest/api/3/issue/10001');
+    expect(JSON.parse(putOpts.body)).toEqual({
+      fields: { customfield_10837: JSON.stringify({ d: '2026-07-13', v: 42 }) },
     });
+    expect(requestJira.mock.calls.some(([r]) => String(r).includes('/app/field/'))).toBe(false);
   });
 });
 
@@ -528,5 +536,26 @@ describe('fetchHierarchyLevels', () => {
       { level: 0, name: 'Story', issueTypeNames: ['Story', 'Bug'] },
       { level: -1, name: 'Sub-task', issueTypeNames: ['Sub-task'] },
     ]);
+  });
+});
+
+describe('pickReadingField', () => {
+  const dev = { id: 'customfield_10837', key: 'app__DEVELOPMENT__kpi-reading', name: 'KPI Reading (dev)' };
+  const staging = { id: 'customfield_10906', key: 'app__STAGING__kpi-reading', name: 'KPI Reading (staging)' };
+  const prod = { id: 'customfield_10999', key: 'app__kpi-reading', name: 'KPI Reading' };
+  const other = { id: 'summary', name: 'Summary' };
+
+  it("picks the running environment's field when several installs share the site", () => {
+    expect(pickReadingField([other, dev, staging], 'STAGING')?.id).toBe('customfield_10906');
+    expect(pickReadingField([other, staging, dev], 'development')?.id).toBe('customfield_10837');
+  });
+
+  it('prefers an untagged field when the environment has no tagged one', () => {
+    expect(pickReadingField([dev, prod, staging], 'PRODUCTION')?.id).toBe('customfield_10999');
+  });
+
+  it('falls back to the first match outside Forge', () => {
+    expect(pickReadingField([other, dev, staging], null)?.id).toBe('customfield_10837');
+    expect(pickReadingField([other], null)).toBeUndefined();
   });
 });

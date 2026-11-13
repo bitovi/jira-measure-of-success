@@ -5,7 +5,7 @@ description: Redeploy the "Measure of Success" Jira Forge app to a dev site afte
 
 # Redeploy Measure of Success (Jira Forge)
 
-Ship local changes to the installed dev site (`bitovi-training.atlassian.net`, `development` environment) and optionally start a live tunnel. All commands run from the `app/` directory unless noted. The Forge CLI, login, and app registration are already set up (app id lives in `app/manifest.yml`).
+Ship local changes to the installed dev site (`bitovi-training.atlassian.net`, `development` environment) and optionally start a live tunnel. All commands run from the `app/` directory unless noted. The Forge CLI, login, and app registration are already set up. The app id is **not** committed: `app/manifest.yml` uses `ari:cloud:ecosystem::app/${APP_ID}`, and `APP_ID` comes from the repo-root `.env`.
 
 ## Preconditions (verify, don't assume)
 
@@ -20,8 +20,9 @@ Ship local changes to the installed dev site (`bitovi-training.atlassian.net`, `
    set -a && source ../.env && set +a
    forge login --non-interactive -u "$FORGE_EMAIL" -t "$FORGE_API_TOKEN"
    ```
-   Never print the token. `.env` is gitignored (`FORGE_EMAIL`, `FORGE_API_TOKEN`).
-3. **Docker running** — only needed for `forge tunnel` (NOT for deploy/install):
+   Never print the token. `.env` is gitignored (`FORGE_EMAIL`, `FORGE_API_TOKEN`, `APP_ID`).
+3. **`APP_ID` set in `.env`** — every Forge command that reads the manifest needs it. The npm scripts (`deploy:*`, `tunnel`, and `npm run forge -- <args>`) go through `app/scripts/forge.sh`, which loads `../.env` and fails fast if `APP_ID` is missing. For other forge commands, use `npm run forge -- <command>` (e.g. `npm run forge -- install list`) or `source ../.env` first; bare `forge` without it fails with a vague "validation error".
+4. **Docker running** — only needed for `forge tunnel` (NOT for deploy/install):
    ```bash
    docker info >/dev/null 2>&1 && echo "docker up" || open -a Docker
    ```
@@ -44,11 +45,11 @@ The deploy runs `forge lint` first. Fix any manifest/code errors and rerun until
 ### 2. Install / upgrade the site
 If the deploy output says **"new scopes or egress URLs"** (i.e. you added a module, scope, permission, or custom field), you must upgrade the existing install:
 ```bash
-forge install --upgrade --non-interactive --site bitovi-training.atlassian.net --product Jira --environment development
+npm run forge -- install --upgrade --non-interactive --site bitovi-training.atlassian.net --product Jira --environment development
 ```
 If nothing about scopes/modules changed, this step is optional — the deploy alone updates code. Confirm state with:
 ```bash
-forge install list
+npm run forge -- install list
 ```
 
 ### 3. (Optional) Live tunnel
@@ -56,7 +57,7 @@ For live backend + logs while clicking through the surfaces in Jira:
 ```bash
 npm run tunnel        # = forge tunnel with the " (dev)" title suffix; long-running; Ctrl+C to stop → Jira reverts to the deployed version
 ```
-Run it via the **npm script** (or `forge tunnel` from inside `app/`) so it starts with the app dir as cwd. Backend/resolver edits are live and `console.log`s stream here. UI edits require re-running `npm run build:forge` (the tunnel serves the built static resources). The Node.js runtime tunnel does **not** require Docker.
+Run it via the **npm script** so `.env` (`APP_ID`) is loaded and it starts with the app dir as cwd. Backend/resolver edits are live and `console.log`s stream here. UI edits require re-running `npm run build:forge` (the tunnel serves the built static resources). The Node.js runtime tunnel does **not** require Docker.
 
 ## Verify (recommended before deploying)
 ```bash

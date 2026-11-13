@@ -8,7 +8,9 @@ import ShowMoreHorizontalIcon from '@atlaskit/icon/core/show-more-horizontal';
 import InlineEdit from '@atlaskit/inline-edit';
 import Lozenge from '@atlaskit/lozenge';
 import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle } from '@atlaskit/modal-dialog';
-import type { PanelRowDto } from '@domain/index.js';
+import Tooltip from '@atlaskit/tooltip';
+import { KPI_NO_ACCESS_LABEL, kpiPermissionMessage, type PanelRowDto } from '@domain/index.js';
+import { DisabledReason } from '@ui/components/DisabledReason/index.js';
 import { EstimateLine } from '@ui/components/EstimateLine/index.js';
 import { TargetEditor } from '../TargetEditor/index.js';
 import {
@@ -40,7 +42,10 @@ import {
  *
  * `preview` renders the same card read-only (the "Set a KPI target" preview).
  * A `kpiMissing` row (its KPI issue was deleted) shows the bet read-only with a
- * "KPI deleted" lozenge and a notice; Remove is the only action.
+ * "KPI deleted" lozenge and a notice; Remove is the only action. A `kpiNoAccess`
+ * row (the user may not see its KPI, spec 10) is read-only the same way, with a
+ * permission notice; Edit is disabled with the reason, Remove still works (the
+ * target lives on this work issue).
  */
 export function TargetCard({
   row: savedRow,
@@ -50,6 +55,7 @@ export function TargetCard({
   onSave,
   onRemove,
   onRecord,
+  recordBlocked = null,
 }: {
   row: PanelRowDto;
   currentValue: number | null;
@@ -59,6 +65,8 @@ export function TargetCard({
   onSave?: (draft: TargetDraft) => void;
   onRemove?: () => void;
   onRecord?: () => void;
+  /** why recording a value is disabled (no Edit Issues on the KPI, spec 10), or null */
+  recordBlocked?: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   // Saves aren't optimistic: show the confirmed bet until the panel reloads the
@@ -91,8 +99,11 @@ export function TargetCard({
   // While Phase 2 (readings + rolled-up dates) loads, the status and its nudge are unknown.
   // A target on a deleted KPI has neither: it can only be removed.
   const missing = !!row.kpiMissing;
-  const pill = row.resolving || missing ? null : pillFor(row);
-  const nudge = row.resolving || missing ? null : nudgeFor(row);
+  const noAccess = !!row.kpiNoAccess;
+  const readOnlyBet = missing || noAccess;
+  const viewReason = noAccess ? kpiPermissionMessage('view', undefined, row.kpiId) : null;
+  const pill = row.resolving || readOnlyBet ? null : pillFor(row);
+  const nudge = row.resolving || readOnlyBet ? null : nudgeFor(row);
   const saved = draftFromRow(row);
   const amount = betAmount(row.targetType, row.target, row.unit);
   const when = betWhen(row.dueTiming);
@@ -154,6 +165,8 @@ export function TargetCard({
             <DropdownItemGroup>
               {!missing && (
                 <DropdownItem
+                  isDisabled={noAccess}
+                  description={noAccess ? 'No permission to view this KPI' : undefined}
                   onClick={() => {
                     refocusFromMenu.current = true;
                     startEdit('amount');
@@ -176,7 +189,7 @@ export function TargetCard({
             : '[@container(min-width:460px)]:flex [@container(min-width:460px)]:items-baseline [@container(min-width:460px)]:justify-between [@container(min-width:460px)]:gap-4'
         }
       >
-        {preview || missing ? (
+        {preview || readOnlyBet ? (
           <div className="py-1">
             <Bet amount={amount} when={when} />
           </div>
@@ -216,7 +229,7 @@ export function TargetCard({
             />
           </div>
         )}
-        {!editing && !missing && (
+        {!editing && !readOnlyBet && (
           <Estimate
             row={row}
             currentValue={currentValue}
@@ -230,9 +243,11 @@ export function TargetCard({
           <span className="py-1">{nudge}</span>
           {onRecord && (
             <span className="ml-auto">
-              <Button appearance="subtle" spacing="compact" onClick={onRecord}>
-                Record a value
-              </Button>
+              <DisabledReason reason={recordBlocked}>
+                <Button appearance="subtle" spacing="compact" isDisabled={recordBlocked !== null} onClick={onRecord}>
+                  Record a value
+                </Button>
+              </DisabledReason>
             </span>
           )}
         </div>
@@ -243,6 +258,25 @@ export function TargetCard({
           <span className="py-1">
             This KPI was deleted or moved out of the KPI space, so this target can’t be tracked.
           </span>
+          {!preview && (
+            <span className="ml-auto">
+              <Button appearance="subtle" spacing="compact" onClick={() => setConfirmingRemove(true)}>
+                Remove target
+              </Button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {noAccess && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded bg-[var(--ds-background-neutral,#091e420f)] px-2 py-1 text-xs leading-4 text-text-subtle">
+          <Tooltip content={viewReason}>
+            {(tooltipProps) => (
+              <span {...tooltipProps} tabIndex={0} className="py-1">
+                {KPI_NO_ACCESS_LABEL}
+              </span>
+            )}
+          </Tooltip>
           {!preview && (
             <span className="ml-auto">
               <Button appearance="subtle" spacing="compact" onClick={() => setConfirmingRemove(true)}>

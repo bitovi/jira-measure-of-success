@@ -58,6 +58,7 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
     : basis.catalog;
   const defOf = (kpiId: string) => catalog.find((k) => k.id === kpiId);
   const deleted = new Set(basis.deletedKpiIds ?? []);
+  const noAccess = new Set(basis.noAccessKpiIds ?? []);
 
   const ctx: RelativeTargetContext = { issue: { issueKey: basis.issueKey, due: values?.issueDue ?? PENDING } };
   if (values?.parent) ctx.parent = values.parent;
@@ -87,8 +88,9 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
       actual: null,
     } satisfies Partial<PanelRowDto>;
     if (!a) {
-      // Don't offer to track a parent's target on a KPI that no longer exists.
-      if (deleted.has(kpiId)) return;
+      // Don't offer to track a parent's target on a KPI that no longer exists or
+      // that the user may not see.
+      if (deleted.has(kpiId) || noAccess.has(kpiId)) return;
       rows.push({ ...head, target: null, targetType: null, targetDate: null, dueTiming: null, start: null, relationship, ...empty });
       return;
     }
@@ -96,6 +98,11 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
     if (deleted.has(kpiId)) {
       // A deleted KPI has no readings, so Phase 2 can't resolve anything for it.
       rows.push({ ...head, ...bet, targetDate: null, ...empty, kpiMissing: true });
+      return;
+    }
+    if (noAccess.has(kpiId)) {
+      // The user can't read this KPI's readings, so nothing can be resolved for it.
+      rows.push({ ...head, ...bet, targetDate: null, ...empty, kpiNoAccess: true });
       return;
     }
     if (!values) {
@@ -140,6 +147,7 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
     catalog,
     issueDueDate: ctx.issue.due.date,
     issueDueRolledUp: ctx.issue.due.source === 'children',
+    ...(basis.access ? { access: basis.access } : {}),
   };
   return values ? data : { ...data, resolving: true };
 }

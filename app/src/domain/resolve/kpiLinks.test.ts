@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   breakParentCycles,
   defaultParentEnd,
-  describeParentEnd,
   findAppLinkType,
   isDirectionalLinkType,
   kpiParentLinkBody,
+  linkLabelsForParentEnd,
   parentFromIssueLinks,
   type IssueLinkRef,
 } from './kpiLinks';
@@ -81,15 +81,16 @@ describe('kpiParentLinkBody', () => {
   });
 });
 
-describe('isDirectionalLinkType / describeParentEnd', () => {
+describe('isDirectionalLinkType / linkLabelsForParentEnd', () => {
   it('rejects symmetric types like Relates', () => {
     expect(isDirectionalLinkType({ inward: 'relates to', outward: 'relates to' })).toBe(false);
     expect(isDirectionalLinkType({ inward: 'is blocked by', outward: 'blocks' })).toBe(true);
   });
 
-  it('phrases each end with the outward label', () => {
-    expect(describeParentEnd({ outward: 'blocks' }, 'inward')).toBe('Parent blocks child');
-    expect(describeParentEnd({ outward: 'blocks' }, 'outward')).toBe('Child blocks parent');
+  it('names the label Jira shows on the parent and on the child', () => {
+    const blocks = { inward: 'is blocked by', outward: 'blocks' };
+    expect(linkLabelsForParentEnd(blocks, 'inward')).toEqual({ parent: 'blocks', child: 'is blocked by' });
+    expect(linkLabelsForParentEnd(blocks, 'outward')).toEqual({ parent: 'is blocked by', child: 'blocks' });
   });
 });
 
