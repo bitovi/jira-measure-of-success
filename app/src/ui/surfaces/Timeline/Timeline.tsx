@@ -458,13 +458,10 @@ export function Timeline({
                     node={node}
                     axis={axis}
                     today={data.today}
-                    onAddValue={(date) => {
-                      if (!blocked.record) setAdding({ node, date });
-                    }}
+                    recordBlocked={blocked.record}
+                    onAddValue={(date) => setAdding({ node, date })}
                     onAddTarget={(date) => setAddingTarget({ node, date })}
-                    onEditReading={(reading) => {
-                      if (!blocked.record) setEditing({ node, reading });
-                    }}
+                    onEditReading={(reading) => setEditing({ node, reading })}
                     onOpenIssueNewTab={onOpenIssueNewTab}
                     siteUrl={siteUrl}
                   />
@@ -796,6 +793,7 @@ function TimelineRowTrack({
   node,
   axis,
   today,
+  recordBlocked = null,
   onAddValue,
   onAddTarget,
   onEditReading,
@@ -805,6 +803,8 @@ function TimelineRowTrack({
   node: TimelineNodeDto;
   axis: Axis;
   today: string;
+  /** why the user can't record values (spec 10); past dates and dots are then inert */
+  recordBlocked?: string | null;
   onAddValue: (date: string) => void;
   onAddTarget: (date: string) => void;
   onEditReading: (reading: TimelineReadingDto) => void;
@@ -847,8 +847,8 @@ function TimelineRowTrack({
     if (node.targets.some((tg) => tg.date !== null && Math.abs(axis.xOf(tg.date) - rawX) < 8)) return;
     // Past/today opens the record-a-value modal; a future date opens the
     // add-a-target modal — both pre-filled with the clicked date.
-    if (dateISO <= today) onAddValue(dateISO);
-    else onAddTarget(dateISO);
+    if (dateISO > today) onAddTarget(dateISO);
+    else if (!recordBlocked) onAddValue(dateISO);
   };
 
   return (
@@ -878,11 +878,20 @@ function TimelineRowTrack({
         className="absolute top-0 bottom-0 w-0 border-l-2 border-brand opacity-60"
         style={{ left: todayX - 1 }}
       />
+      {/* Can't record: the past side of the track isn't clickable (future clicks
+          still add targets), so drop the pointer cursor there. Clicks pass through
+          to the track, which ignores past dates. */}
+      {recordBlocked && (
+        <div
+          className="absolute top-0 bottom-0 left-0 cursor-default"
+          style={{ width: Math.max(0, Math.min(todayX, axis.plotWidth + PAD_R)) }}
+        />
+      )}
 
       {/* sparkline */}
       {node.readings.length === 0 ? (
         <span className="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">
-          No values yet — click a past date to add
+          {recordBlocked ? 'No values yet' : 'No values yet — click a past date to add'}
         </span>
       ) : (
         <Sparkline readings={node.readings} axis={axis} yOf={yOf} plotH={plotH} />
@@ -893,7 +902,15 @@ function TimelineRowTrack({
 
       {/* clickable reading dots — click to edit or delete the value */}
       {node.readings.map((r, i) => (
-        <ReadingDot key={i} reading={r} node={node} axis={axis} y={yOf(r.value)} onEdit={onEditReading} />
+        <ReadingDot
+          key={i}
+          reading={r}
+          node={node}
+          axis={axis}
+          y={yOf(r.value)}
+          onEdit={onEditReading}
+          editBlocked={recordBlocked}
+        />
       ))}
 
       {/* target markers (dated only; undated go to the Undated lane) */}

@@ -47,6 +47,7 @@ import {
   fetchKpiIssueRef,
   fetchKpiSpaceAccess,
   fetchKpiSpaceIssues,
+  PermissionLookupError,
   fetchReadingChangelog,
   fetchSubtreeTimingNodes,
   fetchSubtreeTimingNodesForRoots,
@@ -121,7 +122,17 @@ function requireSettingsPage(context: unknown): void {
  * only touch app storage (rollup config, KPI space key, hierarchy choice).
  */
 async function requireJiraAdmin(): Promise<void> {
-  if (!(await fetchIsJiraAdmin())) throw new Error('Only Jira admins can change KPI settings.');
+  let isAdmin: boolean;
+  try {
+    isAdmin = await fetchIsJiraAdmin();
+  } catch (error) {
+    // Still refuse the write, but don't tell an admin they aren't one.
+    if (error instanceof PermissionLookupError) {
+      throw new Error("Couldn't check whether you're a Jira admin, so the change wasn't saved. Try again.");
+    }
+    throw error;
+  }
+  if (!isAdmin) throw new Error('Only Jira admins can change KPI settings.');
 }
 
 /**
@@ -221,16 +232,25 @@ function observed<T>(promise: Promise<T>): Promise<T> {
  * A KPI issue gets its complete panel (the KPI chart) instead — unchanged from
  * before spec 07, it still builds the whole timeline.
  */
-/** The user's KPI-space permissions (spec 10), or null when no space is set up. */
+/**
+ * The user's KPI-space permissions (spec 10), or null when no space is set up
+ * or Jira couldn't answer the lookup. Null means "unknown": the UI disables
+ * nothing up front and Jira's own refusals (403s) explain any denied action.
+ */
 function kpiSpaceAccess(spaceKey: string | null): Promise<KpiSpaceAccess | null> {
-  return spaceKey ? stage('access', () => fetchKpiSpaceAccess(spaceKey)) : Promise.resolve(null);
+  if (!spaceKey) return Promise.resolve(null);
+  return stage('access', () => fetchKpiSpaceAccess(spaceKey)).catch((error: unknown) => {
+    if (error instanceof PermissionLookupError) return null;
+    throw error;
+  });
 }
 
 /**
  * The KPI-space issues the user may see. The permission lookup and the search
- * run at the same time (no extra round trip on the critical path); without
- * Browse the result is dropped — Jira refuses that search anyway, so nothing
- * leaks either way.
+ * run at the same time (no extra round trip on the critical path). The search
+ * runs as the user, so a successful result is already filtered by Jira and is
+ * trusted as-is. The lookup only explains a refused search: Jira rejects JQL
+ * naming a project the user can't browse, which becomes the no-access state.
  */
 async function visibleKpiSpaceIssues(
   spaceKey: string,
@@ -242,9 +262,9 @@ async function visibleKpiSpaceIssues(
     (error: unknown) => ({ error }),
   );
   const [access, result] = await Promise.all([accessP, search]);
-  if (!access?.browse) return [];
-  if ('error' in result) throw result.error;
-  return result.issues;
+  if ('issues' in result) return result.issues;
+  if (access?.browse === false) return [];
+  throw result.error;
 }
 
 async function buildPanelList(issueId: string): Promise<PanelListData> {
@@ -812,8 +832,14 @@ define('createKpi', async ({ payload }) => {
   if (!space.key || !space.projectId)
     throw new Error('KPI space is not set up — configure it in Settings first.');
   // Spec 10: say which permission is missing before Jira refuses the create (or,
-  // worse, accepts the create and refuses the link).
-  const access = await fetchKpiSpaceAccess(space.key);
+  // worse, accepts the create and refuses the link). If Jira can't answer, refuse
+  // without blaming permissions.
+  const access = await fetchKpiSpaceAccess(space.key).catch((error: unknown) => {
+    if (error instanceof PermissionLookupError) {
+      throw new Error("Couldn't check your permissions on the KPI space, so the KPI wasn't created. Try again.");
+    }
+    throw error;
+  });
   const spaceLabel = space.name ?? space.key;
   if (!access.create) throw new Error(kpiPermissionMessage('add', spaceLabel));
   if (input.parentKpiId && !access.link) throw new Error(kpiPermissionMessage('nest', spaceLabel));

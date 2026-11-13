@@ -448,6 +448,12 @@ export const ReadOnly: Story = {
     await expect(c.getAllByRole('button', { name: 'Add child KPI' })[0]).toHaveAttribute('aria-disabled', 'true');
     // The tip no longer offers recording.
     await expect(c.queryByText(/click a past date to record a value/)).toBeNull();
+    // Value dots on the plot are disabled with the reason, and clicking one opens nothing.
+    const dot = canvasElement.querySelector<HTMLElement>('[data-reading]')!;
+    await expect(dot).toHaveAttribute('aria-disabled', 'true');
+    await expect(dot.getAttribute('title')).toMatch(/Recording a value needs Edit Issues permission/);
+    await userEvent.click(dot);
+    await expect(screen.queryByRole('dialog')).toBeNull();
     await expect(readOnlyRecordSpy).not.toHaveBeenCalled();
   },
 };

@@ -319,7 +319,6 @@ export interface KpiSpaceAccess {
   link: boolean;
 }
 
-export const NO_KPI_SPACE_ACCESS: KpiSpaceAccess = { browse: false, create: false, edit: false, link: false };
 export const FULL_KPI_SPACE_ACCESS: KpiSpaceAccess = { browse: true, create: true, edit: true, link: true };
 
 // ── KPI hierarchy link (resolve/kpiLinks) ───────────────────────────────

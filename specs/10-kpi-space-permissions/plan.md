@@ -120,7 +120,12 @@ export interface KpiSpaceAccess {
 `fetchKpiSpaceAccess(projectKey)` makes one `asUser` call:
 `GET /rest/api/3/mypermissions?projectKey={key}&permissions=BROWSE_PROJECTS,CREATE_ISSUES,EDIT_ISSUES,LINK_ISSUES`.
 It runs at the same time as the existing config reads, so it adds no step to
-the critical path. If the call fails, it returns all-`false` (deny).
+the critical path. If the call fails (rate limit, outage, missing project) it
+throws `PermissionLookupError` rather than returning all-`false`: a failed
+lookup says nothing about the user's permissions. Reads then leave `access`
+unknown (omitted from the payload, so the UI disables nothing up front and
+Jira's own 403s explain refusals). `createKpi` still refuses, with a "couldn't
+check, try again" message rather than a permission message.
 
 ### Reads
 
@@ -196,8 +201,10 @@ Two changes put Jira in charge of every Settings write:
 1. **Every `defineSettingsWrite` handler also requires Administer Jira.**
    After the module check, `requireJiraAdmin()` calls `fetchIsJiraAdmin()`
    (`asUser` `GET /rest/api/3/mypermissions?permissions=ADMINISTER`). If that
-   isn't granted, or the call fails, it throws *"Only Jira admins can change
-   KPI settings."* before the handler runs. This also covers the writes that
+   isn't granted, it throws *"Only Jira admins can change KPI settings."*
+   before the handler runs. If the call fails, the write is still refused, but
+   with *"Couldn't check whether you're a Jira admin… Try again."* so an admin
+   isn't told they aren't one. This also covers the writes that
    only touch app storage and never call Jira: `saveRollupConfig`,
    `saveKpiSpaceKey`, `saveKpiHierarchy`.
 2. **Provisioning writes run `asUser`** (the table under *Moves to
@@ -338,9 +345,9 @@ and 200 for `app`, and that `mypermissions` reflects `userAccess`.
 ### Step 2 — `fetchKpiSpaceAccess` + contract
 
 Add `KpiSpaceAccess` to contracts and `fetchKpiSpaceAccess` to jira.ts
-(`asUser`, deny on failure).
+(`asUser`, throws `PermissionLookupError` on failure).
 
-**Verify:** jira.test.ts covers the parsed response, the non-OK → all-`false`
+**Verify:** jira.test.ts covers the parsed response, the non-OK → throws
 case, and the request running as `user`. Add a live check to
 `test-e2e/jira-api.e2e.ts`: the token user has browse on the KPI project it
 just created.
@@ -360,8 +367,13 @@ just created.
 **Verify (resolver and domain tests against the mock):**
 - No browse → timeline `roots: []`, `access.browse === false`, **no**
   bulkfetch request made. (As built: the KPI search runs alongside the
-  permission lookup, to avoid adding a round trip, and its result is dropped
-  without Browse. Jira refuses that search anyway, so nothing leaks.)
+  permission lookup, to avoid adding a round trip. A successful search ran as
+  the user, so it's already filtered by Jira and is trusted as-is. Jira
+  refuses a search naming a project the user can't browse; with
+  `access.browse === false` that refusal becomes the no-access state.)
+- Lookup fails, search succeeds → KPIs shown, `access` omitted (unknown).
+  Lookup and search both fail → the search error is thrown (retryable), not
+  the no-access state.
 - One KPI in `hiddenFromUser` → it's missing from the timeline and the panel
   catalog, and its id is **not** in the bulkfetch request body.
 - A work issue targeting a hidden KPI → `noAccessKpiIds` contains it, and the
@@ -418,7 +430,7 @@ just created.
 
 ### Step 4b — Settings writes enforced by Jira
 
-- Add `fetchIsJiraAdmin()` to jira.ts (`asUser`, `false` on failure) and
+- Add `fetchIsJiraAdmin()` to jira.ts (`asUser`, throws on failure) and
   `requireJiraAdmin()` to `defineSettingsWrite` in resolver.ts, after
   `requireSettingsPage`.
 - Switch the provisioning writes to `asUser`: `createKpiProject`, the
@@ -525,8 +537,9 @@ a **second user who isn't a Jira admin** on `bitovi-training`:
   same text the UI shows in its tooltips. `src/ui/components/DisabledReason`
   is the "disabled, with a tooltip for a reason" wrapper.
 - **The permission lookup doesn't add a round trip.** The timeline and panel
-  fetch `mypermissions` alongside the KPI search; without Browse the result
-  is dropped (see the Step 3 check).
+  fetch `mypermissions` alongside the KPI search. The search (as the user) is
+  the authority for what's shown; the lookup only explains a refused search
+  and pre-disables controls (see the Step 3 check).
 - **Targets are guarded on both write paths.** `addTarget` (timeline) and
   `saveAssignment` (issue panel) both require the KPI to be visible to the
   user and in the KPI space. `removeAssignment` is unguarded (decided).

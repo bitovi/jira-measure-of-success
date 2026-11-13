@@ -171,6 +171,35 @@ describe('reads follow the user’s KPI-space permissions', () => {
     expect(data!.basis!.catalog).toHaveLength(SMALL.kpis);
     expect(data!.basis!.access).toEqual(READ_ONLY);
   });
+
+  // A failed lookup says nothing about the user's permissions: the search already
+  // ran as the user (Jira filtered it), so its result stands and access is unknown.
+  const failLookup = (jira: MockJira) => {
+    jira.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
+  };
+
+  it('timeline when the permission lookup fails: KPIs still shown, access left unknown', async () => {
+    const { data, error } = await invoke<TimelineData>('getTimelineSkeleton', {}, failLookup);
+    expect(error).toBeUndefined();
+    expect(flatten(data!.roots)).toHaveLength(SMALL.kpis);
+    expect(data!.access).toBeUndefined();
+  });
+
+  it('panel when the permission lookup fails: catalog listed, access left unknown', async () => {
+    const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, failLookup);
+    expect(data!.basis!.catalog).toHaveLength(SMALL.kpis);
+    expect(data!.basis!.access).toBeUndefined();
+    expect(data!.basis!.noAccessKpiIds).toBeUndefined();
+  });
+
+  it('timeline when the lookup and the search both fail: an error, not a no-permission state', async () => {
+    const { data, error } = await invoke<TimelineData>('getTimelineSkeleton', {}, (jira) => {
+      jira.intercept = (_method, path) =>
+        path === '/rest/api/3/mypermissions' || path === '/rest/api/3/search/jql' ? { status: 503 } : undefined;
+    });
+    expect(data).toBeUndefined();
+    expect(error?.message).toMatch(/^Jira 503 while trying to list the KPIs/);
+  });
 });
 
 describe('writes follow the user’s KPI-space permissions', () => {
@@ -208,6 +237,16 @@ describe('writes follow the user’s KPI-space permissions', () => {
       j.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: true, edit: true, link: false };
     });
     expect(error?.message).toMatch(/^Nesting a KPI under another needs Link Issues permission/);
+    expect(jira.writes).toEqual([]);
+  });
+
+  it('createKpi when the permission lookup fails: refused with a retry message, creates nothing', async () => {
+    const { error, jira } = await invoke('createKpi', kpiInput(), (j) => {
+      j.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
+    });
+    expect(error?.message).toBe(
+      "Couldn't check your permissions on the KPI space, so the KPI wasn't created. Try again.",
+    );
     expect(jira.writes).toEqual([]);
   });
 
@@ -321,6 +360,19 @@ describe('Settings writes are enforced by Jira (Administer Jira, as the user)', 
     expect(error?.message).toBe('Only Jira admins can change KPI settings.');
     expect(jira.writes).toEqual([]);
     expect(JSON.stringify([...jira.fixture.kvs.entries()])).toBe(kvsBefore);
+  });
+
+  it('an admin whose permission lookup fails: told to retry, not that they aren’t an admin', async () => {
+    const { error, jira } = await invoke(
+      'saveRollupConfig',
+      { config: { dueDateRollup: {} } },
+      (j) => {
+        j.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
+      },
+      SETTINGS,
+    );
+    expect(error?.message).toBe("Couldn't check whether you're a Jira admin, so the change wasn't saved. Try again.");
+    expect(jira.writes).toEqual([]);
   });
 
   it('an admin calling from another module is still refused by the page check', async () => {

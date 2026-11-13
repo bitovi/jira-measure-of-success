@@ -236,7 +236,7 @@ export function KpiView({
             {/* Scrolling plot column. */}
             <div ref={measurePlot} className="min-w-0 flex-1 overflow-x-auto">
               <div
-                className="relative cursor-pointer"
+                className={`relative ${recordBlocked ? '' : 'cursor-pointer'}`}
                 style={{ width: axis.plotWidth + PAD_R, height: CHART_H }}
                 onClick={onPlotClick}
                 onMouseMove={(e) => setHover(computeHover(node, axis, e, projection))}
@@ -282,7 +282,7 @@ export function KpiView({
                 {/* recorded-value sparkline */}
                 {node.readings.length === 0 ? (
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-text-subtle">
-                    No values recorded yet — click a past date to add one.
+                    {recordBlocked ? 'No values recorded yet.' : 'No values recorded yet — click a past date to add one.'}
                   </span>
                 ) : (
                   <Sparkline readings={node.readings} axis={axis} yOf={yOf} plotH={CHART_H} />
@@ -296,9 +296,8 @@ export function KpiView({
                     node={node}
                     axis={axis}
                     y={yOf(r.value)}
-                    onEdit={(reading) => {
-                      if (!recordBlocked) setEditing(reading);
-                    }}
+                    onEdit={setEditing}
+                    editBlocked={recordBlocked}
                   />
                 ))}
 

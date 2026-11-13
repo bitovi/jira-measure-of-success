@@ -136,6 +136,16 @@ export const RecordBlocked: Story = {
     await userEvent.hover(btn.closest('[data-disabled-reason]') as HTMLElement);
     await expect(await screen.findByRole('tooltip')).toHaveTextContent(RECORD_REASON);
     await expect(screen.queryByRole('dialog')).toBeNull();
+
+    // The chart's value dots are disabled too: the reason is their tooltip, and clicking does nothing.
+    const dots = canvasElement.querySelectorAll<HTMLElement>('[data-reading]');
+    await expect(dots.length).toBeGreaterThan(0);
+    const dot = dots[0];
+    await expect(dot).toHaveAttribute('aria-disabled', 'true');
+    await expect(dot.getAttribute('title')).toContain(RECORD_REASON);
+    await expect(dot.className).not.toContain('cursor-pointer');
+    await userEvent.click(dot);
+    await expect(screen.queryByRole('dialog')).toBeNull();
     await expect(blockedRecordSpy).not.toHaveBeenCalled();
   },
 };

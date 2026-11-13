@@ -127,7 +127,8 @@ export function ProjectionLine({
 /**
  * A recorded value on the track — a transparent, accessible hit target over the
  * sparkline dot so clicking a value opens the edit/delete modal (the dot itself
- * is drawn by the Sparkline, which is click-through).
+ * is drawn by the Sparkline, which is click-through). With `editBlocked` (the
+ * user can't record values, spec 10) the dot is disabled and its tooltip says why.
  */
 export function ReadingDot({
   reading,
@@ -135,24 +136,29 @@ export function ReadingDot({
   axis,
   y,
   onEdit,
+  editBlocked = null,
 }: {
   reading: TimelineReadingDto;
   node: TimelineNodeDto;
   axis: Axis;
   y: number;
   onEdit: (reading: TimelineReadingDto) => void;
+  editBlocked?: string | null;
 }) {
+  const value = `${fmtVal(reading.value)} ${node.unit}`;
   return (
     <button
       type="button"
       data-reading
-      className="absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full"
+      className={`absolute z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full ${editBlocked ? 'cursor-default' : 'cursor-pointer'}`}
       style={{ left: axis.xOf(reading.date), top: y }}
-      aria-label={`Edit value ${fmtVal(reading.value)} ${node.unit} on ${reading.date}`}
-      title={`${fmtVal(reading.value)} ${node.unit} · ${reading.date} — click to edit or delete`}
+      aria-label={editBlocked ? `Value ${value} on ${reading.date}` : `Edit value ${value} on ${reading.date}`}
+      aria-disabled={editBlocked ? true : undefined}
+      title={`${value} · ${reading.date} — ${editBlocked ?? 'click to edit or delete'}`}
       onClick={(e) => {
+        // Swallow the click either way so it never reaches the track's add-value handler.
         e.stopPropagation();
-        onEdit(reading);
+        if (!editBlocked) onEdit(reading);
       }}
     />
   );

@@ -3,7 +3,8 @@ import { buildScaleFixture, createMockJira, KPI_PROJECT, type MockJira, type Moc
 
 /**
  * The current user's permission lookups (spec 10): `fetchKpiSpaceAccess` and
- * `fetchIsJiraAdmin` must run as the USER and deny on any failure.
+ * `fetchIsJiraAdmin` must run as the USER, and a failed lookup must throw
+ * `PermissionLookupError` rather than read as "no permission".
  */
 
 const h = vi.hoisted(() => ({ jira: null as MockJira | null, calls: [] as Array<{ as: string; path: string }> }));
@@ -17,7 +18,7 @@ vi.mock('@forge/api', async () => {
   return { default: api, ...forgeRouteHelpers };
 });
 
-import { fetchIsJiraAdmin, fetchKpiSpaceAccess } from './jira';
+import { fetchIsJiraAdmin, fetchKpiSpaceAccess, PermissionLookupError } from './jira';
 
 const SMALL = { kpis: 3, initiatives: 1, epicsPerInitiative: 1, storiesPerEpic: 0, subtasksPerStory: 0 };
 
@@ -33,14 +34,14 @@ describe('fetchKpiSpaceAccess', () => {
     expect(h.calls).toEqual([{ as: 'user', path: '/rest/api/3/mypermissions' }]);
   });
 
-  it('denies everything when Jira refuses the lookup', async () => {
+  it('throws PermissionLookupError when Jira refuses the lookup', async () => {
     h.jira!.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 500 } : undefined);
-    expect(await fetchKpiSpaceAccess(KPI_PROJECT.key)).toEqual({ browse: false, create: false, edit: false, link: false });
+    await expect(fetchKpiSpaceAccess(KPI_PROJECT.key)).rejects.toBeInstanceOf(PermissionLookupError);
   });
 
-  it('denies everything when the lookup throws', async () => {
+  it('throws PermissionLookupError when the lookup throws', async () => {
     h.jira!.requestJira = () => Promise.reject(new Error('network'));
-    expect(await fetchKpiSpaceAccess(KPI_PROJECT.key)).toEqual({ browse: false, create: false, edit: false, link: false });
+    await expect(fetchKpiSpaceAccess(KPI_PROJECT.key)).rejects.toBeInstanceOf(PermissionLookupError);
   });
 });
 
@@ -55,8 +56,8 @@ describe('fetchIsJiraAdmin', () => {
     expect(await fetchIsJiraAdmin()).toBe(false);
   });
 
-  it('is false when the lookup fails', async () => {
+  it('throws PermissionLookupError when the lookup fails', async () => {
     h.jira!.intercept = () => ({ status: 401 });
-    expect(await fetchIsJiraAdmin()).toBe(false);
+    await expect(fetchIsJiraAdmin()).rejects.toBeInstanceOf(PermissionLookupError);
   });
 });

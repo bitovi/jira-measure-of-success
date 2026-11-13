@@ -14,7 +14,6 @@ import {
   parentFromIssueLinks,
   readOwnDates,
   FALLBACK_DATE_FIELD_DEFAULTS,
-  NO_KPI_SPACE_ACCESS,
   type Assignment,
   type DateFieldCatalog,
   type DateFieldOption,
@@ -975,29 +974,40 @@ export async function fetchAncestorChain(
 type MyPermissions = { permissions?: Record<string, { havePermission?: boolean }> };
 type JiraRoute = ReturnType<typeof route>;
 
-/** `GET /mypermissions` as the user; null when the call fails (callers deny). */
-async function fetchMyPermissions(path: JiraRoute): Promise<MyPermissions | null> {
+/**
+ * The permission lookup itself failed (rate limit, outage, missing project) —
+ * which says nothing about what the user may do. Distinct from a "no".
+ */
+export class PermissionLookupError extends Error {}
+
+/** `GET /mypermissions` as the user; throws `PermissionLookupError` when the call fails. */
+async function fetchMyPermissions(path: JiraRoute): Promise<MyPermissions> {
+  let res: Awaited<ReturnType<ReturnType<typeof asUser>['requestJira']>>;
   try {
-    const res = await asUser().requestJira(path);
-    if (!res.ok) return null;
-    return (await res.json()) as MyPermissions;
-  } catch {
-    return null;
+    res = await asUser().requestJira(path);
+  } catch (error) {
+    console.warn('[measure-of-success] permission lookup failed', error);
+    throw new PermissionLookupError(`Couldn't check your Jira permissions: ${String(error)}`);
   }
+  if (!res.ok) {
+    const message = await jiraError(res, 'check your permissions');
+    console.warn(`[measure-of-success] ${message}`);
+    throw new PermissionLookupError(message);
+  }
+  return (await res.json()) as MyPermissions;
 }
 
-const has = (body: MyPermissions | null, key: string): boolean => body?.permissions?.[key]?.havePermission === true;
+const has = (body: MyPermissions, key: string): boolean => body.permissions?.[key]?.havePermission === true;
 
 /**
- * What the current user may do in the KPI project — one `asUser` call. Any
- * failure denies everything: the reads then show the no-permission state
- * rather than leaking data.
+ * What the current user may do in the KPI project — one `asUser` call. Throws
+ * `PermissionLookupError` when Jira can't answer; callers then rely on Jira's
+ * own enforcement instead of guessing "no access".
  */
 export async function fetchKpiSpaceAccess(projectKey: string): Promise<KpiSpaceAccess> {
   const body = await fetchMyPermissions(
     route`/rest/api/3/mypermissions?projectKey=${projectKey}&permissions=BROWSE_PROJECTS,CREATE_ISSUES,EDIT_ISSUES,LINK_ISSUES`,
   );
-  if (!body) return { ...NO_KPI_SPACE_ACCESS };
   return {
     browse: has(body, 'BROWSE_PROJECTS'),
     create: has(body, 'CREATE_ISSUES'),
@@ -1006,7 +1016,7 @@ export async function fetchKpiSpaceAccess(projectKey: string): Promise<KpiSpaceA
   };
 }
 
-/** Whether the current user has the global Administer Jira permission (false on failure). */
+/** Whether the current user has the global Administer Jira permission; throws `PermissionLookupError` on failure. */
 export async function fetchIsJiraAdmin(): Promise<boolean> {
   return has(await fetchMyPermissions(route`/rest/api/3/mypermissions?permissions=ADMINISTER`), 'ADMINISTER');
 }
