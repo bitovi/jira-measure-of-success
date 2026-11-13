@@ -395,7 +395,7 @@ export function getPanelValues(issueId: string): PanelValuesData {
 }
 
 /** The panel's two phases, unassembled — what save/remove return, like the backend. */
-function panelParts(issueId: string): PanelParts {
+export function panelParts(issueId: string): PanelParts {
   return { list: getPanelList(issueId), values: getPanelValues(issueId) };
 }
 

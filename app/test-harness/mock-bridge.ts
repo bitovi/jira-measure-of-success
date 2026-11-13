@@ -25,6 +25,7 @@ import {
 import {
   accessMode,
   applyAccessToPanelList,
+  applyAccessToPanelParts,
   applyAccessToPanelValues,
   applyAccessToTimeline,
   assertKpiWriteAllowed,
@@ -42,13 +43,11 @@ type Handler = (payload: any) => unknown;
 /**
  * `?access=none|readonly|hiddenKpi` (spec 10): answer as the backend would for a
  * user with limited KPI-space permissions — see access-modes.ts. `hiddenKpi`
- * hides the first KPI targeted on the default panel issue (10048).
+ * hides the first KPI targeted on the default panel issue (10048), picked once
+ * at load so removing that target doesn't hide a different KPI.
  */
-function hiddenKpiId(): string | null {
-  if (accessMode() !== 'hiddenKpi') return null;
-  const list = getPanelList('10048');
-  return list.basis?.own[0]?.kpiId ?? null;
-}
+const HIDDEN_KPI_ID: string | null = accessMode() === 'hiddenKpi' ? (getPanelList('10048').basis?.own[0]?.kpiId ?? null) : null;
+const hiddenKpiId = (): string | null => HIDDEN_KPI_ID;
 
 const resolvers: Record<string, Handler> = {
   // Issue panel
@@ -65,9 +64,10 @@ const resolvers: Record<string, Handler> = {
   },
   saveAssignment: (p) => {
     assertKpiWriteAllowed('target', accessMode(), p?.assignment?.kpiId ?? null, hiddenKpiId());
-    return saveAssignment(p?.issueId, p?.assignment);
+    return applyAccessToPanelParts(saveAssignment(p?.issueId, p?.assignment), accessMode(), hiddenKpiId());
   },
-  removeAssignment: (p) => removeAssignment(p?.issueId, p?.kpiId),
+  removeAssignment: (p) =>
+    applyAccessToPanelParts(removeAssignment(p?.issueId, p?.kpiId), accessMode(), hiddenKpiId()),
   // Settings
   getHierarchyLevels: () => getHierarchyLevels(),
   getRollupConfig: () => getRollupConfig(),

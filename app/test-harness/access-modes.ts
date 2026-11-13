@@ -3,6 +3,7 @@ import {
   kpiPermissionMessage,
   type KpiSpaceAccess,
   type PanelListData,
+  type PanelParts,
   type PanelValuesData,
   type TimelineData,
   type TimelineNodeDto,
@@ -45,18 +46,39 @@ export function applyAccessToTimeline(data: TimelineData, mode: AccessMode | nul
   return { ...data, roots, access: ACCESS[mode] };
 }
 
+/** Jira's answer for an issue the user can't see (the same 404 as "doesn't exist"). */
+const ISSUE_NOT_VISIBLE = 'Issue does not exist or you do not have permission to see it.';
+
 export function applyAccessToPanelList(
   data: PanelListData,
   mode: AccessMode | null,
   hiddenKpiId: string | null,
 ): PanelListData {
   if (!mode) return data;
-  if (data.panel) return { panel: { ...data.panel, access: ACCESS[mode] } };
+  const hiddenId = mode === 'hiddenKpi' ? hiddenKpiId : null;
+  if (data.panel) {
+    // A KPI issue's own panel. Without Browse (or with this KPI hidden) Jira
+    // wouldn't open the issue at all; otherwise the hidden KPI is left out of the
+    // catalog and of this KPI's nested chart, as the real search would.
+    const kpiView = data.panel.kpiView;
+    if (mode === 'none' || (hiddenId && kpiView?.node.kpiId === hiddenId)) throw new Error(ISSUE_NOT_VISIBLE);
+    return {
+      panel: {
+        ...data.panel,
+        catalog: data.panel.catalog.filter((c) => c.id !== hiddenId),
+        ...(kpiView && hiddenId
+          ? { kpiView: { ...kpiView, node: { ...kpiView.node, children: withoutKpi(kpiView.node.children, hiddenId) } } }
+          : {}),
+        access: ACCESS[mode],
+      },
+    };
+  }
   const basis = data.basis;
   const targeted = [...new Set([...basis.own.map((a) => a.kpiId), ...basis.parentKpiIds])];
-  const hidden =
-    mode === 'none' ? targeted : mode === 'hiddenKpi' && hiddenKpiId ? targeted.filter((k) => k === hiddenKpiId) : [];
-  const catalog = mode === 'none' ? [] : basis.catalog.filter((c) => !hidden.includes(c.id));
+  // The real search never returns a hidden KPI, so it's out of every catalog;
+  // only targets on this issue (or its parent) are flagged "no permission".
+  const hidden = mode === 'none' ? targeted : targeted.filter((k) => k === hiddenId);
+  const catalog = mode === 'none' ? [] : basis.catalog.filter((c) => c.id !== hiddenId);
   return {
     basis: {
       ...basis,
@@ -75,6 +97,14 @@ export function applyAccessToPanelValues(data: PanelValuesData, mode: AccessMode
     return { ...data, readings };
   }
   return data;
+}
+
+/** A save/remove response (both panel phases), filtered the same way as the initial load. */
+export function applyAccessToPanelParts(parts: PanelParts, mode: AccessMode | null, hiddenKpiId: string | null): PanelParts {
+  return {
+    list: applyAccessToPanelList(parts.list, mode, hiddenKpiId),
+    values: applyAccessToPanelValues(parts.values, mode, hiddenKpiId),
+  };
 }
 
 /** Throw what the real backend throws for a KPI write this mode forbids; otherwise return. */
