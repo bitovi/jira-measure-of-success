@@ -3,9 +3,9 @@ import {
   breakParentCycles,
   defaultParentEnd,
   findAppLinkType,
+  hierarchyParentLinks,
   isDirectionalLinkType,
   kpiParentLinkBody,
-  kpiParentLinks,
   linkLabelsForParentEnd,
   parentFromIssueLinks,
   wouldCreateKpiCycle,
@@ -63,45 +63,56 @@ describe('parentFromIssueLinks', () => {
   });
 });
 
-describe('kpiParentLinks', () => {
-  it('lists every qualifying parent link with its id, skipping foreign types, child ends and outside parents', () => {
+describe('hierarchyParentLinks', () => {
+  it('lists every parent link of the hierarchy type with its id and parent, in any project', () => {
     const links: IssueLinkRef[] = [
-      { id: 'l1', type: { id: '10500' }, inwardIssue: { id: '100' } },
+      { id: 'l1', type: { id: '10500' }, inwardIssue: { id: '100', key: 'KPI-1' } },
       { id: 'l2', type: { id: '10003' }, inwardIssue: { id: '200' } },
       { id: 'l3', type: { id: '10500' }, outwardIssue: { id: '300' } },
-      { id: 'l4', type: { id: '10500' }, inwardIssue: { id: '999' } },
-      { id: 'l5', type: { id: '10500' }, inwardIssue: { id: '300' } },
+      { id: 'l4', type: { id: '10500' }, inwardIssue: { id: '999', key: 'APP-9' } },
+      { type: { id: '10500' }, inwardIssue: { id: '300' } },
     ];
-    expect(kpiParentLinks(links, inProject, HIER)).toEqual([
-      { linkId: 'l1', parentId: '100' },
-      { linkId: 'l5', parentId: '300' },
+    expect(hierarchyParentLinks(links, HIER)).toEqual([
+      { linkId: 'l1', parentId: '100', parentKey: 'KPI-1' },
+      { linkId: 'l4', parentId: '999', parentKey: 'APP-9' },
     ]);
   });
 
   it('is empty without a configured hierarchy', () => {
-    expect(kpiParentLinks([{ id: 'l1', type: { id: '10500' }, inwardIssue: { id: '100' } }], inProject, null)).toEqual([]);
+    expect(hierarchyParentLinks([{ id: 'l1', type: { id: '10500' }, inwardIssue: { id: '100' } }], null)).toEqual([]);
   });
 });
 
 describe('wouldCreateKpiCycle', () => {
   // 1 ← 2 ← 3 (3's parent is 2, 2's parent is 1); 4 is a separate root.
-  const parents: Record<string, string | null> = { '1': null, '2': '1', '3': '2', '4': null };
-  const parentOf = (id: string) => parents[id];
+  const parents: Record<string, string[]> = { '1': [], '2': ['1'], '3': ['2'], '4': [] };
+  const parentsOf = async (id: string) => parents[id] ?? [];
 
-  it('refuses the KPI itself or any of its descendants as the new parent', () => {
-    expect(wouldCreateKpiCycle('1', '1', parentOf)).toBe(true);
-    expect(wouldCreateKpiCycle('1', '3', parentOf)).toBe(true);
-    expect(wouldCreateKpiCycle('2', '3', parentOf)).toBe(true);
+  it('refuses the KPI itself or any of its descendants as the new parent', async () => {
+    expect(await wouldCreateKpiCycle('1', '1', parentsOf)).toBe(true);
+    expect(await wouldCreateKpiCycle('1', '3', parentsOf)).toBe(true);
+    expect(await wouldCreateKpiCycle('2', '3', parentsOf)).toBe(true);
   });
 
-  it('allows ancestors, siblings and other trees', () => {
-    expect(wouldCreateKpiCycle('3', '1', parentOf)).toBe(false);
-    expect(wouldCreateKpiCycle('2', '4', parentOf)).toBe(false);
+  it('allows ancestors, siblings and other trees', async () => {
+    expect(await wouldCreateKpiCycle('3', '1', parentsOf)).toBe(false);
+    expect(await wouldCreateKpiCycle('2', '4', parentsOf)).toBe(false);
   });
 
-  it('terminates on a pre-existing loop that does not involve the KPI', () => {
-    const loop: Record<string, string> = { a: 'b', b: 'a' };
-    expect(wouldCreateKpiCycle('x', 'a', (id) => loop[id])).toBe(false);
+  it('follows every parent, not just the first', async () => {
+    // b has two parents; only the second leads back to x.
+    const multi: Record<string, string[]> = { b: ['r', 'x'], r: [], x: [] };
+    expect(await wouldCreateKpiCycle('x', 'b', async (id) => multi[id] ?? [])).toBe(true);
+  });
+
+  it('terminates on a pre-existing loop that does not involve the KPI', async () => {
+    const loop: Record<string, string[]> = { a: ['b'], b: ['a'] };
+    expect(await wouldCreateKpiCycle('x', 'a', async (id) => loop[id] ?? [])).toBe(false);
+  });
+
+  it('throws instead of guessing when the hierarchy is deeper than the limit', async () => {
+    const chain = async (id: string) => [String(Number(id) + 1)];
+    await expect(wouldCreateKpiCycle('x', '0', chain, 10)).rejects.toThrow(/too deep to check/);
   });
 });
 

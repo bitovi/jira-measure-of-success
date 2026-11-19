@@ -5,6 +5,7 @@ import {
   applyTargetContributions,
   clearResolving,
   insertCreatedKpi,
+  kpiEditChanges,
   kpiSubtreeIds,
   parentKpiIdOf,
   withAddedContributions,
@@ -170,6 +171,24 @@ describe('insertCreatedKpi', () => {
   });
 });
 
+describe('kpiEditChanges', () => {
+  const before = { name: 'Orders', unit: 'count', direction: 'increase' as const, parentKpiId: 'KPI-1' };
+
+  it('sends only the fields that changed (trimmed)', () => {
+    expect(kpiEditChanges('KPI-2', before, { ...before, unit: ' $ ' })).toEqual({ kpiId: 'KPI-2', unit: '$' });
+    expect(kpiEditChanges('KPI-2', before, { ...before, name: 'Orders (net)', direction: null })).toEqual({
+      kpiId: 'KPI-2',
+      name: 'Orders (net)',
+      direction: null,
+    });
+  });
+
+  it('sends the parent only when it changed, with null for a move to the root', () => {
+    expect(kpiEditChanges('KPI-2', before, { ...before, parentKpiId: null })).toEqual({ kpiId: 'KPI-2', parentKpiId: null });
+    expect(kpiEditChanges('KPI-2', before, { ...before, name: ' Orders ' })).toEqual({ kpiId: 'KPI-2' });
+  });
+});
+
 describe('applyKpiEdit', () => {
   // KPI-1 ─┬─ KPI-2 ── KPI-3
   // KPI-4
@@ -246,6 +265,15 @@ describe('applyKpiEdit', () => {
     expect(applyKpiEdit(tree, edit({ kpiId: 'KPI-404', name: 'X' }))).toBe(tree);
     const moved = applyKpiEdit(tree, edit({ parentKpiId: 'KPI-4' }));
     expect(applyKpiEdit(moved, edit({ parentKpiId: 'KPI-4' }))).toBe(moved);
+  });
+
+  it('keeps the KPI where it is when the edit did not set its parent', () => {
+    const { parentKpiId: _omitted, ...renamed } = edit({ name: 'Orders (net)' });
+    const out = applyKpiEdit(tree, renamed);
+    expect(out.roots[0].children[0].name).toBe('Orders (net)');
+    expect(shape(out)).toEqual(shape(tree));
+    const { parentKpiId: _none, ...rootRename } = edit({ id: 'n4', kpiId: 'KPI-4', issueKey: 'KPI-4', name: 'Churn' });
+    expect(applyKpiEdit(tree, rootRename)).toBe(tree);
   });
 
   it('helpers: parentKpiIdOf and kpiSubtreeIds', () => {

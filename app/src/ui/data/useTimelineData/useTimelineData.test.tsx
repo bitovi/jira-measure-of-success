@@ -8,6 +8,7 @@ import type {
   TimelineNodeDto,
   TimelineTargetsData,
   UpdatedKpi,
+  UpdateKpiResult,
 } from '@domain/index.js';
 
 const call = vi.fn();
@@ -81,7 +82,7 @@ describe('useTimelineData mutations', () => {
   it.each([
     ['record', (c: ReturnType<typeof useTimelineData>) => c.record('KPI-1', '2026-07-01', 130), 'recordValue'],
     ['createKpi', (c: ReturnType<typeof useTimelineData>) => c.createKpi({ name: 'X', unit: '', direction: null, parentKpiId: 'KPI-1' }), 'createKpi'],
-    ['updateKpi', (c: ReturnType<typeof useTimelineData>) => c.updateKpi({ kpiId: 'KPI-1', name: 'X', unit: '', direction: null, parentKpiId: null }), 'updateKpi'],
+    ['updateKpi', (c: ReturnType<typeof useTimelineData>) => c.updateKpi({ kpiId: 'KPI-1', name: 'X' }), 'updateKpi'],
     ['addTarget', (c: ReturnType<typeof useTimelineData>) => c.addTarget(addInput), 'addTarget'],
   ] as const)('a failed %s rejects and leaves the timeline untouched', async (_name, run, key) => {
     bridge({ [key]: () => Promise.reject(new Error('Jira 403')) });
@@ -131,10 +132,13 @@ describe('useTimelineData mutations', () => {
       parentKpiId: 'KPI-1',
     };
     const twoRoots: TimelineData = { today: '2026-07-10', roots: [node('KPI-1'), node('KPI-2')] };
-    bridge({ getTimelineSkeleton: () => Promise.resolve(twoRoots), updateKpi: () => Promise.resolve(edited) });
+    bridge({
+      getTimelineSkeleton: () => Promise.resolve(twoRoots),
+      updateKpi: () => Promise.resolve({ kpi: edited, error: null } satisfies UpdateKpiResult),
+    });
     const { result } = await loaded();
 
-    await act(async () => result.current.updateKpi({ ...edited, parentKpiId: 'KPI-1' }));
+    await act(async () => result.current.updateKpi({ kpiId: 'KPI-2', name: 'Orders (net)', parentKpiId: 'KPI-1' }));
     expect(result.current.data!.roots.map((r) => r.kpiId)).toEqual(['KPI-1']);
     expect(kpi1(result.current.data).children[0]).toMatchObject({ kpiId: 'KPI-2', name: 'Orders (net)', unit: 'count', depth: 1 });
     expect(call.mock.calls.filter(([key]) => key === 'getTimelineSkeleton')).toHaveLength(1);
@@ -146,13 +150,51 @@ describe('useTimelineData mutations', () => {
     bridge({
       getTimelineTargets: () => Promise.resolve({ contributions: { 'KPI-1': [past] } }),
       updateKpi: () =>
-        Promise.resolve({ id: 'KPI-1', kpiId: 'KPI-1', issueKey: 'KPI-1', name: 'KPI-1', unit: 'USD', direction: 'decrease', parentKpiId: null }),
+        Promise.resolve({
+          kpi: { id: 'KPI-1', kpiId: 'KPI-1', issueKey: 'KPI-1', name: 'KPI-1', unit: 'USD', direction: 'decrease' },
+          error: null,
+        } satisfies UpdateKpiResult),
     });
     const { result } = await loaded();
     expect(kpi1(result.current.data).targets.map((t) => t.status)).toEqual(['hit']);
 
-    await act(async () => result.current.updateKpi({ kpiId: 'KPI-1', name: 'KPI-1', unit: 'USD', direction: 'decrease', parentKpiId: null }));
+    await act(async () => result.current.updateKpi({ kpiId: 'KPI-1', direction: 'decrease' }));
     expect(kpi1(result.current.data).targets.map((t) => t.status)).toEqual(['missed']);
+  });
+
+  it('a partly saved edit (moved, then the rename failed) shows the move, then rejects', async () => {
+    const twoRoots: TimelineData = { today: '2026-07-10', roots: [node('KPI-1'), node('KPI-2')] };
+    const partial: UpdateKpiResult = {
+      kpi: { id: '2', kpiId: 'KPI-2', issueKey: 'KPI-2', name: 'KPI-2', unit: 'USD', direction: 'increase', parentKpiId: 'KPI-1' },
+      error: "KPI-2 was moved, but its name, unit and direction weren't saved: Jira 500",
+    };
+    bridge({ getTimelineSkeleton: () => Promise.resolve(twoRoots), updateKpi: () => Promise.resolve(partial) });
+    const { result } = await loaded();
+
+    await act(async () => {
+      await expect(result.current.updateKpi({ kpiId: 'KPI-2', name: 'Orders', parentKpiId: 'KPI-1' })).rejects.toThrow(
+        /was moved, but its name/,
+      );
+    });
+    expect(result.current.data!.roots.map((r) => r.kpiId)).toEqual(['KPI-1']);
+    expect(kpi1(result.current.data).children[0]).toMatchObject({ kpiId: 'KPI-2', name: 'KPI-2' });
+  });
+
+  it('an edit that leaves the parent out keeps the KPI where it is', async () => {
+    const nested: TimelineData = { today: '2026-07-10', roots: [node('KPI-1', { children: [node('KPI-2', { depth: 1 })] })] };
+    bridge({
+      getTimelineSkeleton: () => Promise.resolve(nested),
+      updateKpi: () =>
+        Promise.resolve({
+          kpi: { id: '2', kpiId: 'KPI-2', issueKey: 'KPI-2', name: 'Orders', unit: 'USD', direction: 'increase' },
+          error: null,
+        } satisfies UpdateKpiResult),
+    });
+    const { result } = await loaded();
+
+    await act(async () => result.current.updateKpi({ kpiId: 'KPI-2', name: 'Orders' }));
+    expect(result.current.data!.roots.map((r) => r.kpiId)).toEqual(['KPI-1']);
+    expect(kpi1(result.current.data).children[0]).toMatchObject({ kpiId: 'KPI-2', name: 'Orders', depth: 1 });
   });
 
   it('re-adding a target for the same (issue, KPI) replaces it rather than duplicating it', async () => {

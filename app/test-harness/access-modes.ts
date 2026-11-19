@@ -117,7 +117,7 @@ export function assertKpiWriteAllowed(
   if (!mode) return;
   const access = ACCESS[mode];
   const hidden = mode === 'none' || (mode === 'hiddenKpi' && kpiId !== null && kpiId === hiddenKpiId);
-  if ((action === 'record' || action === 'edit' || action === 'target') && hidden && kpiId) {
+  if ((action === 'record' || action === 'edit' || action === 'nest' || action === 'target') && hidden && kpiId) {
     throw new Error(kpiNotVisibleMessage(kpiId));
   }
   if (action === 'add' && !access.create) throw new Error(kpiPermissionMessage('add'));

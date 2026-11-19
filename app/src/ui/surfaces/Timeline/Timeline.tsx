@@ -56,6 +56,7 @@ import {
   filterTimelineByProjects,
   kpiPermissionMessage,
   kpiSpaceNoAccessMessage,
+  kpiEditChanges,
   kpiSubtreeIds,
   parentKpiIdOf,
   projectSeries,
@@ -571,7 +572,13 @@ export function Timeline({
             onCancel={() => setEditingKpi(null)}
             onOpenSettings={onOpenSettings}
             onSave={async (input) => {
-              await updateKpi({ kpiId: editingKpi.kpiId, ...input });
+              const before = {
+                name: editingKpi.name,
+                unit: editingKpi.unit,
+                direction: editingKpi.direction,
+                parentKpiId: editKpiParents.parent?.kpiId ?? null,
+              };
+              await updateKpi(kpiEditChanges(editingKpi.kpiId, before, input));
               setEditingKpi(null);
             }}
           />

@@ -374,20 +374,30 @@ export interface CreatedKpi {
 }
 
 /**
- * Input for editing a KPI: its full new definition. `parentKpiId` is the parent
- * it should end up under (null = a root KPI); when it differs from the current
- * parent the KPI moves, taking its children with it.
+ * `updateKpi` result: the KPI as it now is in Jira, which the client lays over
+ * its tree (like `CreatedKpi`). Name, unit and direction are always the current
+ * values. `parentKpiId` is set only when the edit set the parent (null = root);
+ * when it's absent the KPI stays where the client has it.
  */
-export interface UpdateKpiInput {
+export interface UpdatedKpi {
+  id: string;
   kpiId: string;
+  issueKey: string;
   name: string;
   unit: string;
   direction: KpiDirection | null;
-  parentKpiId: string | null;
+  parentKpiId?: string | null;
 }
 
-/** `updateKpi` result: the KPI as saved, which the client lays over its tree (like `CreatedKpi`). */
-export type UpdatedKpi = CreatedKpi;
+/**
+ * What `updateKpi` returns. `error` is set when only part of the edit was saved
+ * (the move went through, then the name/unit/direction save failed): the client
+ * applies `kpi`, which is what Jira now holds, and then shows the error.
+ */
+export interface UpdateKpiResult {
+  kpi: UpdatedKpi;
+  error: string | null;
+}
 
 /**
  * `addTarget` result: the saved target as a raw contribution (assignment + its

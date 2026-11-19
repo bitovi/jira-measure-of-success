@@ -732,7 +732,8 @@ export const AddKpiWithParent: Story = {
 /**
  * Interaction: the row's edit (✎) button opens the KPI modal filled with the
  * KPI's definition; Save stays disabled until something changes, then calls the
- * loader with the full new definition (including the unchanged parent).
+ * loader with only what changed, so an out-of-date timeline can't write back
+ * stale values for the fields the user didn't touch.
  */
 const editKpiSpy = fn();
 export const EditKpi: Story = {
@@ -753,13 +754,7 @@ export const EditKpi: Story = {
     await userEvent.type(dialog.getByLabelText('KPI name'), 'Orders');
     await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(editKpiSpy).toHaveBeenCalledWith({
-        kpiId: 'orders',
-        name: 'Orders',
-        unit: 'count',
-        direction: 'increase',
-        parentKpiId: 'revenue',
-      }),
+      expect(editKpiSpy).toHaveBeenCalledWith({ kpiId: 'orders', name: 'Orders' }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   },
@@ -778,7 +773,7 @@ export const EditKpiMoveToTop: Story = {
     await userEvent.keyboard('{Backspace}');
     await expect(dialog.getByText('None (top-level KPI)')).toBeInTheDocument();
     await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(moveKpiSpy).toHaveBeenCalledWith(expect.objectContaining({ kpiId: 'orders', parentKpiId: null })));
+    await waitFor(() => expect(moveKpiSpy).toHaveBeenCalledWith({ kpiId: 'orders', parentKpiId: null }));
   },
 };
 

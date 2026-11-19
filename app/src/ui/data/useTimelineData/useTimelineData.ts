@@ -11,6 +11,7 @@ import type {
   TimelineTargetsData,
   UpdatedKpi,
   UpdateKpiInput,
+  UpdateKpiResult,
 } from '@domain/index.js';
 import { KPI_HIERARCHY_NOT_SET_UP } from '@domain/index.js';
 import { deriveTimelineView } from './timelineView.js';
@@ -62,8 +63,10 @@ export interface TimelineController {
    */
   createKpi(input: CreateKpiInput): Promise<void>;
   /**
-   * Edit a KPI (name, unit, direction, parent). Resolves once it's saved and on
-   * the timeline; rejects with the failure, like `createKpi`.
+   * Edit a KPI: send only the fields that changed (`kpiEditChanges`). Resolves
+   * once it's saved and on the timeline; rejects with the failure, like
+   * `createKpi`. When only part was saved (moved, but the name/unit/direction
+   * save failed), the saved part is applied first, then it rejects.
    */
   updateKpi(input: UpdateKpiInput): Promise<void>;
   /** Type-ahead search for a contributing issue (Add Target picker). */
@@ -179,8 +182,10 @@ export const useTimelineData: UseTimeline = () => {
   };
 
   const updateKpi = async (input: UpdateKpiInput) => {
-    const kpi = await call<UpdatedKpi>('updateKpi', input);
+    const { kpi, error: partial } = await call<UpdateKpiResult>('updateKpi', input);
+    // Lay the result over the tree even when only part of the edit was saved: it's what Jira now holds.
     setEdited((prev) => [...prev, kpi]);
+    if (partial) throw new Error(partial);
   };
 
   const searchIssues = (query: string) =>

@@ -1279,37 +1279,26 @@ export async function fetchKpiIssueForEdit(idOrKey: string): Promise<KpiIssueFor
 }
 
 /**
- * Save a KPI's name (the summary) and/or unit + direction (`kpi-meta`), as the
- * USER so Jira requires Edit Issues. Only the parts given are written. A 403
+ * Save a KPI's name (the summary) and/or unit + direction (`kpi-meta`) in ONE
+ * issue edit, as the USER so Jira requires Edit Issues. Jira's edit issue
+ * request also sets issue properties, so the two can't be half-saved. A 403
  * becomes `JiraForbiddenError` so the resolver can say which permission is missing.
  */
 export async function updateKpiDefinition(
   kpiIssueId: string,
   change: { name?: string; meta?: KpiMetaProperty },
 ): Promise<void> {
-  const writes: Array<ReturnType<ReturnType<typeof asUser>['requestJira']>> = [];
-  if (change.name !== undefined) {
-    writes.push(
-      asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fields: { summary: change.name } }),
-      }),
-    );
-  }
-  if (change.meta !== undefined) {
-    writes.push(
-      asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}/properties/${KPI_META_PROPERTY_KEY}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(change.meta),
-      }),
-    );
-  }
-  for (const res of await Promise.all(writes)) {
-    if (res.status === 403) throw new JiraForbiddenError(await jiraError(res, `edit KPI ${kpiIssueId}`));
-    if (!res.ok) throw new Error(await jiraError(res, `edit KPI ${kpiIssueId}`));
-  }
+  if (change.name === undefined && change.meta === undefined) return;
+  const res = await asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...(change.name !== undefined ? { fields: { summary: change.name } } : {}),
+      ...(change.meta !== undefined ? { properties: [{ key: KPI_META_PROPERTY_KEY, value: change.meta }] } : {}),
+    }),
+  });
+  if (res.status === 403) throw new JiraForbiddenError(await jiraError(res, `edit KPI ${kpiIssueId}`));
+  if (!res.ok) throw new Error(await jiraError(res, `edit KPI ${kpiIssueId}`));
 }
 
 /** Every issue link type on the site (link types are global, not per project). */

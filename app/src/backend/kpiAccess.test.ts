@@ -298,6 +298,22 @@ describe('writes follow the user’s KPI-space permissions', () => {
     expect(jira.writes).toEqual([]);
   });
 
+  it('updateKpi when the permission lookup fails: refused with a retry message, writes nothing', async () => {
+    const { error, jira } = await invoke('updateKpi', { kpiId: 'KPI-2', name: 'Orders', parentKpiId: 'KPI-6' }, (j) => {
+      j.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
+    });
+    expect(error?.message).toBe("Couldn't check your permissions on the KPI space, so the KPI wasn't saved. Try again.");
+    expect(jira.writes).toEqual([]);
+  });
+
+  it('updateKpi moving a KPI with Link Issues but not Edit Issues: allowed (a move only changes links)', async () => {
+    const { error, jira } = await invoke('updateKpi', { kpiId: 'KPI-2', parentKpiId: 'KPI-6' }, (j) => {
+      j.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: false, edit: false, link: true };
+    });
+    expect(error).toBeUndefined();
+    expect(jira.writes).toEqual(['DELETE /rest/api/3/issueLink/50001001', 'POST /rest/api/3/issueLink']);
+  });
+
   it('updateKpi on a KPI the user may not see: says so, changes nothing', async () => {
     const { error, jira } = await invoke(
       'updateKpi',

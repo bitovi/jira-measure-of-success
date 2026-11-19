@@ -19,7 +19,7 @@ import {
   getTimelineTargets,
   recordValue,
   createKpi,
-  kpiParentOf,
+  kpiEditTouches,
   updateKpi,
   searchIssues,
   addTarget,
@@ -110,8 +110,9 @@ const resolvers: Record<string, Handler> = {
   searchIssues: (p) => searchIssues(p?.query ?? ''),
   updateKpi: async (p) => {
     await simulateMutation();
-    assertKpiWriteAllowed('edit', accessMode(), p?.kpiId ?? null, hiddenKpiId());
-    if ((p?.parentKpiId ?? null) !== kpiParentOf(p?.kpiId)) assertKpiWriteAllowed('nest', accessMode(), null, null);
+    const touches = kpiEditTouches(p);
+    if (touches.definition) assertKpiWriteAllowed('edit', accessMode(), p?.kpiId ?? null, hiddenKpiId());
+    if (touches.parent) assertKpiWriteAllowed('nest', accessMode(), p?.kpiId ?? null, hiddenKpiId());
     return updateKpi(p);
   },
   addTarget: async (p) => {

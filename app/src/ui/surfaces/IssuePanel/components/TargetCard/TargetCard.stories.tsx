@@ -206,6 +206,18 @@ export const KpiNameLink: Story = {
     await expect(links[0]).toHaveAttribute('href', '/browse/KPI-3');
     await userEvent.click(links[0]!);
     await expect(onOpenKpi).toHaveBeenCalledTimes(1);
+
+    // A Cmd/Ctrl-click is left to the browser (new tab), not routed in place.
+    let prevented: boolean | null = null;
+    const afterReact = (e: Event) => {
+      prevented = e.defaultPrevented;
+      e.preventDefault(); // jsdom can't navigate
+    };
+    window.addEventListener('click', afterReact);
+    links[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+    window.removeEventListener('click', afterReact);
+    await expect(onOpenKpi).toHaveBeenCalledTimes(1);
+    await expect(prevented).toBe(false);
   },
 };
 

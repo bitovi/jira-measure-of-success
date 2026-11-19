@@ -96,41 +96,54 @@ export interface IssueLinkRef {
   outwardIssue?: { id?: string; key?: string };
 }
 
+/** A hierarchy link on which another issue is the parent: the link id (to remove it) and the parent. */
+export interface HierarchyParentLink {
+  linkId: string;
+  parentId: string;
+  parentKey: string | null;
+}
+
 /**
- * Every link that makes another KPI-space issue this KPI's parent (the links
- * `parentFromIssueLinks` considers, in the same order), with the link ids so a
- * move can remove them. Normally at most one.
+ * Every link of the hierarchy type on which another issue is this one's parent,
+ * in link order. Not filtered by project: Jira's search lags behind recent
+ * changes, so a caller that's about to write looks each parent up to check it's
+ * a KPI rather than trusting a search snapshot. Normally at most one.
  */
-export function kpiParentLinks(
+export function hierarchyParentLinks(
   links: IssueLinkRef[] | undefined,
-  inProjectIds: ReadonlySet<string>,
   hierarchy: KpiHierarchyLink | null,
-): Array<{ linkId: string; parentId: string }> {
+): HierarchyParentLink[] {
   if (!hierarchy) return [];
-  const out: Array<{ linkId: string; parentId: string }> = [];
+  const out: HierarchyParentLink[] = [];
   for (const link of links ?? []) {
     if (String(link.type?.id ?? '') !== hierarchy.linkTypeId || !link.id) continue;
-    const parentId = (hierarchy.parentEnd === 'outward' ? link.outwardIssue : link.inwardIssue)?.id;
-    if (parentId && inProjectIds.has(String(parentId))) out.push({ linkId: String(link.id), parentId: String(parentId) });
+    const parent = hierarchy.parentEnd === 'outward' ? link.outwardIssue : link.inwardIssue;
+    if (parent?.id) out.push({ linkId: String(link.id), parentId: String(parent.id), parentKey: parent.key ?? null });
   }
   return out;
 }
 
 /**
  * Would nesting `kpiId` under `newParentId` make a loop? True when the new
- * parent is the KPI itself or one of its descendants (walking up from the new
- * parent reaches the KPI). `parentOf` gives each KPI's current parent.
+ * parent is the KPI itself or one of its descendants. Walks up from the new
+ * parent one level at a time through EVERY parent each KPI has (a reused link
+ * type can give a KPI several), asking `parentsOf` for each level in parallel.
+ * Throws once the walk passes `maxIssues` KPIs rather than guessing.
  */
-export function wouldCreateKpiCycle(
+export async function wouldCreateKpiCycle(
   kpiId: string,
   newParentId: string,
-  parentOf: (id: string) => string | null | undefined,
-): boolean {
-  const seen = new Set<string>();
-  for (let cur: string | null | undefined = newParentId; cur; cur = parentOf(cur)) {
-    if (cur === kpiId) return true;
-    if (seen.has(cur)) return false;
-    seen.add(cur);
+  parentsOf: (id: string) => Promise<readonly string[]>,
+  maxIssues = 500,
+): Promise<boolean> {
+  const seen = new Set<string>([newParentId]);
+  let level = [newParentId];
+  while (level.length > 0) {
+    if (level.includes(kpiId)) return true;
+    const next = (await Promise.all(level.map(parentsOf))).flat().filter((id) => !seen.has(id));
+    for (const id of next) seen.add(id);
+    if (seen.size > maxIssues) throw new Error(`the KPI hierarchy above ${newParentId} is too deep to check`);
+    level = [...new Set(next)];
   }
   return false;
 }

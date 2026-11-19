@@ -138,6 +138,8 @@ export function TargetCard({
                   href={kpiHref}
                   className="truncate text-brand hover:underline"
                   onClick={(e) => {
+                    // Leave Cmd/Ctrl/Shift-clicks to the browser, which opens the real href in a new tab/window.
+                    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                     e.preventDefault();
                     onOpenKpi?.();
                   }}
