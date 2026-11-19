@@ -260,6 +260,56 @@ describe('writes follow the user’s KPI-space permissions', () => {
     expect(jira.fixture.kpiIds).toHaveLength(SMALL.kpis);
   });
 
+  it('updateKpi edits and re-nests as the user', async () => {
+    const { error, asOf } = await invoke('updateKpi', {
+      kpiId: 'KPI-2',
+      name: 'Orders',
+      unit: '$',
+      direction: null,
+      parentKpiId: 'KPI-6',
+    });
+    expect(error).toBeUndefined();
+    expect(asOf('PUT /rest/api/3/issue/{id}')).toEqual(['user']);
+    expect(asOf('DELETE /rest/api/3/issueLink/{id}')).toEqual(['user']);
+    expect(asOf('POST /rest/api/3/issueLink')).toEqual(['user']);
+  });
+
+  it('updateKpi without Edit Issues: says so, changes nothing', async () => {
+    const { error, jira } = await invoke(
+      'updateKpi',
+      { kpiId: 'KPI-2', name: 'Orders', unit: 'count', direction: 'decrease', parentKpiId: 'KPI-1' },
+      (j) => {
+        j.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
+      },
+    );
+    expect(error?.message).toBe('Editing KPI-2 needs Edit Issues permission on the KPIs (KPI) project. Ask a Jira admin.');
+    expect(jira.writes).toEqual([]);
+  });
+
+  it('updateKpi moving a KPI without Link Issues: refused before any write (not even the rename)', async () => {
+    const { error, jira } = await invoke(
+      'updateKpi',
+      { kpiId: 'KPI-2', name: 'Orders', unit: 'count', direction: 'decrease', parentKpiId: 'KPI-6' },
+      (j) => {
+        j.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: true, edit: true, link: false };
+      },
+    );
+    expect(error?.message).toMatch(/^Nesting a KPI under another needs Link Issues permission/);
+    expect(jira.writes).toEqual([]);
+  });
+
+  it('updateKpi on a KPI the user may not see: says so, changes nothing', async () => {
+    const { error, jira } = await invoke(
+      'updateKpi',
+      { kpiId: 'KPI-1', name: 'X', unit: '', direction: null, parentKpiId: null },
+      (j) => {
+        j.fixture.userView.hidden.add(KPI_1_ID);
+      },
+    );
+    expect(error?.message).toMatch(/^KPI-1 doesn't exist, or you don't have permission to view it/);
+    expect(jira.writes).toEqual([]);
+  });
+
   it('recordValue writes as the user, so the reading names who recorded it', async () => {
     const { error, jira, asOf } = await invoke('recordValue', { kpiId: 'KPI-1', date: '2026-06-01', value: 42 });
     expect(error).toBeUndefined();

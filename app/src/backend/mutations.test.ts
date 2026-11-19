@@ -7,6 +7,8 @@ import type {
   KpiHierarchyStatus,
   PanelListData,
   TimelineData,
+  UpdatedKpi,
+  UpdateKpiInput,
 } from '../domain/index';
 
 /**
@@ -169,6 +171,126 @@ describe('createKpi', () => {
     expect(error?.message).toMatch(/^Jira 500 while trying to link KPI "KPI-11" under "KPI-1"/);
     expect(jira.writes).toEqual(['POST /rest/api/3/issue', 'POST /rest/api/3/issueLink', 'DELETE /rest/api/3/issue/KPI-11']);
     expect([...jira.fixture.issues.values()].some((i) => i.key === 'KPI-11')).toBe(false);
+  });
+});
+
+describe('updateKpi', () => {
+  // KPI-1 (1000) ─ KPI-2…KPI-5; KPI-6 (1005) ─ KPI-7…KPI-10. KPI-2 is "count", decrease.
+  const kpi2 = (over: Partial<UpdateKpiInput> = {}): UpdateKpiInput => ({
+    kpiId: 'KPI-2',
+    name: 'KPI 2',
+    unit: 'count',
+    direction: 'decrease',
+    parentKpiId: 'KPI-1',
+    ...over,
+  });
+
+  it('renames and changes unit/direction, returning the KPI as saved', async () => {
+    const { data, jira } = await invoke<UpdatedKpi>('updateKpi', kpi2({ name: ' Orders ', unit: '$', direction: 'increase' }));
+    expect(data).toEqual({
+      id: '1001',
+      kpiId: 'KPI-2',
+      issueKey: 'KPI-2',
+      name: 'Orders',
+      unit: '$',
+      direction: 'increase',
+      parentKpiId: 'KPI-1',
+    });
+    expect(jira.writes).toEqual(['PUT /rest/api/3/issue/1001', 'PUT /rest/api/3/issue/1001/properties/kpi-meta']);
+    const issue = jira.fixture.issues.get('1001')!;
+    expect(issue.summary).toBe('Orders');
+    expect(issue.properties['kpi-meta']).toEqual({ unit: '$', direction: 'increase' });
+    expect(issue.kpiParentId).toBe('1000');
+  });
+
+  it('writes only what changed, and nothing when nothing did', async () => {
+    const renamed = await invoke('updateKpi', kpi2({ name: 'Orders' }));
+    expect(renamed.jira.writes).toEqual(['PUT /rest/api/3/issue/1001']);
+    const same = await invoke('updateKpi', kpi2());
+    expect(same.error).toBeUndefined();
+    expect(same.jira.writes).toEqual([]);
+  });
+
+  it('moves the KPI under another parent: removes the old link, then adds the new one', async () => {
+    const { data, jira } = await invoke<UpdatedKpi>('updateKpi', kpi2({ parentKpiId: 'KPI-6' }));
+    expect(data!.parentKpiId).toBe('KPI-6');
+    expect(jira.writes).toEqual(['DELETE /rest/api/3/issueLink/50001001', 'POST /rest/api/3/issueLink']);
+    expect(jira.fixture.issues.get('1001')!.kpiParentId).toBe('1005');
+  });
+
+  it('moves the KPI to the root by removing its parent link', async () => {
+    const { data, jira } = await invoke<UpdatedKpi>('updateKpi', kpi2({ parentKpiId: null }));
+    expect(data!.parentKpiId).toBeNull();
+    expect(jira.writes).toEqual(['DELETE /rest/api/3/issueLink/50001001']);
+    expect(jira.fixture.issues.get('1001')!.kpiParentId).toBeNull();
+  });
+
+  it('nests a root KPI without removing anything', async () => {
+    const { jira } = await invoke('updateKpi', { kpiId: 'KPI-6', name: 'KPI 6', unit: 'count', direction: 'decrease', parentKpiId: 'KPI-1' });
+    expect(jira.writes).toEqual(['POST /rest/api/3/issueLink']);
+    expect(jira.fixture.issues.get('1005')!.kpiParentId).toBe('1000');
+  });
+
+  it('refuses (writing nothing) to nest a KPI under itself or one of its descendants', async () => {
+    const self = await invoke('updateKpi', kpi2({ parentKpiId: 'KPI-2' }));
+    expect(self.error?.message).toBe("KPI-2 can't be nested under itself.");
+    expect(self.jira.writes).toEqual([]);
+    const descendant = await invoke('updateKpi', {
+      kpiId: 'KPI-1',
+      name: 'Renamed',
+      unit: '%',
+      direction: 'increase',
+      parentKpiId: 'KPI-3',
+    });
+    expect(descendant.error?.message).toBe("KPI-1 can't be nested under KPI-3: KPI-3 is nested under KPI-1.");
+    expect(descendant.jira.writes).toEqual([]);
+  });
+
+  it('catches a loop through a just-created KPI the search index has not listed yet', async () => {
+    const { error, jira } = await invoke(
+      'updateKpi',
+      { kpiId: 'KPI-1', name: 'KPI 1', unit: '%', direction: 'increase', parentKpiId: 'KPI-50' },
+      (j) => {
+        // KPI-50 is KPI-1's new child, but not in the KPI-space search yet.
+        j.fixture.issues.set('5050', { ...j.fixture.issues.get('1001')!, id: '5050', key: 'KPI-50', kpiParentId: '1000' });
+      },
+    );
+    expect(error?.message).toBe("KPI-1 can't be nested under KPI-50: KPI-50 is nested under KPI-1.");
+    expect(jira.writes).toEqual([]);
+  });
+
+  it('puts the old link back when the new one fails', async () => {
+    const { data, error, jira } = await invoke('updateKpi', kpi2({ parentKpiId: 'KPI-6' }), (j) => {
+      j.intercept = (method, path, body) =>
+        method === 'POST' && path === '/rest/api/3/issueLink' && String(body).includes('"KPI-6"')
+          ? { status: 500 }
+          : undefined;
+    });
+    expect(data).toBeUndefined();
+    expect(error?.message).toMatch(/^Jira 500 while trying to link KPI "KPI-2" under "KPI-6"/);
+    expect(jira.writes).toEqual([
+      'DELETE /rest/api/3/issueLink/50001001',
+      'POST /rest/api/3/issueLink',
+      'POST /rest/api/3/issueLink',
+    ]);
+    expect(jira.fixture.issues.get('1001')!.kpiParentId).toBe('1000');
+  });
+
+  it('refuses to nest before a hierarchy link type is configured, but still edits a root', async () => {
+    const unset = (j: MockJira) => j.fixture.kvs.delete('kpi:hierarchy');
+    const nest = await invoke('updateKpi', { kpiId: 'KPI-6', name: 'KPI 6', unit: 'count', direction: 'decrease', parentKpiId: 'KPI-1' }, unset);
+    expect(nest.error?.message).toMatch(/^KPI hierarchy is not set up/);
+    expect(nest.jira.writes).toEqual([]);
+    const rename = await invoke<UpdatedKpi>('updateKpi', { kpiId: 'KPI-6', name: 'Six', unit: 'count', direction: 'decrease', parentKpiId: null }, unset);
+    expect(rename.data).toMatchObject({ name: 'Six', parentKpiId: null });
+  });
+
+  it('refuses an empty name and issues outside the KPI space', async () => {
+    const empty = await invoke('updateKpi', kpi2({ name: '  ' }));
+    expect(empty.error?.message).toBe('A KPI needs a name.');
+    const notKpi = await invoke('updateKpi', kpi2({ kpiId: 'APP-1' }));
+    expect(notKpi.error?.message).toBe("APP-1 isn't a KPI: only KPIs in the KPI space can be edited.");
+    expect(notKpi.jira.writes).toEqual([]);
   });
 });
 

@@ -1236,6 +1236,82 @@ export async function linkKpiParent(
   }
 }
 
+/** Remove an issue link by id (moving a KPI off its old parent). Already gone counts as done. */
+export async function deleteIssueLink(linkId: string): Promise<void> {
+  // As the USER: Jira requires Link Issues (spec 10).
+  const res = await asUser().requestJira(route`/rest/api/3/issueLink/${linkId}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 404) throw new Error(await jiraError(res, `remove issue link ${linkId}`));
+}
+
+/** A KPI issue as the edit flow needs it: where it lives, its current definition and links. */
+export interface KpiIssueForEdit {
+  id: string;
+  key: string;
+  projectKey: string | null;
+  name: string;
+  meta: KpiMetaProperty | null;
+  links: IssueLinkRef[];
+}
+
+/**
+ * Look up a KPI issue AS THE USER for editing (name, `kpi-meta`, issue links)
+ * in one GET. null when the user can't see it (Jira's 404/403).
+ */
+export async function fetchKpiIssueForEdit(idOrKey: string): Promise<KpiIssueForEdit | null> {
+  const res = await asUser()
+    .requestJira(route`/rest/api/3/issue/${idOrKey}?fields=project,summary,issuelinks&properties=${KPI_META_PROPERTY_KEY}`);
+  if (res.status === 404 || res.status === 403) return null;
+  if (!res.ok) throw new Error(await jiraError(res, `look up ${idOrKey}`));
+  const body = (await res.json()) as {
+    id: string;
+    key: string;
+    fields?: { project?: { key?: string }; summary?: string; issuelinks?: IssueLinkRef[] };
+    properties?: Record<string, unknown>;
+  };
+  return {
+    id: String(body.id),
+    key: body.key,
+    projectKey: body.fields?.project?.key ?? null,
+    name: body.fields?.summary ?? body.key,
+    meta: parseKpiMeta(body.properties?.[KPI_META_PROPERTY_KEY]),
+    links: body.fields?.issuelinks ?? [],
+  };
+}
+
+/**
+ * Save a KPI's name (the summary) and/or unit + direction (`kpi-meta`), as the
+ * USER so Jira requires Edit Issues. Only the parts given are written. A 403
+ * becomes `JiraForbiddenError` so the resolver can say which permission is missing.
+ */
+export async function updateKpiDefinition(
+  kpiIssueId: string,
+  change: { name?: string; meta?: KpiMetaProperty },
+): Promise<void> {
+  const writes: Array<ReturnType<ReturnType<typeof asUser>['requestJira']>> = [];
+  if (change.name !== undefined) {
+    writes.push(
+      asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields: { summary: change.name } }),
+      }),
+    );
+  }
+  if (change.meta !== undefined) {
+    writes.push(
+      asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}/properties/${KPI_META_PROPERTY_KEY}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(change.meta),
+      }),
+    );
+  }
+  for (const res of await Promise.all(writes)) {
+    if (res.status === 403) throw new JiraForbiddenError(await jiraError(res, `edit KPI ${kpiIssueId}`));
+    if (!res.ok) throw new Error(await jiraError(res, `edit KPI ${kpiIssueId}`));
+  }
+}
+
 /** Every issue link type on the site (link types are global, not per project). */
 export async function listIssueLinkTypes(): Promise<IssueLinkTypeInfo[]> {
   const res = await asApp().requestJira(route`/rest/api/3/issueLinkType`);

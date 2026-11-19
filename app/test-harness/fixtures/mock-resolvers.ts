@@ -39,6 +39,8 @@ import {
   type TimelineNodeDto,
   type TimelineTargetsData,
   type TimingNode,
+  type UpdatedKpi,
+  type UpdateKpiInput,
   type Assignment,
   type DateFieldCatalog,
   type HierarchyLevel,
@@ -716,6 +718,60 @@ export function createKpi(input: CreateKpiInput): CreatedKpi {
     unit: node.unit,
     direction: node.direction,
     parentKpiId: parent ? parent.kpiId : null,
+  };
+}
+
+/** The kpiId of a KPI's parent in the harness tree (null for a root or unknown KPI). */
+export function kpiParentOf(kpiId: string): string | null {
+  const walk = (nodes: KpiTreeNode[], parent: string | null): string | null | undefined => {
+    for (const n of nodes) {
+      if (n.kpiId === kpiId) return parent;
+      const found = walk(n.children ?? [], n.kpiId);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  return walk(kpiTree, null) ?? null;
+}
+
+/**
+ * Edit a KPI: name/unit/direction, and move it (with its children) to the end
+ * of another parent's children or of the roots. Refuses the same things as the
+ * backend (empty name, no hierarchy, a loop). Returns the KPI as saved.
+ */
+export function updateKpi(input: UpdateKpiInput): UpdatedKpi {
+  const node = findKpiNode(kpiTree, input.kpiId);
+  if (!node) throw new Error(`Unknown KPI ${input.kpiId}`);
+  const name = input.name.trim();
+  if (name === '') throw new Error('A KPI needs a name.');
+  const toParent = input.parentKpiId ?? null;
+  const fromParent = kpiParentOf(input.kpiId);
+  if (toParent !== fromParent) {
+    if (toParent && getKpiHierarchy().state !== 'ready') {
+      throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
+    }
+    const target = toParent ? findKpiNode(kpiTree, toParent) : undefined;
+    if (toParent && !target) throw new Error(`Unknown KPI ${toParent}`);
+    if (toParent === input.kpiId) throw new Error(`${node.issueKey} can't be nested under itself.`);
+    if (target && findKpiNode(node.children ?? [], target.kpiId)) {
+      throw new Error(`${node.issueKey} can't be nested under ${target.issueKey}: ${target.issueKey} is nested under ${node.issueKey}.`);
+    }
+    const siblings = fromParent ? findKpiNode(kpiTree, fromParent)!.children! : kpiTree;
+    siblings.splice(siblings.indexOf(node), 1);
+    if (target) (target.children ??= []).push(node);
+    else kpiTree.push(node);
+  }
+  node.name = name;
+  node.unit = input.unit.trim();
+  node.direction = input.direction ?? null;
+  return {
+    id: `kpi-${node.kpiId}`,
+    kpiId: node.kpiId,
+    issueKey: node.issueKey,
+    name: node.name,
+    unit: node.unit,
+    direction: node.direction,
+    parentKpiId: toParent,
   };
 }
 

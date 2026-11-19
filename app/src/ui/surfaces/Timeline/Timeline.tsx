@@ -56,6 +56,8 @@ import {
   filterTimelineByProjects,
   kpiPermissionMessage,
   kpiSpaceNoAccessMessage,
+  kpiSubtreeIds,
+  parentKpiIdOf,
   projectSeries,
   type KpiSpaceAccess,
   type AddTargetInput,
@@ -128,12 +130,14 @@ function blockedReasons(access: KpiSpaceAccess | undefined): {
   browse: string | null;
   add: string | null;
   record: string | null;
+  edit: string | null;
   nest: string | null;
 } {
   return {
     browse: access && !access.browse ? kpiSpaceNoAccessMessage() : null,
     add: access && !access.create ? kpiPermissionMessage('add') : null,
     record: access && !access.edit ? kpiPermissionMessage('record') : null,
+    edit: access && !access.edit ? kpiPermissionMessage('edit') : null,
     nest: access && !access.link ? kpiPermissionMessage('nest') : null,
   };
 }
@@ -160,6 +164,7 @@ export function Timeline({
     error,
     record: recordValue,
     createKpi,
+    updateKpi,
     searchIssues,
     addTarget,
   } = useData();
@@ -184,6 +189,7 @@ export function Timeline({
   const [creating, setCreating] = useState<{
     presetParent: { kpiId: string; name: string } | null;
   } | null>(null);
+  const [editingKpi, setEditingKpi] = useState<TimelineNodeDto | null>(null);
   const [addingTarget, setAddingTarget] = useState<{ node: TimelineNodeDto; date: string } | null>(
     null,
   );
@@ -302,6 +308,17 @@ export function Timeline({
     walk(data.roots);
     return options;
   }, [data]);
+
+  // "Edit KPI": its current parent, and the parents it may move under (not itself or its descendants).
+  const editKpiParents = useMemo(() => {
+    if (!data || !editingKpi) return null;
+    const blocked = kpiSubtreeIds(data.roots, editingKpi.kpiId);
+    const parentId = parentKpiIdOf(data.roots, editingKpi.kpiId);
+    return {
+      options: kpiOptions.filter((o) => !blocked.has(o.kpiId)),
+      parent: kpiOptions.find((o) => o.kpiId === parentId) ?? null,
+    };
+  }, [data, editingKpi, kpiOptions]);
 
   // Key bar (spec 08): counts follow the project filter and include collapsed
   // descendants, so expanding/collapsing rows never changes them.
@@ -424,6 +441,8 @@ export function Timeline({
                     onAddChild={() =>
                       setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
                     }
+                    onEdit={() => setEditingKpi(node)}
+                    editBlocked={blocked.edit}
                     onOpenIssue={onOpenIssue}
                     siteUrl={siteUrl}
                   />
@@ -534,9 +553,26 @@ export function Timeline({
             nestBlocked={blocked.nest}
             onCancel={() => setCreating(null)}
             onOpenSettings={onOpenSettings}
-            onCreate={async (input) => {
+            onSave={async (input) => {
               await createKpi(input);
               setCreating(null);
+            }}
+          />
+        )}
+      </ModalTransition>
+
+      <ModalTransition>
+        {editingKpi && editKpiParents && (
+          <CreateKpiModal
+            presetParent={null}
+            editing={{ node: editingKpi, parent: editKpiParents.parent }}
+            kpiOptions={editKpiParents.options}
+            nestBlocked={blocked.nest}
+            onCancel={() => setEditingKpi(null)}
+            onOpenSettings={onOpenSettings}
+            onSave={async (input) => {
+              await updateKpi({ kpiId: editingKpi.kpiId, ...input });
+              setEditingKpi(null);
             }}
           />
         )}
@@ -654,6 +690,8 @@ function TimelineRowLabel({
   addChildBlocked = null,
   onAddTarget,
   onAddChild,
+  onEdit,
+  editBlocked = null,
   onOpenIssue,
   siteUrl,
 }: {
@@ -668,15 +706,23 @@ function TimelineRowLabel({
   addChildBlocked?: string | null;
   onAddTarget: () => void;
   onAddChild: () => void;
+  onEdit: () => void;
+  /** why editing the KPI is disabled (spec 10), or null */
+  editBlocked?: string | null;
   onOpenIssue: (issueKey: string) => void | Promise<void>;
   siteUrl: string;
 }) {
+  // Hover-revealed actions in a 2×2 grid: the KPI itself (edit, add child) on the
+  // name line, its data (record, target) on the unit line. Overlaid (not in flow)
+  // so long names/units get the full width at rest; on hover/focus they cover the tail.
+  const actionsClass =
+    'absolute inset-y-0 right-0 flex items-center gap-2 bg-surface pl-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100';
   return (
     <div
       className="group flex flex-col justify-center gap-1 border-b border-r border-border bg-surface px-3 py-1.5 last:border-b-0"
       style={{ height: ROW_H }}
     >
-      <div className="flex items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP }}>
+      <div className="relative flex min-w-0 items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP }}>
         <button
           className={`grid h-4 w-4 flex-none place-items-center text-text-subtle ${
             hasChildren ? '' : 'invisible'
@@ -709,6 +755,24 @@ function TimelineRowLabel({
         ) : (
           <span className="truncate text-sm font-semibold">{node.name}</span>
         )}
+        <div className={actionsClass}>
+          <RowAction
+            tooltip="Edit KPI"
+            label="Edit KPI"
+            glyph="✎"
+            glyphClass="text-[13px]"
+            onClick={onEdit}
+            disabledReason={editBlocked}
+          />
+          <RowAction
+            tooltip="Create child KPI"
+            label="Add child KPI"
+            glyph="+"
+            glyphClass="text-[13px]"
+            onClick={onAddChild}
+            disabledReason={addChildBlocked}
+          />
+        </div>
       </div>
       <div className="relative flex min-w-0 items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP + 24 }}>
         <span className="min-w-0 truncate text-xs text-text-subtle" title={node.unit || 'No unit'}>
@@ -726,16 +790,7 @@ function TimelineRowLabel({
             )}
           </span>
         )}
-        {/* Overlaid (not in flow) so long units get the full width at rest; actions cover the tail on hover/focus. */}
-        <div className="absolute inset-y-0 right-0 flex items-center gap-2 bg-surface pl-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
-          <RowAction
-            tooltip="Create child KPI"
-            label="Add child KPI"
-            glyph="+"
-            glyphClass="text-[13px]"
-            onClick={onAddChild}
-            disabledReason={addChildBlocked}
-          />
+        <div className={actionsClass}>
           <RowAction
             tooltip="Record a value"
             label="Record a value"
@@ -1075,37 +1130,54 @@ const DIRECTION_OPTIONS: DirectionOption[] = [
 
 function CreateKpiModal({
   presetParent,
+  editing = null,
   kpiOptions,
   nestBlocked = null,
   onCancel,
-  onCreate,
+  onSave,
   onOpenSettings,
 }: {
-  /** Fixed parent from the row-level "add child" (⤵) trigger — no picker shown. */
+  /** Fixed parent from the row-level "add child" (+) trigger — no picker shown. Create only. */
   presetParent: { kpiId: string; name: string } | null;
-  /** Every existing KPI, for the optional parent picker (only used when `presetParent` is null). */
+  /**
+   * Set to edit an existing KPI instead of creating one: the fields start from it
+   * and the parent picker starts on its current parent.
+   */
+  editing?: { node: TimelineNodeDto; parent: KpiParentOption | null } | null;
+  /** The KPIs the parent picker offers (when editing, without the KPI itself and its descendants). */
   kpiOptions: KpiParentOption[];
   /** why nesting is disabled (no Link Issues, spec 10): the parent picker is disabled with this reason */
   nestBlocked?: string | null;
   onCancel: () => void;
   /** Resolves once the KPI is saved; rejects with the failure (shown in the modal). */
-  onCreate: (input: CreateKpiInput) => Promise<void>;
+  onSave: (input: CreateKpiInput & { parentKpiId: string | null }) => Promise<void>;
   onOpenSettings: () => void | Promise<void>;
 }) {
   const { saving, error, clearError, run } = useModalSave();
-  const [name, setName] = useState('');
-  const [unit, setUnit] = useState('');
-  const [direction, setDirection] = useState<DirectionOption>(DIRECTION_OPTIONS[0]);
-  const [parent, setParent] = useState<KpiParentOption | null>(null);
+  const initialDirection =
+    DIRECTION_OPTIONS.find((o) => o.value === (editing ? (editing.node.direction ?? 'none') : 'increase')) ??
+    DIRECTION_OPTIONS[0];
+  const [name, setName] = useState(editing?.node.name ?? '');
+  const [unit, setUnit] = useState(editing?.node.unit ?? '');
+  const [direction, setDirection] = useState<DirectionOption>(initialDirection);
+  const [parent, setParent] = useState<KpiParentOption | null>(editing?.parent ?? null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const parentKpiId = presetParent ? presetParent.kpiId : (parent?.kpiId ?? null);
+  const unchanged =
+    editing !== null &&
+    name.trim() === editing.node.name &&
+    unit.trim() === editing.node.unit &&
+    direction === initialDirection &&
+    parentKpiId === (editing.parent?.kpiId ?? null);
+  const canSave = name.trim() !== '' && !unchanged;
   const submit = () => {
-    if (name.trim() === '' || saving) return;
+    if (!canSave || saving) return;
     void run(() =>
-      onCreate({
+      onSave({
         name: name.trim(),
         unit: unit.trim(),
         direction: direction.value === 'none' ? null : direction.value,
-        parentKpiId: presetParent ? presetParent.kpiId : (parent?.kpiId ?? null),
+        parentKpiId,
       }),
     );
   };
@@ -1119,11 +1191,15 @@ function CreateKpiModal({
       shouldCloseOnOverlayClick={!saving}
     >
       <ModalHeader>
-        <ModalTitle>New KPI</ModalTitle>
+        <ModalTitle>{editing ? 'Edit KPI' : 'New KPI'}</ModalTitle>
       </ModalHeader>
       <ModalBody>
         <ModalSubtitle>
-          {presetParent ? (
+          {editing ? (
+            <>
+              Changes apply everywhere <strong className="text-text">{editing.node.issueKey}</strong> is used
+            </>
+          ) : presetParent ? (
             <>
               Nested under <strong className="text-text">{presetParent.name}</strong>
             </>
@@ -1177,9 +1253,13 @@ function CreateKpiModal({
           {!presetParent && (
             <ModalField
               label={
-                <>
-                  Parent KPI <span className="text-text-subtle">(optional)</span>
-                </>
+                editing ? (
+                  'Parent KPI'
+                ) : (
+                  <>
+                    Parent KPI <span className="text-text-subtle">(optional)</span>
+                  </>
+                )
               }
               htmlFor="kpi-parent"
             >
@@ -1190,6 +1270,7 @@ function CreateKpiModal({
                     value={parent}
                     onChange={setParent}
                     isDisabled={saving || nestBlocked !== null}
+                    placeholder={editing ? 'None (top-level KPI)' : undefined}
                   />
                 </div>
               </DisabledReason>
@@ -1201,13 +1282,8 @@ function CreateKpiModal({
         <Button appearance="subtle" onClick={onCancel} isDisabled={saving}>
           Cancel
         </Button>
-        <Button
-          appearance="primary"
-          onClick={submit}
-          isDisabled={name.trim() === ''}
-          isLoading={saving}
-        >
-          Create KPI
+        <Button appearance="primary" onClick={submit} isDisabled={!canSave} isLoading={saving}>
+          {editing ? 'Save' : 'Create KPI'}
         </Button>
       </ModalFooter>
     </Modal>
@@ -1224,17 +1300,19 @@ function KpiParentSelect({
   value,
   onChange,
   isDisabled = false,
+  placeholder = 'Search KPIs…',
 }: {
   options: KpiParentOption[];
   value: KpiParentOption | null;
   onChange: (option: KpiParentOption | null) => void;
   isDisabled?: boolean;
+  placeholder?: string;
 }) {
   return (
     <Select<KpiParentOption>
       inputId="kpi-parent"
       aria-label="Search for a parent KPI"
-      placeholder="Search KPIs…"
+      placeholder={placeholder}
       options={options}
       value={value}
       isClearable

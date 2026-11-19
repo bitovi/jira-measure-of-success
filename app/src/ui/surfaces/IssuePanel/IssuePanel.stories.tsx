@@ -236,6 +236,26 @@ export const AllGroups: Story = {
   },
 };
 
+/** A target card's KPI name links to the KPI issue on the Jira site. */
+const openKpiSpy = fn();
+export const OpenKpiIssue: Story = {
+  args: {
+    usePanel: stub({ data: ALL_GROUPS }),
+    onOpenIssue: openKpiSpy,
+    loadSiteUrl: () => Promise.resolve('https://example.atlassian.net'),
+  },
+  play: async ({ canvasElement }) => {
+    openKpiSpy.mockClear();
+    const c = within(canvasElement);
+    const link = c.getByRole('link', { name: 'Number of Stores' });
+    await waitFor(() => expect(link).toHaveAttribute('href', 'https://example.atlassian.net/browse/stores'));
+    await userEvent.click(link);
+    await expect(openKpiSpy).toHaveBeenCalledWith('stores');
+    // "On parent, not tracked here" rows aren't target cards — no link
+    await expect(c.queryByRole('link', { name: 'Costs' })).not.toBeInTheDocument();
+  },
+};
+
 /** "+ Track this" pre-fills the form with that KPI and focuses the value — it does NOT save. */
 const trackSaveSpy = fn();
 export const TrackThisPrefillsForm: Story = {

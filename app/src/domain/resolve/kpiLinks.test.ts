@@ -5,8 +5,10 @@ import {
   findAppLinkType,
   isDirectionalLinkType,
   kpiParentLinkBody,
+  kpiParentLinks,
   linkLabelsForParentEnd,
   parentFromIssueLinks,
+  wouldCreateKpiCycle,
   type IssueLinkRef,
 } from './kpiLinks';
 import type { KpiHierarchyLink } from '../models/kpiHierarchy';
@@ -58,6 +60,48 @@ describe('parentFromIssueLinks', () => {
       { type: { id: '10500' }, inwardIssue: { id: '300' } },
     ];
     expect(parentFromIssueLinks(links, inProject, HIER)).toBe('200');
+  });
+});
+
+describe('kpiParentLinks', () => {
+  it('lists every qualifying parent link with its id, skipping foreign types, child ends and outside parents', () => {
+    const links: IssueLinkRef[] = [
+      { id: 'l1', type: { id: '10500' }, inwardIssue: { id: '100' } },
+      { id: 'l2', type: { id: '10003' }, inwardIssue: { id: '200' } },
+      { id: 'l3', type: { id: '10500' }, outwardIssue: { id: '300' } },
+      { id: 'l4', type: { id: '10500' }, inwardIssue: { id: '999' } },
+      { id: 'l5', type: { id: '10500' }, inwardIssue: { id: '300' } },
+    ];
+    expect(kpiParentLinks(links, inProject, HIER)).toEqual([
+      { linkId: 'l1', parentId: '100' },
+      { linkId: 'l5', parentId: '300' },
+    ]);
+  });
+
+  it('is empty without a configured hierarchy', () => {
+    expect(kpiParentLinks([{ id: 'l1', type: { id: '10500' }, inwardIssue: { id: '100' } }], inProject, null)).toEqual([]);
+  });
+});
+
+describe('wouldCreateKpiCycle', () => {
+  // 1 ← 2 ← 3 (3's parent is 2, 2's parent is 1); 4 is a separate root.
+  const parents: Record<string, string | null> = { '1': null, '2': '1', '3': '2', '4': null };
+  const parentOf = (id: string) => parents[id];
+
+  it('refuses the KPI itself or any of its descendants as the new parent', () => {
+    expect(wouldCreateKpiCycle('1', '1', parentOf)).toBe(true);
+    expect(wouldCreateKpiCycle('1', '3', parentOf)).toBe(true);
+    expect(wouldCreateKpiCycle('2', '3', parentOf)).toBe(true);
+  });
+
+  it('allows ancestors, siblings and other trees', () => {
+    expect(wouldCreateKpiCycle('3', '1', parentOf)).toBe(false);
+    expect(wouldCreateKpiCycle('2', '4', parentOf)).toBe(false);
+  });
+
+  it('terminates on a pre-existing loop that does not involve the KPI', () => {
+    const loop: Record<string, string> = { a: 'b', b: 'a' };
+    expect(wouldCreateKpiCycle('x', 'a', (id) => loop[id])).toBe(false);
   });
 });
 

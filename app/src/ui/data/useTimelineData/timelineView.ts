@@ -1,5 +1,6 @@
 import {
   applyAddedTarget,
+  applyKpiEdit,
   applyReadingEditsToTree,
   applyTargetContributions,
   clearResolving,
@@ -10,6 +11,7 @@ import {
   type RecordValueInput,
   type TargetContributionsByKpi,
   type TimelineData,
+  type UpdatedKpi,
 } from '@domain/index.js';
 
 /**
@@ -22,7 +24,7 @@ import {
  *  - if Phase 2 failed, the KPIs stay visible with the shimmer cleared.
  *
  * Mutations return only what changed, never a rebuilt timeline, so saved KPIs,
- * recorded values and added targets are laid over the load. Values go in BEFORE
+ * KPI edits, recorded values and added targets are laid over the load. Values go in BEFORE
  * the targets are built: a target's hit/missed status and a relative target's
  * value depend on the readings. Each overlay is a no-op or an exact replacement
  * once the loaded data already includes it.
@@ -32,6 +34,8 @@ export interface TimelineLoadState {
   contributions: TargetContributionsByKpi | null;
   targetsError: string | null;
   created?: readonly CreatedKpi[];
+  /** KPI edits saved this session, in order (applied after `created`) */
+  edited?: readonly UpdatedKpi[];
   readingEdits?: readonly RecordValueInput[];
   addedTargets?: readonly AddedTarget[];
 }
@@ -50,6 +54,8 @@ export function deriveTimelineView(state: TimelineLoadState): TimelineView {
 
   let tree = skeleton;
   for (const kpi of state.created ?? []) tree = insertCreatedKpi(tree, kpi);
+  // Before the targets are built: a target's hit/missed status depends on the KPI's direction.
+  for (const kpi of state.edited ?? []) tree = applyKpiEdit(tree, kpi);
   tree = applyReadingEditsToTree(tree, state.readingEdits ?? []);
 
   const added = state.addedTargets ?? [];

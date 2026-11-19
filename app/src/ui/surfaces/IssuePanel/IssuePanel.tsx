@@ -3,7 +3,7 @@ import Button from '@atlaskit/button/new';
 import AddIcon from '@atlaskit/icon/core/add';
 import Select from '@atlaskit/select';
 import { usePanelData, type UsePanel } from '@ui/data/usePanelData/index.js';
-import { openKpiTimeline } from '@ui/bridge.js';
+import { getSiteUrl, openIssue, openKpiTimeline } from '@ui/bridge.js';
 import { RecordModal } from '@ui/plot/modals.js';
 import { KpiView } from '@ui/surfaces/KpiView/index.js';
 import { kpiPermissionMessage, kpiSpaceNoAccessMessage } from '@domain/index.js';
@@ -48,12 +48,27 @@ function localToday(): string {
 export function IssuePanel({
   issueId = '10048',
   usePanel = usePanelData,
+  onOpenIssue = openIssue,
+  loadSiteUrl = getSiteUrl,
 }: {
   issueId?: string;
   usePanel?: UsePanel;
+  /** opens a KPI's Jira issue (the target cards' KPI-name links) */
+  onOpenIssue?: (issueKey: string) => void | Promise<void>;
+  loadSiteUrl?: () => Promise<string>;
 }) {
   const { data, pending, error, busy, actionError, dismissActionError, valuesError, retryValues, save, remove, record } =
     usePanel(issueId);
+  const [siteUrl, setSiteUrl] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    void loadSiteUrl().then((u) => {
+      if (!cancelled) setSiteUrl(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadSiteUrl]);
   const [recordFor, setRecordFor] = useState<PanelRowDto | null>(null);
   // "+ Track this" pre-selects the KPI in the form; `n` re-triggers a repeat click.
   const [trackRequest, setTrackRequest] = useState<TrackRequest | null>(null);
@@ -136,6 +151,8 @@ export function IssuePanel({
                   onRemove={() => remove(row.kpiId)}
                   onRecord={() => setRecordFor(row)}
                   recordBlocked={recordBlocked}
+                  kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiId}` : `/browse/${row.kpiId}`}
+                  onOpenKpi={() => void onOpenIssue(row.kpiId)}
                 />
               ),
             )}

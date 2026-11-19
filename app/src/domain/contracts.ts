@@ -313,9 +313,9 @@ export interface KpiSpaceAccess {
   browse: boolean;
   /** CREATE_ISSUES: Add KPI */
   create: boolean;
-  /** EDIT_ISSUES: record / delete a value */
+  /** EDIT_ISSUES: record / delete a value, edit a KPI's name, unit and direction */
   edit: boolean;
-  /** LINK_ISSUES: nest a new KPI under a parent */
+  /** LINK_ISSUES: nest a KPI under a parent (new or moved) */
   link: boolean;
 }
 
@@ -372,6 +372,22 @@ export interface CreatedKpi {
   direction: KpiDirection | null;
   parentKpiId: string | null;
 }
+
+/**
+ * Input for editing a KPI: its full new definition. `parentKpiId` is the parent
+ * it should end up under (null = a root KPI); when it differs from the current
+ * parent the KPI moves, taking its children with it.
+ */
+export interface UpdateKpiInput {
+  kpiId: string;
+  name: string;
+  unit: string;
+  direction: KpiDirection | null;
+  parentKpiId: string | null;
+}
+
+/** `updateKpi` result: the KPI as saved, which the client lays over its tree (like `CreatedKpi`). */
+export type UpdatedKpi = CreatedKpi;
 
 /**
  * `addTarget` result: the saved target as a raw contribution (assignment + its

@@ -25,6 +25,12 @@ import {
   isDirectionalLinkType,
   KPI_HIERARCHY_NOT_SET_UP,
   KpiHierarchyLink,
+  KpiMetaProperty,
+  kpiParentLinks,
+  parentFromIssueLinks,
+  wouldCreateKpiCycle,
+  type UpdateKpiInput,
+  type UpdatedKpi,
   type PanelData,
   type PanelListData,
   type PanelParts,
@@ -56,6 +62,10 @@ import {
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
+  deleteIssueLink,
+  fetchKpiIssueForEdit,
+  linkKpiParent,
+  updateKpiDefinition,
   ensureKpiHierarchyLinkType,
   listIssueLinkTypes,
   ensureKpiIssueTypeOnProject,
@@ -852,6 +862,119 @@ define('createKpi', async ({ payload }) => {
     }
   }
   return createKpiIssue(space.projectId, input, hierarchy);
+});
+
+// Edit a KPI: rename it, change its unit/direction, and/or move it (with its
+// children) under another parent or to the root. Everything is checked before the
+// first write. The move removes the old hierarchy link and then adds the new one;
+// if the add fails, the old link is put back. Returns the KPI as saved (UpdatedKpi)
+// for the client to lay over its tree, like createKpi.
+define('updateKpi', async ({ payload }) => {
+  const input = payload as UpdateKpiInput;
+  const name = String(input?.name ?? '').trim();
+  if (!input?.kpiId) throw new Error('No KPI to edit.');
+  if (name === '') throw new Error('A KPI needs a name.');
+  const meta = KpiMetaProperty.parse({ unit: String(input.unit ?? '').trim(), direction: input.direction ?? null });
+  const newParentKey = input.parentKpiId ?? null;
+
+  const [space, hierarchy] = await Promise.all([readResolvedKpiSpaceConfig(), readKpiHierarchyConfig()]);
+  if (!space.key || !space.projectId) throw new Error('KPI space is not set up — configure it in Settings first.');
+  const spaceKey = space.key;
+  const spaceLabel = space.name ?? space.key;
+  const [kpi, access] = await Promise.all([
+    fetchKpiIssueForEdit(input.kpiId),
+    fetchKpiSpaceAccess(spaceKey).catch((error: unknown) => {
+      if (error instanceof PermissionLookupError) {
+        throw new Error("Couldn't check your permissions on the KPI space, so the KPI wasn't saved. Try again.");
+      }
+      throw error;
+    }),
+  ]);
+  if (!kpi) throw new Error(kpiNotVisibleMessage(input.kpiId, spaceLabel));
+  if (kpi.projectKey !== spaceKey) throw new Error(`${kpi.key} isn't a KPI: only KPIs in the KPI space can be edited.`);
+
+  const nameChanged = name !== kpi.name;
+  const metaChanged = meta.unit !== (kpi.meta?.unit ?? '') || meta.direction !== (kpi.meta?.direction ?? null);
+  if ((nameChanged || metaChanged) && !access.edit) throw new Error(kpiPermissionMessage('edit', spaceLabel, kpi.key));
+
+  // Work out the move (if any) from the KPI's current hierarchy links.
+  let move: { hierarchy: KpiHierarchyLink; oldParents: Array<{ linkId: string; parentKey: string }> } | null = null;
+  if (!hierarchy) {
+    if (newParentKey) throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
+  } else {
+    const issues = await stage('kpiSpaceIssues', () => fetchKpiSpaceIssues(spaceKey, hierarchy));
+    const byId = new Map(issues.map((i) => [i.id, i]));
+    const byKey = new Map(issues.map((i) => [i.key, i]));
+    const ids = new Set([...byId.keys(), kpi.id]);
+    const parentLinks = kpiParentLinks(kpi.links, ids, hierarchy);
+    const currentParentKey = parentLinks.length > 0 ? (byId.get(parentLinks[0].parentId)?.key ?? null) : null;
+    if (newParentKey !== currentParentKey) {
+      if (!access.link) throw new Error(kpiPermissionMessage('nest', spaceLabel));
+      if (newParentKey) {
+        if (newParentKey === kpi.key) throw new Error(`${kpi.key} can't be nested under itself.`);
+        // A KPI created moments ago may not be in the search index yet: look it up directly.
+        let parent: { id: string; parentId: string | null } | undefined = byKey.get(newParentKey);
+        if (!parent) {
+          const fresh = await fetchKpiIssueForEdit(newParentKey);
+          if (!fresh) throw new Error(kpiNotVisibleMessage(newParentKey, spaceLabel));
+          if (fresh.projectKey !== spaceKey) {
+            throw new Error(`${fresh.key} isn't a KPI: KPIs can only be nested under KPIs in the KPI space.`);
+          }
+          parent = { id: fresh.id, parentId: parentFromIssueLinks(fresh.links, ids, hierarchy) };
+        }
+        const freshParent = parent;
+        const parentOf = (id: string) => (id === freshParent.id ? freshParent.parentId : byId.get(id)?.parentId);
+        if (wouldCreateKpiCycle(kpi.id, parent.id, parentOf)) {
+          throw new Error(`${kpi.key} can't be nested under ${newParentKey}: ${newParentKey} is nested under ${kpi.key}.`);
+        }
+        const types = await listIssueLinkTypes();
+        if (!types.some((t) => t.id === hierarchy.linkTypeId)) {
+          throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — the link type KPIs nest with was deleted; choose another in Settings.`);
+        }
+      }
+      move = {
+        hierarchy,
+        oldParents: parentLinks.map((l) => ({ linkId: l.linkId, parentKey: byId.get(l.parentId)?.key ?? l.parentId })),
+      };
+    }
+  }
+
+  if (nameChanged || metaChanged) {
+    try {
+      await updateKpiDefinition(kpi.id, { ...(nameChanged ? { name } : {}), ...(metaChanged ? { meta } : {}) });
+    } catch (e) {
+      if (e instanceof JiraForbiddenError) throw new Error(kpiPermissionMessage('edit', spaceLabel, kpi.key));
+      throw e;
+    }
+  }
+  if (move) {
+    const { hierarchy: link, oldParents } = move;
+    for (const old of oldParents) await deleteIssueLink(old.linkId);
+    if (newParentKey) {
+      try {
+        await linkKpiParent(link, newParentKey, kpi.key);
+      } catch (err) {
+        const restored = await Promise.all(
+          oldParents.map((old) => linkKpiParent(link, old.parentKey, kpi.key).then(() => true, () => false)),
+        );
+        if (restored.includes(false)) {
+          throw new Error(`${(err as Error).message}. ${kpi.key} was taken off its old parent; nest it again in Jira.`);
+        }
+        throw err;
+      }
+    }
+  }
+
+  const updated: UpdatedKpi = {
+    id: kpi.id,
+    kpiId: kpi.key,
+    issueKey: kpi.key,
+    name,
+    unit: meta.unit,
+    direction: meta.direction ?? null,
+    parentKpiId: hierarchy ? newParentKey : null,
+  };
+  return updated;
 });
 
 export const handler = resolver.getDefinitions();

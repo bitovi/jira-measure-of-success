@@ -89,9 +89,50 @@ export function findAppLinkType<T extends Pick<IssueLinkTypeInfo, 'name'>>(types
 
 /** Minimal shape of a Jira issue link as returned in an issue's `issuelinks`. */
 export interface IssueLinkRef {
+  /** the link's own id (for `DELETE /rest/api/3/issueLink/{id}`) */
+  id?: string;
   type?: { id?: string; name?: string; inward?: string; outward?: string };
   inwardIssue?: { id?: string; key?: string };
   outwardIssue?: { id?: string; key?: string };
+}
+
+/**
+ * Every link that makes another KPI-space issue this KPI's parent (the links
+ * `parentFromIssueLinks` considers, in the same order), with the link ids so a
+ * move can remove them. Normally at most one.
+ */
+export function kpiParentLinks(
+  links: IssueLinkRef[] | undefined,
+  inProjectIds: ReadonlySet<string>,
+  hierarchy: KpiHierarchyLink | null,
+): Array<{ linkId: string; parentId: string }> {
+  if (!hierarchy) return [];
+  const out: Array<{ linkId: string; parentId: string }> = [];
+  for (const link of links ?? []) {
+    if (String(link.type?.id ?? '') !== hierarchy.linkTypeId || !link.id) continue;
+    const parentId = (hierarchy.parentEnd === 'outward' ? link.outwardIssue : link.inwardIssue)?.id;
+    if (parentId && inProjectIds.has(String(parentId))) out.push({ linkId: String(link.id), parentId: String(parentId) });
+  }
+  return out;
+}
+
+/**
+ * Would nesting `kpiId` under `newParentId` make a loop? True when the new
+ * parent is the KPI itself or one of its descendants (walking up from the new
+ * parent reaches the KPI). `parentOf` gives each KPI's current parent.
+ */
+export function wouldCreateKpiCycle(
+  kpiId: string,
+  newParentId: string,
+  parentOf: (id: string) => string | null | undefined,
+): boolean {
+  const seen = new Set<string>();
+  for (let cur: string | null | undefined = newParentId; cur; cur = parentOf(cur)) {
+    if (cur === kpiId) return true;
+    if (seen.has(cur)) return false;
+    seen.add(cur);
+  }
+  return false;
 }
 
 /**

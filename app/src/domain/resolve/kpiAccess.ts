@@ -7,12 +7,13 @@
  */
 
 /** Something the user may be refused in the KPI space, and the Jira permission it needs. */
-export type KpiAccessAction = 'view' | 'add' | 'record' | 'nest';
+export type KpiAccessAction = 'view' | 'add' | 'record' | 'edit' | 'nest';
 
 const PERMISSION: Record<KpiAccessAction, string> = {
   view: 'Browse Projects',
   add: 'Create Issues',
   record: 'Edit Issues',
+  edit: 'Edit Issues',
   nest: 'Link Issues',
 };
 
@@ -37,7 +38,11 @@ export function kpiPermissionMessage(action: KpiAccessAction, spaceLabel?: strin
           ? kpiKey
             ? `Recording a value on ${kpiKey}`
             : 'Recording a value'
-          : 'Nesting a KPI under another';
+          : action === 'edit'
+            ? kpiKey
+              ? `Editing ${kpiKey}`
+              : 'Editing a KPI'
+            : 'Nesting a KPI under another';
   return `${doing} needs ${PERMISSION[action]} permission on ${projectPhrase(spaceLabel)}. Ask a Jira admin.`;
 }
 

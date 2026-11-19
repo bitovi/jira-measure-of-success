@@ -344,6 +344,9 @@ function kpiLinkShape(fixture: ScaleFixture): FixtureLinkShape {
   return { type, parentEnd: cfg?.parentEnd === 'outward' ? 'outward' : 'inward' };
 }
 
+/** The fixture models one parent link per KPI, so a child's (numeric, like Jira's) link id is derived from its issue id. */
+export const kpiLinkId = (childIssueId: string): string => String(50_000_000 + Number(childIssueId));
+
 function issueJson(
   issue: FixtureIssue,
   fields: string[],
@@ -363,7 +366,13 @@ function issueJson(
     status: { statusCategory: { key: 'indeterminate' } },
     parent: issue.parentId ? { id: issue.parentId } : undefined,
     issuelinks: issue.kpiParentId
-      ? [{ type: link.type, [link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue']: { id: issue.kpiParentId } }]
+      ? [
+          {
+            id: kpiLinkId(issue.id),
+            type: link.type,
+            [link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue']: { id: issue.kpiParentId },
+          },
+        ]
       : [],
     [RANK_FIELD_ID]: issue.rank ?? null,
   };
@@ -578,6 +587,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!issue || !visible(issue, as)) return notFound();
       if (!may(issue, as, 'edit')) return forbidden(`edit ${issue.key}`);
       const req = JSON.parse(String(body)) as { fields?: Record<string, unknown> };
+      if (typeof req.fields?.summary === 'string') issue.summary = req.fields.summary;
       const reading = req.fields?.[READING_FIELD_ID];
       if (typeof reading === 'string') {
         const changes = fixture.readingChanges.get(issue.id) ?? [];
@@ -634,6 +644,16 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!may(child, as, 'link')) return forbidden('link issues');
       child.kpiParentId = parent.id;
       return respond(201);
+    }
+
+    const linkById = /^\/rest\/api\/3\/issueLink\/([^/]+)$/.exec(path);
+    if (linkById && method === 'DELETE') {
+      const linkId = decodeURIComponent(linkById[1]);
+      const child = [...fixture.issues.values()].find((i) => i.kpiParentId && kpiLinkId(i.id) === linkId);
+      if (!child || !visible(child, as)) return respond(404, { errorMessages: ['No issue link with that id.'] });
+      if (!may(child, as, 'link')) return forbidden('link issues');
+      child.kpiParentId = null;
+      return respond(204);
     }
 
     if (method === 'GET' && path === '/rest/api/3/issueLinkType') {

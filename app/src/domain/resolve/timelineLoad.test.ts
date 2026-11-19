@@ -1,13 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyAddedTarget,
+  applyKpiEdit,
   applyTargetContributions,
   clearResolving,
   insertCreatedKpi,
+  kpiSubtreeIds,
+  parentKpiIdOf,
   withAddedContributions,
   type TargetContributionsByKpi,
 } from './timelineLoad';
-import type { CreatedKpi, TimelineData, TimelineNodeDto } from '../contracts';
+import type { CreatedKpi, TimelineData, TimelineNodeDto, UpdatedKpi } from '../contracts';
 import type { Assignment } from '../models/assignment';
 
 const assignment = (over: Partial<Assignment> & Pick<Assignment, 'timing'>): Assignment => ({
@@ -164,6 +167,92 @@ describe('insertCreatedKpi', () => {
 
   it('is a no-op once the tree already holds the KPI (a later load caught up)', () => {
     expect(insertCreatedKpi(skeleton, created({ kpiId: 'KPI-2' }))).toBe(skeleton);
+  });
+});
+
+describe('applyKpiEdit', () => {
+  // KPI-1 ─┬─ KPI-2 ── KPI-3
+  // KPI-4
+  const tree: TimelineData = {
+    today: '2026-07-10',
+    roots: [
+      node({
+        children: [
+          node({
+            id: 'n2',
+            kpiId: 'KPI-2',
+            issueKey: 'KPI-2',
+            name: 'Orders',
+            depth: 1,
+            children: [node({ id: 'n3', kpiId: 'KPI-3', issueKey: 'KPI-3', name: 'Repeat', depth: 2 })],
+          }),
+        ],
+      }),
+      node({ id: 'n4', kpiId: 'KPI-4', issueKey: 'KPI-4', name: 'Churn' }),
+    ],
+  };
+  const edit = (over: Partial<UpdatedKpi> = {}): UpdatedKpi => ({
+    id: 'n2',
+    kpiId: 'KPI-2',
+    issueKey: 'KPI-2',
+    name: 'Orders',
+    unit: 'USD',
+    direction: 'increase',
+    parentKpiId: 'KPI-1',
+    ...over,
+  });
+  const shape = (data: TimelineData) => {
+    const out: Array<[string, number]> = [];
+    const walk = (ns: TimelineNodeDto[]) => ns.forEach((n) => (out.push([n.kpiId, n.depth]), walk(n.children)));
+    walk(data.roots);
+    return out;
+  };
+
+  it('renames and changes unit/direction in place, keeping readings and children', () => {
+    const out = applyKpiEdit(tree, edit({ name: 'Orders (net)', unit: 'count', direction: 'decrease' }));
+    const kpi2 = out.roots[0].children[0];
+    expect(kpi2).toMatchObject({ name: 'Orders (net)', unit: 'count', direction: 'decrease' });
+    expect(kpi2.readings).toEqual(tree.roots[0].children[0].readings);
+    expect(shape(out)).toEqual(shape(tree));
+  });
+
+  it('moves the KPI and its children under the new parent, after its children, with depths adjusted', () => {
+    const out = applyKpiEdit(tree, edit({ parentKpiId: 'KPI-4' }));
+    expect(shape(out)).toEqual([
+      ['KPI-1', 0],
+      ['KPI-4', 0],
+      ['KPI-2', 1],
+      ['KPI-3', 2],
+    ]);
+  });
+
+  it('moves the KPI to the end of the roots', () => {
+    const out = applyKpiEdit(tree, edit({ id: 'n3', kpiId: 'KPI-3', issueKey: 'KPI-3', name: 'Repeat', parentKpiId: null }));
+    expect(shape(out)).toEqual([
+      ['KPI-1', 0],
+      ['KPI-2', 1],
+      ['KPI-4', 0],
+      ['KPI-3', 0],
+    ]);
+  });
+
+  it('never moves a KPI under its own subtree or under a KPI not in the tree', () => {
+    expect(applyKpiEdit(tree, edit({ parentKpiId: 'KPI-3' }))).toBe(tree);
+    expect(applyKpiEdit(tree, edit({ parentKpiId: 'KPI-404' }))).toBe(tree);
+  });
+
+  it('is a no-op when the tree already matches or the KPI is not in it', () => {
+    expect(applyKpiEdit(tree, edit())).toBe(tree);
+    expect(applyKpiEdit(tree, edit({ kpiId: 'KPI-404', name: 'X' }))).toBe(tree);
+    const moved = applyKpiEdit(tree, edit({ parentKpiId: 'KPI-4' }));
+    expect(applyKpiEdit(moved, edit({ parentKpiId: 'KPI-4' }))).toBe(moved);
+  });
+
+  it('helpers: parentKpiIdOf and kpiSubtreeIds', () => {
+    expect(parentKpiIdOf(tree.roots, 'KPI-3')).toBe('KPI-2');
+    expect(parentKpiIdOf(tree.roots, 'KPI-1')).toBeNull();
+    expect([...kpiSubtreeIds(tree.roots, 'KPI-2')]).toEqual(['KPI-2', 'KPI-3']);
+    expect(kpiSubtreeIds(tree.roots, 'KPI-404').size).toBe(0);
   });
 });
 

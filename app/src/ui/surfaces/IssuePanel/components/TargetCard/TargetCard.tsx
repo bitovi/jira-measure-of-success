@@ -46,6 +46,9 @@ import {
  * row (the user may not see its KPI, spec 10) is read-only the same way, with a
  * permission notice; Edit is disabled with the reason, Remove still works (the
  * target lives on this work issue).
+ *
+ * Given `kpiHref` + `onOpenKpi`, the KPI name links to the KPI's Jira issue
+ * (not in `preview`, nor for a deleted / not-visible KPI).
  */
 export function TargetCard({
   row: savedRow,
@@ -56,6 +59,8 @@ export function TargetCard({
   onRemove,
   onRecord,
   recordBlocked = null,
+  kpiHref,
+  onOpenKpi,
 }: {
   row: PanelRowDto;
   currentValue: number | null;
@@ -67,6 +72,9 @@ export function TargetCard({
   onRecord?: () => void;
   /** why recording a value is disabled (no Edit Issues on the KPI, spec 10), or null */
   recordBlocked?: string | null;
+  /** `/browse/{key}` URL of the KPI issue; with `onOpenKpi`, the KPI name links to it */
+  kpiHref?: string;
+  onOpenKpi?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   // Saves aren't optimistic: show the confirmed bet until the panel reloads the
@@ -107,6 +115,7 @@ export function TargetCard({
   const saved = draftFromRow(row);
   const amount = betAmount(row.targetType, row.target, row.unit);
   const when = betWhen(row.dueTiming);
+  const linkName = !preview && !readOnlyBet && !!kpiHref && !!onOpenKpi;
 
   const startEdit = (part: 'amount' | 'when') => {
     focusPart.current = part;
@@ -121,7 +130,25 @@ export function TargetCard({
     >
       <header className="flex min-h-6 items-center gap-1.5">
         <span className="flex min-w-0 items-center gap-1 text-sm leading-5 text-text-subtle">
-          <span className="truncate">{row.name}</span>
+          {linkName ? (
+            <Tooltip content={`Open ${row.name} (${row.kpiId}) in Jira`}>
+              {(tooltipProps) => (
+                <a
+                  {...tooltipProps}
+                  href={kpiHref}
+                  className="truncate text-brand hover:underline"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onOpenKpi?.();
+                  }}
+                >
+                  {row.name}
+                </a>
+              )}
+            </Tooltip>
+          ) : (
+            <span className="truncate">{row.name}</span>
+          )}
           <DirectionIcon direction={row.direction} />
         </span>
         <span className="ml-auto flex-none">
