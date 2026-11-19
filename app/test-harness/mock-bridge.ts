@@ -19,6 +19,8 @@ import {
   getTimelineTargets,
   recordValue,
   createKpi,
+  kpiEditTouches,
+  updateKpi,
   searchIssues,
   addTarget,
 } from './fixtures/mock-resolvers.js';
@@ -96,7 +98,7 @@ const resolvers: Record<string, Handler> = {
     assertKpiWriteAllowed('record', accessMode(), p?.kpiId ?? null, hiddenKpiId());
     return recordValue(p?.kpiId, p?.date, p?.value);
   },
-  // `?mutationDelayMs=3000` slows the modal saves (createKpi / addTarget /
+  // `?mutationDelayMs=3000` slows the modal saves (createKpi / updateKpi / addTarget /
   // recordValue) so the saving state is visible; `?mutationFail=1` makes them
   // reject (error shown in the modal).
   createKpi: async (p) => {
@@ -106,6 +108,13 @@ const resolvers: Record<string, Handler> = {
     return createKpi(p);
   },
   searchIssues: (p) => searchIssues(p?.query ?? ''),
+  updateKpi: async (p) => {
+    await simulateMutation();
+    const touches = kpiEditTouches(p);
+    if (touches.definition) assertKpiWriteAllowed('edit', accessMode(), p?.kpiId ?? null, hiddenKpiId());
+    if (touches.parent) assertKpiWriteAllowed('nest', accessMode(), p?.kpiId ?? null, hiddenKpiId());
+    return updateKpi(p);
+  },
   addTarget: async (p) => {
     await simulateMutation();
     assertKpiWriteAllowed('target', accessMode(), p?.kpiId ?? null, hiddenKpiId());

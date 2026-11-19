@@ -118,6 +118,7 @@ function stub(over: Partial<TimelineController>): UseTimeline {
     error: over.error ?? null,
     record: over.record ?? (async () => {}),
     createKpi: over.createKpi ?? (async () => {}),
+    updateKpi: over.updateKpi ?? (async () => {}),
     searchIssues: over.searchIssues ?? (async () => []),
     addTarget: over.addTarget ?? (async () => {}),
   });
@@ -446,6 +447,10 @@ export const ReadOnly: Story = {
     await userEvent.click(recordBtn);
     await expect(screen.queryByRole('dialog')).toBeNull();
     await expect(c.getAllByRole('button', { name: 'Add child KPI' })[0]).toHaveAttribute('aria-disabled', 'true');
+    const editBtn = c.getAllByRole('button', { name: 'Edit KPI' })[0];
+    await expect(editBtn).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.click(editBtn);
+    await expect(screen.queryByRole('dialog')).toBeNull();
     // The tip no longer offers recording.
     await expect(c.queryByText(/click a past date to record a value/)).toBeNull();
     // Value dots on the plot are disabled with the reason, and clicking one opens nothing.
@@ -721,6 +726,90 @@ export const AddKpiWithParent: Story = {
         expect.objectContaining({ name: 'Repeat Orders', parentKpiId: 'orders' }),
       ),
     );
+  },
+};
+
+/**
+ * Interaction: the row's edit (✎) button opens the KPI modal filled with the
+ * KPI's definition; Save stays disabled until something changes, then calls the
+ * loader with only what changed, so an out-of-date timeline can't write back
+ * stale values for the fields the user didn't touch.
+ */
+const editKpiSpy = fn();
+export const EditKpi: Story = {
+  args: { useData: stub({ data: POPULATED, updateKpi: editKpiSpy }) },
+  play: async ({ canvasElement }) => {
+    editKpiSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Edit KPI' })[1]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await expect(dialog.getByText('Edit KPI')).toBeInTheDocument();
+    await expect(dialog.getByLabelText('KPI name')).toHaveValue('# of Orders');
+    await expect(dialog.getByLabelText('KPI unit')).toHaveValue('count');
+    await expect(dialog.getByText('Higher is better')).toBeInTheDocument();
+    await expect(dialog.getByText('Revenue')).toBeInTheDocument();
+    await expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    await userEvent.clear(dialog.getByLabelText('KPI name'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Orders');
+    await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(editKpiSpy).toHaveBeenCalledWith({ kpiId: 'orders', name: 'Orders' }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  },
+};
+
+/** Interaction: clearing the parent in the edit modal moves the KPI to the top level. */
+const moveKpiSpy = fn();
+export const EditKpiMoveToTop: Story = {
+  args: { useData: stub({ data: POPULATED, updateKpi: moveKpiSpy }) },
+  play: async ({ canvasElement }) => {
+    moveKpiSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Edit KPI' })[1]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.click(dialog.getByRole('combobox', { name: 'Search for a parent KPI' }));
+    await userEvent.keyboard('{Backspace}');
+    await expect(dialog.getByText('None (top-level KPI)')).toBeInTheDocument();
+    await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(moveKpiSpy).toHaveBeenCalledWith({ kpiId: 'orders', parentKpiId: null }));
+  },
+};
+
+/** The parent picker never offers the KPI itself or anything nested under it (that would make a loop). */
+export const EditKpiParentOptions: Story = {
+  args: { useData: stub({ data: POPULATED }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Edit KPI' })[0]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await expect(dialog.getByLabelText('KPI name')).toHaveValue('Revenue');
+    await userEvent.click(dialog.getByRole('combobox', { name: 'Search for a parent KPI' }));
+    await expect(await screen.findByText('No matching KPIs')).toBeInTheDocument();
+    await expect(screen.queryByRole('option', { name: '# of Orders' })).toBeNull();
+  },
+};
+
+/** A failed edit keeps the modal open with the error inside it and the typed values intact. */
+export const EditKpiFailed: Story = {
+  args: {
+    useData: stub({
+      data: POPULATED,
+      updateKpi: async () => {
+        throw new Error("KPI-1 can't be nested under KPI-2: KPI-2 is nested under KPI-1.");
+      },
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Edit KPI' })[0]);
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), ' (net)');
+    await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    const alert = within(await dialog.findByRole('alert'));
+    await expect(alert.getByText(/is nested under KPI-1/)).toBeInTheDocument();
+    await expect(dialog.getByLabelText('KPI name')).toHaveValue('Revenue (net)');
   },
 };
 

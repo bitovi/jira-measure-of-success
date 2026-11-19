@@ -5,8 +5,9 @@ import type {
   TimelineNodeDto,
   TimelineReadingDto,
   TimelineTargetDto,
+  UpdatedKpi,
 } from '../contracts';
-import type { RecordValueInput } from '../models/index';
+import type { KpiDirection, RecordValueInput, UpdateKpiInput } from '../models/index';
 import { buildKpiTargets, type KpiTargetContribution } from './timelineTargets';
 
 /**
@@ -78,6 +79,102 @@ export function insertCreatedKpi(data: TimelineData, kpi: CreatedKpi): TimelineD
     return { ...data, roots: data.roots.map(insert) };
   }
   return { ...data, roots: [...data.roots, toNode(0)] };
+}
+
+function findKpiNode(nodes: readonly TimelineNodeDto[], kpiId: string): TimelineNodeDto | null {
+  for (const n of nodes) {
+    if (n.kpiId === kpiId) return n;
+    const found = findKpiNode(n.children, kpiId);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** The kpiId of `kpiId`'s parent in the tree; null for a root (or a KPI not in the tree). */
+export function parentKpiIdOf(nodes: readonly TimelineNodeDto[], kpiId: string, parent: string | null = null): string | null {
+  for (const n of nodes) {
+    if (n.kpiId === kpiId) return parent;
+    const found = parentKpiIdOf(n.children, kpiId, n.kpiId);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/** `kpiId` and every KPI nested under it — the KPIs it can't be moved under. */
+export function kpiSubtreeIds(nodes: readonly TimelineNodeDto[], kpiId: string): Set<string> {
+  const out = new Set<string>();
+  const collect = (n: TimelineNodeDto) => {
+    out.add(n.kpiId);
+    n.children.forEach(collect);
+  };
+  const root = findKpiNode(nodes, kpiId);
+  if (root) collect(root);
+  return out;
+}
+
+/** A KPI's editable definition, as the Edit KPI form holds it. */
+export interface KpiEditFields {
+  name: string;
+  unit: string;
+  direction: KpiDirection | null;
+  parentKpiId: string | null;
+}
+
+/**
+ * The `updateKpi` input for an edit: only the fields that differ from what the
+ * form opened with. Untouched fields are left out so the server leaves them
+ * alone, even if Jira changed them after this timeline loaded.
+ */
+export function kpiEditChanges(kpiId: string, before: KpiEditFields, after: KpiEditFields): UpdateKpiInput {
+  const changes: UpdateKpiInput = { kpiId };
+  if (after.name.trim() !== before.name) changes.name = after.name.trim();
+  if (after.unit.trim() !== before.unit) changes.unit = after.unit.trim();
+  if (after.direction !== before.direction) changes.direction = after.direction;
+  if (after.parentKpiId !== before.parentKpiId) changes.parentKpiId = after.parentKpiId;
+  return changes;
+}
+
+/**
+ * Lay a just-saved KPI edit over the tree: new name/unit/direction, and when the
+ * edit set its parent to a different one, move it (with its children, depths
+ * adjusted) to the end of its new parent's children, or the end of the roots. An
+ * edit without `parentKpiId` leaves the KPI where it is, as does a move under a
+ * KPI that isn't in the tree or under its own subtree. A no-op when the tree
+ * already matches, so it's safe to keep applying after a later load.
+ */
+export function applyKpiEdit(data: TimelineData, edit: UpdatedKpi): TimelineData {
+  const current = findKpiNode(data.roots, edit.kpiId);
+  if (!current) return data;
+  const fromParent = parentKpiIdOf(data.roots, edit.kpiId);
+  const toParent = edit.parentKpiId === undefined ? fromParent : edit.parentKpiId;
+  const canMove =
+    toParent !== fromParent &&
+    (toParent === null || (containsKpi(data.roots, toParent) && !kpiSubtreeIds([current], edit.kpiId).has(toParent)));
+  const fieldsSame =
+    current.name === edit.name && current.unit === edit.unit && current.direction === edit.direction;
+  if (fieldsSame && !canMove) return data;
+
+  const patched: TimelineNodeDto = { ...current, name: edit.name, unit: edit.unit, direction: edit.direction };
+  if (!canMove) {
+    const patch = (n: TimelineNodeDto): TimelineNodeDto =>
+      n.kpiId === edit.kpiId ? patched : { ...n, children: n.children.map(patch) };
+    return { ...data, roots: data.roots.map(patch) };
+  }
+
+  const reDepth = (n: TimelineNodeDto, depth: number): TimelineNodeDto => ({
+    ...n,
+    depth,
+    children: n.children.map((c) => reDepth(c, depth + 1)),
+  });
+  const remove = (nodes: TimelineNodeDto[]): TimelineNodeDto[] =>
+    nodes.filter((n) => n.kpiId !== edit.kpiId).map((n) => ({ ...n, children: remove(n.children) }));
+  const without = remove(data.roots);
+  if (toParent === null) return { ...data, roots: [...without, reDepth(patched, 0)] };
+  const insert = (n: TimelineNodeDto): TimelineNodeDto =>
+    n.kpiId === toParent
+      ? { ...n, children: [...n.children.map(insert), reDepth(patched, n.depth + 1)] }
+      : { ...n, children: n.children.map(insert) };
+  return { ...data, roots: without.map(insert) };
 }
 
 /**

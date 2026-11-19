@@ -12,6 +12,12 @@ describe('kpiPermissionMessage', () => {
     expect(kpiPermissionMessage('view', 'KPIs (KPI)', 'KPI-7')).toBe(
       'Viewing KPI-7 needs Browse Projects permission on the KPIs (KPI) project. Ask a Jira admin.',
     );
+    expect(kpiPermissionMessage('edit', 'KPIs (KPI)', 'KPI-3')).toBe(
+      'Editing KPI-3 needs Edit Issues permission on the KPIs (KPI) project. Ask a Jira admin.',
+    );
+    expect(kpiPermissionMessage('edit')).toBe(
+      'Editing a KPI needs Edit Issues permission on the KPI space project. Ask a Jira admin.',
+    );
     expect(kpiPermissionMessage('nest', 'KPIs (KPI)')).toBe(
       'Nesting a KPI under another needs Link Issues permission on the KPIs (KPI) project. Ask a Jira admin.',
     );

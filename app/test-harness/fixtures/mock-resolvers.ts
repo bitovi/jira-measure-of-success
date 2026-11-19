@@ -39,6 +39,8 @@ import {
   type TimelineNodeDto,
   type TimelineTargetsData,
   type TimingNode,
+  type UpdateKpiResult,
+  UpdateKpiInput,
   type Assignment,
   type DateFieldCatalog,
   type HierarchyLevel,
@@ -716,6 +718,82 @@ export function createKpi(input: CreateKpiInput): CreatedKpi {
     unit: node.unit,
     direction: node.direction,
     parentKpiId: parent ? parent.kpiId : null,
+  };
+}
+
+/** The kpiId of a KPI's parent in the harness tree (null for a root or unknown KPI). */
+export function kpiParentOf(kpiId: string): string | null {
+  const walk = (nodes: KpiTreeNode[], parent: string | null): string | null | undefined => {
+    for (const n of nodes) {
+      if (n.kpiId === kpiId) return parent;
+      const found = walk(n.children ?? [], n.kpiId);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  return walk(kpiTree, null) ?? null;
+}
+
+/**
+ * What an edit would change in the harness tree: the definition (name, unit or
+ * direction) and/or the parent. Fields left out change nothing, like the backend.
+ */
+export function kpiEditTouches(input: Partial<UpdateKpiInput> | undefined): { definition: boolean; parent: boolean } {
+  const node = input?.kpiId ? findKpiNode(kpiTree, input.kpiId) : undefined;
+  if (!node || !input) return { definition: false, parent: false };
+  const definition =
+    (input.name !== undefined && input.name.trim() !== node.name) ||
+    (input.unit !== undefined && input.unit.trim() !== node.unit) ||
+    (input.direction !== undefined && input.direction !== node.direction);
+  const parent = input.parentKpiId !== undefined && input.parentKpiId !== kpiParentOf(node.kpiId);
+  return { definition, parent };
+}
+
+/**
+ * Edit a KPI: name/unit/direction, and move it (with its children) to the end
+ * of another parent's children or of the roots. Only the fields sent change.
+ * Refuses the same things as the backend (empty name, no hierarchy, a loop).
+ * Returns the KPI as saved.
+ */
+export function updateKpi(payload: unknown): UpdateKpiResult {
+  const parsed = UpdateKpiInput.safeParse(payload);
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid KPI edit.');
+  const input = parsed.data;
+  const node = findKpiNode(kpiTree, input.kpiId);
+  if (!node) throw new Error(`Unknown KPI ${input.kpiId}`);
+  if (input.parentKpiId !== undefined) {
+    const toParent = input.parentKpiId;
+    const fromParent = kpiParentOf(input.kpiId);
+    if (toParent !== fromParent) {
+      if (toParent && getKpiHierarchy().state !== 'ready') {
+        throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
+      }
+      const target = toParent ? findKpiNode(kpiTree, toParent) : undefined;
+      if (toParent && !target) throw new Error(`Unknown KPI ${toParent}`);
+      if (toParent === input.kpiId) throw new Error(`${node.issueKey} can't be nested under itself.`);
+      if (target && findKpiNode(node.children ?? [], target.kpiId)) {
+        throw new Error(`${node.issueKey} can't be nested under ${target.issueKey}: ${target.issueKey} is nested under ${node.issueKey}.`);
+      }
+      const siblings = fromParent ? findKpiNode(kpiTree, fromParent)!.children! : kpiTree;
+      siblings.splice(siblings.indexOf(node), 1);
+      if (target) (target.children ??= []).push(node);
+      else kpiTree.push(node);
+    }
+  }
+  if (input.name !== undefined) node.name = input.name;
+  if (input.unit !== undefined) node.unit = input.unit;
+  if (input.direction !== undefined) node.direction = input.direction;
+  return {
+    kpi: {
+      id: `kpi-${node.kpiId}`,
+      kpiId: node.kpiId,
+      issueKey: node.issueKey,
+      name: node.name,
+      unit: node.unit,
+      direction: node.direction,
+      ...(input.parentKpiId !== undefined ? { parentKpiId: input.parentKpiId } : {}),
+    },
+    error: null,
   };
 }
 

@@ -9,6 +9,9 @@ import type {
   RecordValueInput,
   TimelineData,
   TimelineTargetsData,
+  UpdatedKpi,
+  UpdateKpiInput,
+  UpdateKpiResult,
 } from '@domain/index.js';
 import { KPI_HIERARCHY_NOT_SET_UP } from '@domain/index.js';
 import { deriveTimelineView } from './timelineView.js';
@@ -59,6 +62,13 @@ export interface TimelineController {
    * and on the timeline; rejects with the failure (see `toActionError`).
    */
   createKpi(input: CreateKpiInput): Promise<void>;
+  /**
+   * Edit a KPI: send only the fields that changed (`kpiEditChanges`). Resolves
+   * once it's saved and on the timeline; rejects with the failure, like
+   * `createKpi`. When only part was saved (moved, but the name/unit/direction
+   * save failed), the saved part is applied first, then it rejects.
+   */
+  updateKpi(input: UpdateKpiInput): Promise<void>;
   /** Type-ahead search for a contributing issue (Add Target picker). */
   searchIssues(query: string): Promise<IssuePickerItem[]>;
   /** Add a target for a KPI, held on the chosen contributing issue. Resolves/rejects like `createKpi`. */
@@ -117,6 +127,7 @@ export const useTimelineData: UseTimeline = () => {
   const [targetsError, setTargetsError] = useState<string | null>(null);
   // KPIs, values and targets saved this session, laid over whatever is loaded (deriveTimelineView).
   const [created, setCreated] = useState<CreatedKpi[]>([]);
+  const [edited, setEdited] = useState<UpdatedKpi[]>([]);
   const [readingEdits, setReadingEdits] = useState<RecordValueInput[]>([]);
   const [addedTargets, setAddedTargets] = useState<AddedTarget[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -150,8 +161,8 @@ export const useTimelineData: UseTimeline = () => {
   }, [targetsRequest]);
 
   const view = useMemo(
-    () => deriveTimelineView({ skeleton, contributions, targetsError, created, readingEdits, addedTargets }),
-    [skeleton, contributions, targetsError, created, readingEdits, addedTargets],
+    () => deriveTimelineView({ skeleton, contributions, targetsError, created, edited, readingEdits, addedTargets }),
+    [skeleton, contributions, targetsError, created, edited, readingEdits, addedTargets],
   );
 
   const retryTargets = () => {
@@ -168,6 +179,13 @@ export const useTimelineData: UseTimeline = () => {
   const createKpi = async (input: CreateKpiInput) => {
     const kpi = await call<CreatedKpi>('createKpi', input);
     setCreated((prev) => [...prev, kpi]);
+  };
+
+  const updateKpi = async (input: UpdateKpiInput) => {
+    const { kpi, error: partial } = await call<UpdateKpiResult>('updateKpi', input);
+    // Lay the result over the tree even when only part of the edit was saved: it's what Jira now holds.
+    setEdited((prev) => [...prev, kpi]);
+    if (partial) throw new Error(partial);
   };
 
   const searchIssues = (query: string) =>
@@ -189,6 +207,7 @@ export const useTimelineData: UseTimeline = () => {
     error,
     record,
     createKpi,
+    updateKpi,
     searchIssues,
     addTarget,
   };

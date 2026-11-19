@@ -313,9 +313,9 @@ export interface KpiSpaceAccess {
   browse: boolean;
   /** CREATE_ISSUES: Add KPI */
   create: boolean;
-  /** EDIT_ISSUES: record / delete a value */
+  /** EDIT_ISSUES: record / delete a value, edit a KPI's name, unit and direction */
   edit: boolean;
-  /** LINK_ISSUES: nest a new KPI under a parent */
+  /** LINK_ISSUES: nest a KPI under a parent (new or moved) */
   link: boolean;
 }
 
@@ -371,6 +371,32 @@ export interface CreatedKpi {
   unit: string;
   direction: KpiDirection | null;
   parentKpiId: string | null;
+}
+
+/**
+ * `updateKpi` result: the KPI as it now is in Jira, which the client lays over
+ * its tree (like `CreatedKpi`). Name, unit and direction are always the current
+ * values. `parentKpiId` is set only when the edit set the parent (null = root);
+ * when it's absent the KPI stays where the client has it.
+ */
+export interface UpdatedKpi {
+  id: string;
+  kpiId: string;
+  issueKey: string;
+  name: string;
+  unit: string;
+  direction: KpiDirection | null;
+  parentKpiId?: string | null;
+}
+
+/**
+ * What `updateKpi` returns. `error` is set when only part of the edit was saved
+ * (the move went through, then the name/unit/direction save failed): the client
+ * applies `kpi`, which is what Jira now holds, and then shows the error.
+ */
+export interface UpdateKpiResult {
+  kpi: UpdatedKpi;
+  error: string | null;
 }
 
 /**

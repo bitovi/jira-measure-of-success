@@ -74,6 +74,11 @@ export interface FixtureIssue {
   start: string | null;
   /** KPI-space only: parent KPI via a KPI Hierarchy issue link */
   kpiParentId?: string | null;
+  /**
+   * KPI-space only: more hierarchy links on which another issue is the parent
+   * (Jira allows several; the app expects one). Listed after `kpiParentId`'s link.
+   */
+  extraKpiParentIds?: string[];
   rank?: string;
   properties: Record<string, unknown>;
 }
@@ -344,12 +349,23 @@ function kpiLinkShape(fixture: ScaleFixture): FixtureLinkShape {
   return { type, parentEnd: cfg?.parentEnd === 'outward' ? 'outward' : 'inward' };
 }
 
+/** A child's (numeric, like Jira's) parent link id is derived from its issue id. */
+export const kpiLinkId = (childIssueId: string): string => String(50_000_000 + Number(childIssueId));
+/** The link id of one of a child's `extraKpiParentIds`. */
+export const extraKpiLinkId = (childIssueId: string, parentId: string): string => `${kpiLinkId(childIssueId)}-${parentId}`;
+
 function issueJson(
   issue: FixtureIssue,
   fields: string[],
   properties: string[],
   link: FixtureLinkShape,
+  keyOf: (id: string) => string | undefined = () => undefined,
 ): Record<string, unknown> {
+  const parentEnd = link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue';
+  const parentLinks = [
+    ...(issue.kpiParentId ? [{ id: kpiLinkId(issue.id), parentId: issue.kpiParentId }] : []),
+    ...(issue.extraKpiParentIds ?? []).map((parentId) => ({ id: extraKpiLinkId(issue.id, parentId), parentId })),
+  ];
   const all: Record<string, unknown> = {
     summary: issue.summary,
     project: { key: projectKeyOf(issue) },
@@ -362,9 +378,11 @@ function issueJson(
     customfield_10015: issue.start,
     status: { statusCategory: { key: 'indeterminate' } },
     parent: issue.parentId ? { id: issue.parentId } : undefined,
-    issuelinks: issue.kpiParentId
-      ? [{ type: link.type, [link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue']: { id: issue.kpiParentId } }]
-      : [],
+    issuelinks: parentLinks.map((l) => ({
+      id: l.id,
+      type: link.type,
+      [parentEnd]: { id: l.parentId, key: keyOf(l.parentId) },
+    })),
     [RANK_FIELD_ID]: issue.rank ?? null,
   };
   const picked: Record<string, unknown> = {};
@@ -456,6 +474,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
   const writes: string[] = [];
   const findIssue = (idOrKey: string) =>
     fixture.issues.get(idOrKey) ?? [...fixture.issues.values()].find((i) => i.key === idOrKey);
+  const keyOf = (id: string) => fixture.issues.get(id)?.key;
   let nextIssueId = 900_000;
   let clock = Date.UTC(2026, 6, 1);
 
@@ -522,7 +541,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const page = seen.slice(offset, offset + maxResults);
       const more = offset + maxResults < seen.length;
       return respond(200, {
-        issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture))),
+        issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture), keyOf)),
         isLast: !more,
         ...(more ? { nextPageToken: String(offset + maxResults) } : {}),
       });
@@ -534,7 +553,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!issue || !visible(issue, as)) return notFound();
       const fields = (params.get('fields') ?? '').split(',').filter(Boolean);
       const properties = (params.get('properties') ?? '').split(',').filter(Boolean);
-      return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture)));
+      return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture), keyOf));
     }
 
     const prop = /^\/rest\/api\/3\/issue\/([^/]+)\/properties\/([^/]+)$/.exec(path);
@@ -577,7 +596,12 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const issue = findIssue(decodeURIComponent(single[1]));
       if (!issue || !visible(issue, as)) return notFound();
       if (!may(issue, as, 'edit')) return forbidden(`edit ${issue.key}`);
-      const req = JSON.parse(String(body)) as { fields?: Record<string, unknown> };
+      const req = JSON.parse(String(body)) as {
+        fields?: Record<string, unknown>;
+        properties?: Array<{ key: string; value: unknown }>;
+      };
+      if (typeof req.fields?.summary === 'string') issue.summary = req.fields.summary;
+      for (const p of req.properties ?? []) issue.properties[p.key] = p.value;
       const reading = req.fields?.[READING_FIELD_ID];
       if (typeof reading === 'string') {
         const changes = fixture.readingChanges.get(issue.id) ?? [];
@@ -632,8 +656,26 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
         return respond(404, { errorMessages: ['Issue does not exist'] });
       }
       if (!may(child, as, 'link')) return forbidden('link issues');
-      child.kpiParentId = parent.id;
+      // Like Jira, linking a KPI that already has a parent adds a second link.
+      if (!child.kpiParentId) child.kpiParentId = parent.id;
+      else if (child.kpiParentId !== parent.id && !child.extraKpiParentIds?.includes(parent.id)) {
+        (child.extraKpiParentIds ??= []).push(parent.id);
+      }
       return respond(201);
+    }
+
+    const linkById = /^\/rest\/api\/3\/issueLink\/([^/]+)$/.exec(path);
+    if (linkById && method === 'DELETE') {
+      const linkId = decodeURIComponent(linkById[1]);
+      const owns = (i: FixtureIssue) =>
+        (!!i.kpiParentId && kpiLinkId(i.id) === linkId) ||
+        (i.extraKpiParentIds ?? []).some((p) => extraKpiLinkId(i.id, p) === linkId);
+      const child = [...fixture.issues.values()].find(owns);
+      if (!child || !visible(child, as)) return respond(404, { errorMessages: ['No issue link with that id.'] });
+      if (!may(child, as, 'link')) return forbidden('link issues');
+      if (child.kpiParentId && kpiLinkId(child.id) === linkId) child.kpiParentId = null;
+      else child.extraKpiParentIds = child.extraKpiParentIds!.filter((p) => extraKpiLinkId(child.id, p) !== linkId);
+      return respond(204);
     }
 
     if (method === 'GET' && path === '/rest/api/3/issueLinkType') {

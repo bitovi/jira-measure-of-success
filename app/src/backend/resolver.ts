@@ -25,6 +25,12 @@ import {
   isDirectionalLinkType,
   KPI_HIERARCHY_NOT_SET_UP,
   KpiHierarchyLink,
+  KpiMetaProperty,
+  hierarchyParentLinks,
+  wouldCreateKpiCycle,
+  UpdateKpiInput,
+  type UpdatedKpi,
+  type UpdateKpiResult,
   type PanelData,
   type PanelListData,
   type PanelParts,
@@ -56,6 +62,10 @@ import {
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
+  deleteIssueLink,
+  fetchKpiIssueForEdit,
+  linkKpiParent,
+  updateKpiDefinition,
   ensureKpiHierarchyLinkType,
   listIssueLinkTypes,
   ensureKpiIssueTypeOnProject,
@@ -66,6 +76,7 @@ import {
   writeAssignments,
   writeReading,
   warmFieldIds,
+  type KpiIssueForEdit,
   type KpiSpaceIssue,
 } from './jira';
 import { stage, traced } from './requestLog';
@@ -852,6 +863,172 @@ define('createKpi', async ({ payload }) => {
     }
   }
   return createKpiIssue(space.projectId, input, hierarchy);
+});
+
+// Edit a KPI: rename it, change its unit/direction, and/or move it (with its
+// children) under another parent or to the root. Only the fields sent change
+// (UpdateKpiInput), so an out-of-date timeline can't undo someone else's edit.
+// Everything is checked before the first write, from direct issue reads rather
+// than the KPI-space search, which lags behind recent creates and moves: the
+// KPI's current parents and, for a move, every ancestor of the new parent. The
+// move runs first and is undone if any link write fails; then the name, unit and
+// direction go in one issue edit. If that edit fails after a move, the result
+// carries the moved KPI and the error, so the timeline shows what Jira now holds.
+define('updateKpi', async ({ payload }) => {
+  const parsed = UpdateKpiInput.safeParse(payload);
+  if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid KPI edit.');
+  const input = parsed.data;
+
+  const [space, hierarchy] = await Promise.all([readResolvedKpiSpaceConfig(), readKpiHierarchyConfig()]);
+  if (!space.key || !space.projectId) throw new Error('KPI space is not set up — configure it in Settings first.');
+  const spaceKey = space.key;
+  const spaceLabel = space.name ?? space.key;
+
+  // Each issue is read at most once (the KPI, its parents, the new parent's ancestors).
+  const reads = new Map<string, Promise<KpiIssueForEdit | null>>();
+  const read = (idOrKey: string): Promise<KpiIssueForEdit | null> => {
+    let pending = reads.get(idOrKey);
+    if (!pending) {
+      pending = fetchKpiIssueForEdit(idOrKey);
+      reads.set(idOrKey, pending);
+    }
+    return pending;
+  };
+  // Only a KPI the user can see counts as a parent (a reused link type may link to work issues).
+  const readKpi = async (id: string) => {
+    const issue = await read(id);
+    return issue && issue.projectKey === spaceKey ? issue : null;
+  };
+
+  const [kpi, access] = await Promise.all([
+    read(input.kpiId),
+    fetchKpiSpaceAccess(spaceKey).catch((error: unknown) => {
+      if (error instanceof PermissionLookupError) {
+        throw new Error("Couldn't check your permissions on the KPI space, so the KPI wasn't saved. Try again.");
+      }
+      throw error;
+    }),
+  ]);
+  if (!kpi) throw new Error(kpiNotVisibleMessage(input.kpiId, spaceLabel));
+  if (kpi.projectKey !== spaceKey) throw new Error(`${kpi.key} isn't a KPI: only KPIs in the KPI space can be edited.`);
+  reads.set(kpi.id, Promise.resolve(kpi));
+  reads.set(kpi.key, Promise.resolve(kpi));
+
+  const currentMeta: KpiMetaProperty = { unit: kpi.meta?.unit ?? '', direction: kpi.meta?.direction ?? null };
+  const name = input.name ?? kpi.name;
+  const meta: KpiMetaProperty = {
+    unit: input.unit ?? currentMeta.unit,
+    direction: input.direction !== undefined ? input.direction : currentMeta.direction,
+  };
+  const nameChanged = name !== kpi.name;
+  const metaChanged = meta.unit !== currentMeta.unit || meta.direction !== currentMeta.direction;
+  if ((nameChanged || metaChanged) && !access.edit) throw new Error(kpiPermissionMessage('edit', spaceLabel, kpi.key));
+
+  // Work out the move (only when the parent was sent) from the KPI's current links.
+  type ParentLink = { linkId: string; parent: KpiIssueForEdit };
+  let currentParents: ParentLink[] = [];
+  let target: KpiIssueForEdit | null = null;
+  let move: { hierarchy: KpiHierarchyLink; unlink: ParentLink[]; link: boolean } | null = null;
+  if (input.parentKpiId !== undefined) {
+    if (!hierarchy) {
+      if (input.parentKpiId !== null) throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
+    } else {
+      const linked = await Promise.all(
+        hierarchyParentLinks(kpi.links, hierarchy).map(async (l) => ({ linkId: l.linkId, parent: await readKpi(l.parentId) })),
+      );
+      currentParents = linked.filter((l): l is ParentLink => l.parent !== null);
+      if (input.parentKpiId !== null) {
+        target = await read(input.parentKpiId);
+        if (!target) throw new Error(kpiNotVisibleMessage(input.parentKpiId, spaceLabel));
+        if (target.projectKey !== spaceKey) {
+          throw new Error(`${target.key} isn't a KPI: KPIs can only be nested under KPIs in the KPI space.`);
+        }
+      }
+      const targetId = target?.id ?? null;
+      // Every other parent link goes, which also clears a duplicate parent.
+      const unlink = currentParents.filter((l) => l.parent.id !== targetId);
+      const link = target !== null && !currentParents.some((l) => l.parent.id === targetId);
+      if (unlink.length > 0 || link) {
+        if (!access.link) throw new Error(kpiPermissionMessage('nest', spaceLabel));
+        if (target && link) {
+          if (target.id === kpi.id) throw new Error(`${kpi.key} can't be nested under itself.`);
+          const parentsOf = async (id: string) => {
+            const issue = await readKpi(id);
+            return issue ? hierarchyParentLinks(issue.links, hierarchy).map((l) => l.parentId) : [];
+          };
+          let cycle: boolean;
+          try {
+            cycle = await wouldCreateKpiCycle(kpi.id, target.id, parentsOf);
+          } catch (e) {
+            throw new Error(`Couldn't check that ${target.key} isn't nested under ${kpi.key}, so nothing was saved: ${(e as Error).message}.`);
+          }
+          if (cycle) throw new Error(`${kpi.key} can't be nested under ${target.key}: ${target.key} is nested under ${kpi.key}.`);
+          const types = await listIssueLinkTypes();
+          if (!types.some((t) => t.id === hierarchy.linkTypeId)) {
+            throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — the link type KPIs nest with was deleted; choose another in Settings.`);
+          }
+        }
+        move = { hierarchy, unlink, link };
+      }
+    }
+  }
+
+  const asSaved = (over: Partial<UpdatedKpi> = {}): UpdatedKpi => ({
+    id: kpi.id,
+    kpiId: kpi.key,
+    issueKey: kpi.key,
+    name: kpi.name,
+    unit: currentMeta.unit,
+    direction: currentMeta.direction,
+    ...over,
+  });
+  const parentSet = input.parentKpiId === undefined ? {} : { parentKpiId: target?.key ?? null };
+
+  if (move) {
+    const { hierarchy: linkType, unlink, link } = move;
+    const removed: ParentLink[] = [];
+    try {
+      for (const old of unlink) {
+        await deleteIssueLink(old.linkId);
+        removed.push(old);
+      }
+      if (link && target) await linkKpiParent(linkType, target.key, kpi.key);
+    } catch (err) {
+      const restored = await Promise.all(
+        removed.map((old) => linkKpiParent(linkType, old.parent.key, kpi.key).then(() => true, () => false)),
+      );
+      const lost = removed.filter((_, i) => !restored[i]);
+      if (lost.length === 0) throw err;
+      // Some old links couldn't be put back: say so, and show the KPI where Jira now has it.
+      const lostIds = new Set(lost.map((l) => l.parent.id));
+      const remaining = currentParents.find((l) => !lostIds.has(l.parent.id));
+      const result: UpdateKpiResult = {
+        kpi: asSaved({ parentKpiId: remaining?.parent.key ?? null }),
+        error: `${(err as Error).message}. ${kpi.key} was taken off ${lost.map((l) => l.parent.key).join(', ')}; nest it again in Jira.`,
+      };
+      return result;
+    }
+  }
+
+  if (nameChanged || metaChanged) {
+    try {
+      await updateKpiDefinition(kpi.id, { ...(nameChanged ? { name } : {}), ...(metaChanged ? { meta } : {}) });
+    } catch (e) {
+      const message = e instanceof JiraForbiddenError ? kpiPermissionMessage('edit', spaceLabel, kpi.key) : (e as Error).message;
+      if (!move) throw new Error(message);
+      const result: UpdateKpiResult = {
+        kpi: asSaved(parentSet),
+        error: `${kpi.key} was moved, but its name, unit and direction weren't saved: ${message}`,
+      };
+      return result;
+    }
+  }
+
+  const result: UpdateKpiResult = {
+    kpi: asSaved({ name, unit: meta.unit, direction: meta.direction, ...parentSet }),
+    error: null,
+  };
+  return result;
 });
 
 export const handler = resolver.getDefinitions();

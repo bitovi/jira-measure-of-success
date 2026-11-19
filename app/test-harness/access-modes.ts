@@ -14,7 +14,7 @@ import {
  * with limited KPI-space permissions, layered over the normal fixtures:
  * - `none`: no Browse on the KPI project — no KPIs, no readings, every targeted
  *   KPI is "no permission", and KPI writes are refused;
- * - `readonly`: Browse only — everything shows, Add KPI / nesting / recording are refused;
+ * - `readonly`: Browse only — everything shows, Add KPI / editing / nesting / recording are refused;
  * - `hiddenKpi`: full access, but one targeted KPI is hidden by issue security.
  * Without the param (or any other value) nothing changes.
  */
@@ -109,7 +109,7 @@ export function applyAccessToPanelParts(parts: PanelParts, mode: AccessMode | nu
 
 /** Throw what the real backend throws for a KPI write this mode forbids; otherwise return. */
 export function assertKpiWriteAllowed(
-  action: 'add' | 'nest' | 'record' | 'target',
+  action: 'add' | 'nest' | 'record' | 'edit' | 'target',
   mode: AccessMode | null,
   kpiId: string | null,
   hiddenKpiId: string | null,
@@ -117,8 +117,11 @@ export function assertKpiWriteAllowed(
   if (!mode) return;
   const access = ACCESS[mode];
   const hidden = mode === 'none' || (mode === 'hiddenKpi' && kpiId !== null && kpiId === hiddenKpiId);
-  if ((action === 'record' || action === 'target') && hidden && kpiId) throw new Error(kpiNotVisibleMessage(kpiId));
+  if ((action === 'record' || action === 'edit' || action === 'nest' || action === 'target') && hidden && kpiId) {
+    throw new Error(kpiNotVisibleMessage(kpiId));
+  }
   if (action === 'add' && !access.create) throw new Error(kpiPermissionMessage('add'));
   if (action === 'nest' && !access.link) throw new Error(kpiPermissionMessage('nest'));
   if (action === 'record' && !access.edit) throw new Error(kpiPermissionMessage('record', undefined, kpiId ?? undefined));
+  if (action === 'edit' && !access.edit) throw new Error(kpiPermissionMessage('edit', undefined, kpiId ?? undefined));
 }

@@ -184,6 +184,43 @@ export const KpiNoAccess: Story = {
 
 const RECORD_REASON = 'Recording a value needs Edit Issues permission on the KPI space project. Ask a Jira admin.';
 
+const onOpenKpi = fn();
+
+/** The KPI name links to the KPI issue — except in the preview or for a deleted / not-visible KPI. */
+export const KpiNameLink: Story = {
+  args: { width: 360 },
+  render: ({ width }) => (
+    <div style={{ width }} className="flex flex-col gap-3">
+      <TargetCard row={base} currentValue={262} onRecord={fn()} kpiHref="/browse/KPI-3" onOpenKpi={onOpenKpi} />
+      <TargetCard row={base} currentValue={262} preview kpiHref="/browse/KPI-3" onOpenKpi={onOpenKpi} />
+      <TargetCard row={deletedKpi} currentValue={null} kpiHref="/browse/KPI-404" onOpenKpi={onOpenKpi} />
+      <TargetCard row={hiddenKpi} currentValue={null} kpiHref="/browse/KPI-7" onOpenKpi={onOpenKpi} />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    onOpenKpi.mockClear();
+    const c = within(canvasElement);
+    const links = c.getAllByRole('link');
+    await expect(links).toHaveLength(1);
+    await expect(links[0]).toHaveTextContent('Number of Stores');
+    await expect(links[0]).toHaveAttribute('href', '/browse/KPI-3');
+    await userEvent.click(links[0]!);
+    await expect(onOpenKpi).toHaveBeenCalledTimes(1);
+
+    // A Cmd/Ctrl-click is left to the browser (new tab), not routed in place.
+    let prevented: boolean | null = null;
+    const afterReact = (e: Event) => {
+      prevented = e.defaultPrevented;
+      e.preventDefault(); // jsdom can't navigate
+    };
+    window.addEventListener('click', afterReact);
+    links[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+    window.removeEventListener('click', afterReact);
+    await expect(onOpenKpi).toHaveBeenCalledTimes(1);
+    await expect(prevented).toBe(false);
+  },
+};
+
 /** No Edit Issues on the KPI: the nudge's Record a value is disabled with the reason. */
 export const RecordBlocked: Story = {
   args: { width: 360 },
