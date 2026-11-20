@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec 11·04 — KPI Space setup, step by step (Settings prototype v2)</title>
+  <style>
+    :root {
+      --text: #172b4d; --subtle: #44546f; --subtlest: #626f86; --border: #dcdfe4;
+      --surface: #fff; --sunken: #f7f8f9; --brand: #0c66e4; --brand-hover: #0055cc;
+      --success-bg: #dcfff1; --success: #216e4e; --warn-bg: #fff7d6; --warn: #7f5f01;
+      --info-bg: #e9f2ff; --info: #0055cc; --neutral-bg: #dcdfe4; --discovery-bg: #f3f0ff; --discovery: #5e4db2;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--sunken); }
+    .proto-bar { position: sticky; top: 0; z-index: 5; background: #1d2125; color: #c7d1db; padding: 10px 24px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+    .proto-bar strong { color: #fff; margin-right: 8px; }
+    .proto-bar button { background: #2c333a; color: #c7d1db; border: 1px solid #454f59; border-radius: 3px; padding: 4px 10px; cursor: pointer; font: inherit; }
+    .proto-bar button.on { background: #579dff; color: #1d2125; border-color: #579dff; font-weight: 600; }
+    .page { max-width: 900px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 24px; line-height: 28px; margin: 8px 0 4px; }
+    .sub { color: var(--subtle); margin: 0; }
+    section.card { margin-top: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+    .card > header { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+    .card > header h2 { font-size: 16px; margin: 0; }
+    .grow { flex: 1; }
+    .card .body { padding: 16px 20px; }
+    .lozenge { display: inline-block; font-size: 11px; font-weight: 700; line-height: 16px; padding: 0 4px; border-radius: 3px; text-transform: uppercase; white-space: nowrap; }
+    .lz-success { background: var(--success-bg); color: var(--success); }
+    .lz-warn { background: var(--warn-bg); color: var(--warn); }
+    .lz-info { background: var(--info-bg); color: var(--info); }
+    .lz-neutral { background: var(--neutral-bg); color: var(--subtle); }
+    .lz-discovery { background: var(--discovery-bg); color: var(--discovery); }
+    .btn { font: inherit; font-weight: 500; border: 0; border-radius: 3px; padding: 6px 12px; cursor: pointer; background: #091e420f; color: var(--text); white-space: nowrap; }
+    .btn:hover { background: #091e4224; }
+    .btn.primary { background: var(--brand); color: #fff; }
+    .btn.primary:hover { background: var(--brand-hover); }
+    .btn.subtle { background: transparent; color: var(--brand); padding: 6px 8px; }
+    .btn.subtle:hover { background: #091e420f; }
+    .btn[disabled] { background: #091e4208; color: #091e424f; cursor: not-allowed; }
+    .muted { color: var(--subtle); }
+    .small { font-size: 12px; line-height: 16px; }
+    a, .link { color: var(--brand); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* quick start */
+    .quick { display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: center; background: var(--info-bg); border-radius: 6px; padding: 14px 16px; }
+    .quick h3 { margin: 0 0 2px; font-size: 14px; }
+    .quick ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: var(--subtle); }
+    .or { text-align: center; color: var(--subtlest); font-size: 12px; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .04em; }
+
+    /* steps */
+    .steps { list-style: none; margin: 0; padding: 0; }
+    .step { display: grid; grid-template-columns: 32px 1fr; gap: 12px; position: relative; padding-bottom: 18px; }
+    .step:not(:last-child)::before { content: ""; position: absolute; left: 15px; top: 32px; bottom: 0; width: 2px; background: var(--border); }
+    .num { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; background: var(--neutral-bg); color: var(--subtle); position: relative; z-index: 1; }
+    .num.done { background: var(--success); color: #fff; }
+    .num.skipped { background: var(--surface); border: 2px dashed var(--border); color: var(--subtlest); }
+    .num.locked { background: var(--sunken); color: #091e424f; }
+    .step-box { border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; background: var(--surface); }
+    .step.locked .step-box { background: var(--sunken); }
+    .step-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+    .opt { font-weight: 400; font-size: 12px; color: var(--subtlest); }
+    .step-what { color: var(--subtle); margin: 2px 0 8px; font-size: 13px; }
+    .step-result { font-size: 13px; margin: 0 0 8px; }
+    .step-result b { font-weight: 600; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .needs { font-size: 12px; color: var(--subtlest); }
+    .fieldrows { display: grid; grid-template-columns: 120px 1fr auto; gap: 8px 12px; align-items: center; margin: 4px 0 4px; font-size: 13px; }
+    .fieldrows .fname { font-weight: 600; }
+    details.why { margin-top: 6px; font-size: 12px; color: var(--subtle); }
+    details.why summary { cursor: pointer; color: var(--brand); }
+    details.why p { margin: 4px 0 0; }
+
+    /* modal */
+    .scrim { position: fixed; inset: 0; background: #091e427d; display: none; align-items: flex-start; justify-content: center; padding-top: 10vh; z-index: 10; }
+    .scrim.open { display: flex; }
+    .modal { background: var(--surface); border-radius: 3px; width: 560px; max-width: calc(100vw - 32px); box-shadow: 0 8px 12px #091e4226, 0 0 1px #091e424f; }
+    .modal h2 { font-size: 20px; margin: 0; padding: 20px 24px 8px; }
+    .modal .mbody { padding: 0 24px 8px; }
+    .modal ol { padding-left: 20px; }
+    .modal ol li { margin-bottom: 6px; }
+    .modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 24px 20px; }
+    .modal label { display: block; font-weight: 600; font-size: 12px; margin: 10px 0 4px; color: var(--subtle); }
+    .modal select, .modal input { width: 100%; font: inherit; padding: 6px 8px; border: 2px solid var(--border); border-radius: 3px; background: var(--surface); }
+    .callout { background: var(--sunken); border-radius: 3px; padding: 8px 12px; font-size: 13px; margin-top: 10px; }
+    .note { background: var(--info-bg); border-radius: 3px; padding: 10px 12px; margin: 24px 0 0; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="proto-bar">
+    <strong>Prototype v2 — start from:</strong>
+    <button data-scenario="empty" class="on">Nothing set up</button>
+    <button data-scenario="fields">Fields done, rest not</button>
+    <button data-scenario="existing">Existing KPI project (older app version)</button>
+    <button data-scenario="done">Everything set up</button>
+  </div>
+
+  <div class="page">
+    <h1>KPI Settings</h1>
+    <p class="sub">Jira admins only. Each step below is one piece of Jira configuration. Do them one at a time,
+      point the app at something you already have, or skip the optional ones. Or use <b>Set up everything</b> to fill in defaults.</p>
+
+    <section class="card">
+      <header>
+        <h2>KPI Space setup</h2>
+        <span id="overall"></span>
+        <span class="grow"></span>
+        <button class="btn subtle small" id="reset">Start over (prototype)</button>
+      </header>
+      <div class="body">
+        <div id="quick"></div>
+        <ol class="steps" id="steps"></ol>
+      </div>
+    </section>
+
+    <div class="note">
+      <b>About this prototype.</b> Static HTML for spec 11 stage 04 (KPI configuration). Nothing here talks to Jira; buttons simulate the result.
+      "Use existing" pickers list made-up items.
+    </div>
+  </div>
+
+  <div class="scrim" id="scrim">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title">
+      <h2 id="m-title"></h2>
+      <div class="mbody" id="m-body"></div>
+      <footer>
+        <button class="btn subtle" id="m-cancel">Cancel</button>
+        <button class="btn primary" id="m-ok"></button>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    // ---------------------------------------------------------------------
+    // Each step: status 'todo' | 'done' | 'skipped'; value = what's in use.
+    // `needs` = steps that must be done or skipped first.
+    // `optional` steps can be skipped (Jira's default is then used).
+    // ---------------------------------------------------------------------
+    const STEPS = [
+      {
+        id: 'fields', title: 'KPI fields', optional: false, needs: [],
+        what: 'The Jira fields that hold each KPI\'s unit and direction. They appear in a KPI\'s Details.',
+        createLabel: 'Create fields',
+        createText: 'Create two custom fields: <b>KPI Unit</b> (short text) and <b>KPI Direction</b> (dropdown: <i>Higher is better</i>, <i>Lower is better</i>).',
+        existing: { unit: ['Unit (short text)', 'Metric unit (short text)'], direction: ['Direction (dropdown)', 'Polarity (dropdown)'] },
+        why: 'The app reads and writes these fields. If you already have fields for this, choose them instead and the app will use yours.',
+      },
+      {
+        id: 'workType', title: 'KPI work type', optional: false, needs: [],
+        what: 'The work type each KPI is created as.',
+        createLabel: 'Create “KPI” work type',
+        createText: 'Create a work type named <b>KPI</b>.',
+        existing: ['Metric', 'Objective', 'KPI'],
+        why: 'The app finds KPIs by this work type.',
+      },
+      {
+        id: 'workTypeScheme', title: 'Work type scheme', optional: true, needs: ['workType'],
+        what: 'Which work types can be created in the KPI space.',
+        createLabel: 'Create scheme',
+        createText: 'Create <b>KPI Space: Work Type Scheme</b> containing only the KPI work type.',
+        existing: ['Default Issue Type Scheme (14 spaces)', 'Metrics Scheme (1 space)'],
+        skipText: 'Jira gives the space its default scheme, and the app adds the KPI work type to it. Other spaces using that scheme will also be offered “KPI”.',
+        why: 'With its own scheme, the KPI space offers only “KPI”, and other spaces are not affected.',
+      },
+      {
+        id: 'fieldScheme', title: 'Field scheme', optional: true, needs: ['fields', 'workType'],
+        what: 'Which fields KPIs have. This links the KPI work type to KPI Unit and KPI Direction.',
+        createLabel: 'Create scheme',
+        createText: 'Create <b>KPI Space: Field Scheme</b> (a copy of Jira\'s default) and add KPI Unit, KPI Direction and KPI Reading for the KPI work type.',
+        existing: ['Default Field Scheme (22 spaces)', 'Delivery Field Scheme (6 spaces)'],
+        skipText: 'The space uses Jira\'s default field scheme. The app adds KPI Unit, KPI Direction and KPI Reading to it, so every space using that scheme will have those fields available.',
+        why: 'Jira only lets a work item use the fields in its space\'s field scheme. KPI Reading must be there too, or recording values fails.',
+      },
+      {
+        id: 'screens', title: 'Screens', optional: true, needs: ['fields', 'workType'],
+        what: 'Where KPI Unit and KPI Direction appear: the KPI\'s page and the create and edit forms.',
+        createLabel: 'Create screens',
+        createText: 'Create <b>KPI Space: View</b>, <b>Create</b> and <b>Edit</b> screens with KPI Unit and KPI Direction, plus the screen schemes that link them to the KPI work type.',
+        existing: ['Default Screen Scheme (22 spaces)', 'Simple Screens (3 spaces)'],
+        skipText: 'The space uses Jira\'s default screens. The app adds KPI Unit and KPI Direction to them, so they appear (empty) on other spaces\' work items that use those screens.',
+        why: 'A field in the field scheme still won\'t show on the page unless it\'s on a screen.',
+      },
+      {
+        id: 'project', title: 'KPI project', optional: false, needs: ['fields', 'workType', 'workTypeScheme', 'fieldScheme', 'screens'],
+        what: 'The Jira space where KPIs live, using the configuration chosen above.',
+        createLabel: 'Create project',
+        createText: 'Create the space <b>KPIs (KPI)</b> using the schemes above.',
+        existing: ['KPIs (KPI)', 'Metrics (MET)'],
+        why: 'KPIs are ordinary work items in this space, so they have Jira permissions, history and search.',
+      },
+      {
+        id: 'hierarchy', title: 'How KPIs nest', optional: true, needs: ['project'],
+        what: 'The link type used to put a KPI under a parent KPI.',
+        createLabel: 'Create “KPI Hierarchy” link type',
+        createText: 'Create the link type <b>KPI Hierarchy</b> (“is parent KPI of” / “is child KPI of”).',
+        existing: ['Relates (no direction — can\'t be used)', 'Parent/Child'],
+        skipText: 'Every KPI is top-level until you pick a link type.',
+        why: 'Jira doesn\'t allow a work item of the same level to be another\'s parent, so the app nests KPIs with a link.',
+      },
+    ];
+    const byId = Object.fromEntries(STEPS.map((s) => [s.id, s]));
+
+    const blank = () => Object.fromEntries(STEPS.map((s) => [s.id, { status: 'todo', value: null, how: null }]));
+    const SCENARIOS = {
+      empty: blank,
+      fields: () => ({ ...blank(), fields: { status: 'done', how: 'created', value: { unit: 'KPI Unit (created by the app)', direction: 'KPI Direction (created by the app)' } } }),
+      existing: () => ({
+        ...blank(),
+        fields: { status: 'todo', value: null, how: null },
+        workType: { status: 'done', how: 'existing', value: 'KPI' },
+        workTypeScheme: { status: 'skipped', how: 'skip', value: 'Default Issue Type Scheme (14 spaces)' },
+        fieldScheme: { status: 'todo', value: null, how: null, current: 'Default Field Scheme (22 spaces)' },
+        screens: { status: 'todo', value: null, how: null, current: 'Default Screen Scheme (22 spaces)' },
+        project: { status: 'done', how: 'existing', value: 'KPIs (KPI)' },
+        hierarchy: { status: 'done', how: 'created', value: 'KPI Hierarchy' },
+      }),
+      done: () => Object.fromEntries(STEPS.map((s) => [s.id, { status: 'done', how: 'created', value: defaultValue(s.id) }])),
+    };
+    function defaultValue(id) {
+      return {
+        fields: { unit: 'KPI Unit (created by the app)', direction: 'KPI Direction (created by the app)' },
+        workType: 'KPI', workTypeScheme: 'KPI Space: Work Type Scheme', fieldScheme: 'KPI Space: Field Scheme',
+        screens: 'KPI Space: Screens', project: 'KPIs (KPI)', hierarchy: 'KPI Hierarchy',
+      }[id];
+    }
+
+    let state = SCENARIOS.empty();
+    const $ = (s) => document.querySelector(s);
+    const lz = (c, t) => `<span class="lozenge ${c}">${t}</span>`;
+    const settled = (id) => state[id].status !== 'todo';
+    const unmet = (s) => s.needs.filter((n) => !settled(n));
+
+    // ---------------------------------------------------------------------
+    function render() {
+      const todo = STEPS.filter((s) => !settled(s.id));
+      const projectDone = settled('project');
+      $('#overall').innerHTML = todo.length === 0 ? lz('lz-success', 'Ready') :
+        projectDone ? lz('lz-warn', `${todo.length} optional step${todo.length > 1 ? 's' : ''} left`) : lz('lz-neutral', 'Not set up');
+
+      // Quick start: only while the project doesn't exist yet
+      $('#quick').innerHTML = projectDone ? '' : `
+        <div class="quick">
+          <div>
+            <h3>Set up everything with defaults</h3>
+            <div class="muted small">Does every remaining step for you in one go${todo.length < STEPS.length ? ', keeping what you\'ve already chosen' : ''}:</div>
+            <ul>${todo.map((s) => `<li>${s.title}: ${s.createText.replace(/<[^>]+>/g, '')}</li>`).join('')}</ul>
+          </div>
+          <button class="btn primary" id="all">Set up everything</button>
+        </div>
+        <div class="or">or go step by step</div>`;
+      const all = $('#all');
+      if (all) all.onclick = () => confirmAll();
+
+      $('#steps').innerHTML = STEPS.map((s, i) => stepHtml(s, i)).join('');
+      document.querySelectorAll('[data-act]').forEach((b) => (b.onclick = () => act(b.dataset.step, b.dataset.act)));
+    }
+
+    function stepHtml(s, i) {
+      const st = state[s.id];
+      const blocked = unmet(s);
+      const locked = st.status === 'todo' && blocked.length > 0;
+      const numCls = st.status === 'done' ? 'done' : st.status === 'skipped' ? 'skipped' : locked ? 'locked' : '';
+      const badge = st.status === 'done' ? lz('lz-success', st.how === 'existing' ? 'Using existing' : 'Created') :
+        st.status === 'skipped' ? lz('lz-neutral', 'Skipped — Jira default') : locked ? lz('lz-neutral', 'Waiting') : lz('lz-discovery', 'To do');
+
+      let result = '';
+      if (s.id === 'fields' && st.value) {
+        result = `<div class="fieldrows">
+          <span class="fname">Unit</span><span>${st.value.unit}</span><span></span>
+          <span class="fname">Direction</span><span>${st.value.direction}</span><span></span></div>`;
+      } else if (st.status === 'done') {
+        result = `<p class="step-result">Using <b><a href="#">${st.value}</a></b>.</p>`;
+      } else if (st.status === 'skipped') {
+        result = `<p class="step-result">${s.skipText}</p>`;
+      } else if (st.current) {
+        result = `<p class="step-result">Currently <b><a href="#">${st.current}</a></b> (Jira's default, shared with other spaces). Choose what the KPI space should use.</p>`;
+      }
+
+      let actions = '';
+      if (st.status === 'todo') {
+        if (locked) {
+          actions = `<span class="needs">First: ${blocked.map((n) => byId[n].title).join(', ')}</span>`;
+        } else {
+          actions = `<button class="btn primary" data-step="${s.id}" data-act="create">${s.createLabel}</button>
+            <button class="btn" data-step="${s.id}" data-act="existing">Use existing…</button>
+            ${s.optional ? `<button class="btn subtle" data-step="${s.id}" data-act="skip">Skip</button>` : ''}`;
+        }
+      } else if (s.id !== 'project') {
+        actions = `<button class="btn subtle" data-step="${s.id}" data-act="change">Change…</button>`;
+      } else {
+        actions = `<a class="small" href="#">Open space in Jira ↗</a>`;
+      }
+
+      return `<li class="step ${locked ? 'locked' : ''}">
+        <span class="num ${numCls}">${st.status === 'done' ? '✓' : i + 1}</span>
+        <div class="step-box">
+          <div class="step-title">${s.title} ${s.optional ? '<span class="opt">optional</span>' : ''} ${badge}</div>
+          <div class="step-what">${s.what}</div>
+          ${result}
+          <div class="actions">${actions}</div>
+          <details class="why"><summary>Why?</summary><p>${s.why}</p></details>
+        </div>
+      </li>`;
+    }
+
+    // ---------------------------------------------------------------------
+    let onOk = null;
+    function modal(title, html, okLabel, ok) {
+      $('#m-title').textContent = title;
+      $('#m-body').innerHTML = html;
+      $('#m-ok').textContent = okLabel;
+      onOk = ok;
+      $('#scrim').classList.add('open');
+    }
+    const close = () => $('#scrim').classList.remove('open');
+    $('#m-cancel').onclick = close;
+    $('#scrim').onclick = (e) => { if (e.target.id === 'scrim') close(); };
+    $('#m-ok').onclick = () => { const f = onOk; close(); f && f(); render(); };
+
+    function act(id, a) {
+      const s = byId[id];
+      if (a === 'change' && id !== 'fields') {
+        state[id] = { status: 'todo', value: null, how: null };
+        render();
+        return;
+      }
+      if (a === 'create') {
+        modal(`${s.createLabel}?`, `<p>${s.createText}</p>${s.optional ? '' : ''}<div class="callout">Nothing in other spaces changes.</div>`, 'Create',
+          () => (state[id] = { status: 'done', how: 'created', value: defaultValue(id) }));
+      } else if (a === 'skip') {
+        modal(`Skip “${s.title}”?`, `<p>${s.skipText}</p><div class="callout">You can come back and set this up later.</div>`, 'Skip',
+          () => (state[id] = { status: 'skipped', how: 'skip', value: null }));
+      } else if (a === 'existing' || a === 'change') {
+        if (id === 'fields') {
+          const opt = (list, appLabel) => `<option>${appLabel}</option>` + list.map((x) => `<option>${x}</option>`).join('');
+          modal('Choose KPI fields', `
+            <p class="muted">Pick fields you already have, or let the app create either one.</p>
+            <label>Unit — a short text field</label><select id="f-unit">${opt(s.existing.unit, 'Create “KPI Unit”')}</select>
+            <label>Direction — a dropdown field</label><select id="f-dir">${opt(s.existing.direction, 'Create “KPI Direction”')}</select>
+            <label>If you pick your own dropdown: which options mean…</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <select><option>Higher is better → “Up”</option><option>“Increase”</option></select>
+              <select><option>Lower is better → “Down”</option><option>“Decrease”</option></select>
+            </div>`, 'Use these', () => {
+            const u = $('#f-unit').value, d = $('#f-dir').value;
+            state.fields = { status: 'done', how: 'existing', value: {
+              unit: u.startsWith('Create') ? 'KPI Unit (created by the app)' : u,
+              direction: d.startsWith('Create') ? 'KPI Direction (created by the app)' : d } };
+          });
+        } else {
+          modal(`Use an existing ${s.title.toLowerCase()}`, `
+            <label>${s.title}</label><select id="pick">${s.existing.map((x) => `<option>${x}</option>`).join('')}</select>
+            ${id === 'fieldScheme' || id === 'screens' ? '<div class="callout">If this is shared with other spaces, the app adds the KPI fields to it, and those spaces will see them too.</div>' : ''}`,
+            'Use this', () => (state[id] = { status: 'done', how: 'existing', value: $('#pick').value }));
+        }
+      }
+      render();
+    }
+
+    function confirmAll() {
+      const todo = STEPS.filter((s) => !settled(s.id));
+      modal('Set up everything with defaults?', `<p>The app will:</p><ol>${todo.map((s) => `<li>${s.createText}</li>`).join('')}</ol>
+        <div class="callout">Steps you've already done or skipped are kept. Nothing in other spaces changes. Everything is named “KPI …” so you can find it in Jira admin.</div>`,
+        'Set up everything', () => todo.forEach((s) => (state[s.id] = { status: 'done', how: 'created', value: defaultValue(s.id) })));
+    }
+
+    document.querySelectorAll('[data-scenario]').forEach((b) => (b.onclick = () => {
+      document.querySelectorAll('[data-scenario]').forEach((x) => x.classList.toggle('on', x === b));
+      state = SCENARIOS[b.dataset.scenario]();
+      render();
+    }));
+    $('#reset').onclick = () => { state = SCENARIOS.empty(); render(); };
+    render();
+  </script>
+</body>
+</html>

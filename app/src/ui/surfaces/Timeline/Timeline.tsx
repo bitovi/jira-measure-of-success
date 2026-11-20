@@ -93,6 +93,24 @@ const UNDATED_W = 140;
 // the chevron indents together with the text, not pinned at the left edge).
 const INDENT_STEP = 20;
 
+// The page is the module's whole iframe (`layout: blank` in manifest.yml), which
+// Jira sizes to the window below its top bar — so `h-screen` is the visible
+// area, and only the table scrolls. (With `layout: native` the iframe grows to
+// fit its content and the Jira page scrolls instead.) In a window too short to
+// fit the table's minimum height (MIN_VISIBLE_ROWS) the page scrolls as a fallback.
+const PAGE_CLASS = 'flex h-screen flex-col overflow-y-auto px-6 py-4 text-text';
+// The table never shrinks below this many rows (or all of them, if fewer).
+const MIN_VISIBLE_ROWS = 3;
+// Title (+ loading status) on the left, controls on the right; in a narrow
+// window the controls wrap onto their own line instead of pushing the title out.
+const TOOLBAR_CLASS = 'flex flex-none flex-wrap items-start justify-end gap-x-4 gap-y-2';
+const TITLE_GROUP_CLASS = 'mr-auto flex items-baseline gap-4 self-center';
+
+/** `layout: blank` drops Jira's page heading, so the surface renders its own. */
+function PageTitle() {
+  return <h1 className="text-xl font-semibold">KPI Timeline</h1>;
+}
+
 /** Stable empty set for the issue picker's default `excludedKeys`. */
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
@@ -197,6 +215,10 @@ export function Timeline({
   const [projecting, setProjecting] = useState<{ node: TimelineNodeDto; target: TimelineTargetDto } | null>(
     null,
   );
+  // One scroll box for the whole table (both axes): the header row, KPI column
+  // and Undated lane are sticky inside it, so they stay visible while the rows
+  // scroll. The page is exactly the window's height (`layout: blank` gives us a
+  // window-sized iframe), and the box takes whatever height is left.
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [measureScroll, scrollWidth] = useClientWidth<HTMLDivElement>();
   const setScrollEl = useCallback(
@@ -235,6 +257,27 @@ export function Timeline({
     [data, selectedProjects, targetsPending],
   );
 
+  const flat = useMemo(() => {
+    if (!data) return [];
+    const rows: FlatRow[] = [];
+    const walk = (nodes: TimelineNodeDto[]) => {
+      for (const node of nodes) {
+        const hasChildren = node.children.length > 0;
+        rows.push({ node, hasChildren });
+        if (hasChildren && !collapsed.has(node.id)) walk(node.children);
+      }
+    };
+    walk(filteredRoots);
+    return rows;
+  }, [data, filteredRoots, collapsed]);
+
+  // Only show the right-pinned Undated lane when at least one KPI actually has
+  // undated (pending) targets — otherwise it's just dead space.
+  const hasUndated = flat.some(({ node }) => node.undated.length > 0);
+  // The scroll box also holds the sticky KPI column and Undated lane; the
+  // quarter columns get what's left.
+  const plotViewportWidth = scrollWidth > 0 ? scrollWidth - LABEL_W - (hasUndated ? UNDATED_W : 0) : 0;
+
   // Fit-to-data-range date axis (Feature 04, §4a): the domain is the union of
   // every visible KPI's readings + dated targets (always including today),
   // snapped outward to whole quarters, then padded with future quarters to fill
@@ -251,10 +294,10 @@ export function Timeline({
     };
     walk(filteredRoots);
     return buildAxis(dates, today, {
-      minWidth: scrollWidth - PAD_R,
+      minWidth: plotViewportWidth - PAD_R,
       viewStart: initialViewQuarterStart(today),
     });
-  }, [data, filteredRoots, scrollWidth]);
+  }, [data, filteredRoots, plotViewportWidth]);
 
   // Scroll behavior (spec 06 P4). Once per page load, open with the current
   // quarter at the left edge (the previous one during its first month). After
@@ -280,20 +323,6 @@ export function Timeline({
     }
     prevDomainStart.current = axis.domainStart;
   }, [data, axis, scrollWidth]);
-
-  const flat = useMemo(() => {
-    if (!data) return [];
-    const rows: FlatRow[] = [];
-    const walk = (nodes: TimelineNodeDto[]) => {
-      for (const node of nodes) {
-        const hasChildren = node.children.length > 0;
-        rows.push({ node, hasChildren });
-        if (hasChildren && !collapsed.has(node.id)) walk(node.children);
-      }
-    };
-    walk(filteredRoots);
-    return rows;
-  }, [data, filteredRoots, collapsed]);
 
   // Full flattened KPI list (ignores `collapsed`) for the "Add KPI" parent
   // picker — every existing KPI is a valid parent, not just the visible ones.
@@ -345,36 +374,45 @@ export function Timeline({
     setAddingTarget(null);
   };
 
-  if (error) return <div className="p-6 text-danger">Failed to load timeline: {error}</div>;
+  if (error)
+    return (
+      <div className={PAGE_CLASS}>
+        <PageTitle />
+        <p className="mt-3 text-danger">Failed to load timeline: {error}</p>
+      </div>
+    );
   if (pending || !data) {
     // Same wrapper and span styling as "Loading targets…" so the two states look identical and sit in the same spot
     return (
-      <div className="p-6 text-text">
-        <div className="flex items-start justify-end gap-4">
-          <span role="status" className="mr-auto mt-3 animate-pulse text-sm text-text-subtle">
-            Loading timeline…
-          </span>
+      <div className={PAGE_CLASS}>
+        <div className={TOOLBAR_CLASS}>
+          <div className={TITLE_GROUP_CLASS}>
+            <PageTitle />
+            <span role="status" className="animate-pulse text-sm text-text-subtle">
+              Loading timeline…
+            </span>
+          </div>
           <div className="mt-1 min-h-[40px] flex-none" />
         </div>
       </div>
     );
   }
 
-  // Only show the right-pinned Undated lane when at least one KPI actually has
-  // undated (pending) targets — otherwise it's just dead space.
-  const hasUndated = flat.some(({ node }) => node.undated.length > 0);
   const blocked = blockedReasons(data.access);
 
   return (
-    <div className="p-6 text-text">
-      <div className="flex items-start justify-end gap-4">
-        {targetsPending && (
-          <span role="status" className="mr-auto mt-3 animate-pulse text-sm text-text-subtle">
-            Loading targets…
-          </span>
-        )}
+    <div className={PAGE_CLASS}>
+      <div className={TOOLBAR_CLASS}>
+        <div className={TITLE_GROUP_CLASS}>
+          <PageTitle />
+          {targetsPending && (
+            <span role="status" className="animate-pulse text-sm text-text-subtle">
+              Loading targets…
+            </span>
+          )}
+        </div>
         {/* min-h reserves the filter control's height so the table doesn't jump when it appears with the targets */}
-        <div className="mt-1 flex min-h-[40px] flex-none items-center gap-2">
+        <div className="mt-1 flex min-h-[40px] max-w-full flex-wrap items-center justify-end gap-2">
           <ProjectFilterControl
             projects={availableProjects}
             selected={selectedProjects}
@@ -393,17 +431,37 @@ export function Timeline({
         </div>
       </div>
 
-      {targetsError && <TargetsErrorBanner message={targetsError} onRetry={retryTargets} />}
+      {targetsError && (
+        <div className="flex-none">
+          <TargetsErrorBanner message={targetsError} onRetry={retryTargets} />
+        </div>
+      )}
 
       <KeyHighlightProvider active={highlight.active}>
-        <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
-          <PlotKey summary={keySummary} highlight={highlight} className="border-b border-border" />
-          <div className="flex">
-            {/* Fixed label column — the KPI names. Deliberately OUTSIDE the scroll
-                container so only the quarter columns scroll horizontally. */}
-            <div className="flex-none" style={{ width: LABEL_W }}>
+        {/* The key and the scroll box are the two halves of one bordered card, but
+            separate page flex items: the scroll box is sized to its rows and
+            shrinks to the height left in the page (never below its minHeight —
+            then the page scrolls), while the key keeps its natural height. */}
+        <div className="mt-4 flex-none overflow-hidden rounded-t-lg border border-border bg-surface">
+          <PlotKey summary={keySummary} highlight={highlight} />
+        </div>
+        {/* The one scroll box (both axes). Layering inside it: plot markers
+            z-10/20 < quarter header z-[25] < KPI column / Undated lane z-30;
+            `isolate` keeps all of that below the toolbar's project menu. A stable
+            scrollbar gutter keeps its width (and so the axis) from changing when
+            expanding rows brings in a vertical scrollbar. */}
+        <div
+          ref={setScrollEl}
+          data-testid="timeline-scroll"
+          className="isolate overflow-auto rounded-b-lg border border-t-0 border-border bg-surface [scrollbar-gutter:stable]"
+          style={{ minHeight: HEADER_H + Math.min(flat.length, MIN_VISIBLE_ROWS) * ROW_H }}
+        >
+          <div className="flex w-max min-w-full">
+            {/* KPI names — sticky to the left edge so only the quarter columns
+                pan horizontally. */}
+            <div className="sticky left-0 z-30 flex-none bg-surface" style={{ width: LABEL_W }}>
               <div
-                className="flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                className="sticky top-0 z-10 flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
                 style={{ height: HEADER_H }}
               >
                 KPI
@@ -451,51 +509,52 @@ export function Timeline({
               )}
             </div>
 
-            {/* Scrolling plot column — only the quarter columns pan horizontally. */}
-            <div ref={setScrollEl} className="min-w-0 flex-1 overflow-x-auto">
-              <div style={{ width: axis.plotWidth + PAD_R }}>
-                {/* Header row: quarter labels (clipped — the last, viewport-filling
-                    quarter may be only partly visible) */}
-                <div
-                  className="relative overflow-hidden border-b border-border bg-surface-sunken"
-                  style={{ height: HEADER_H }}
-                >
-                  {axis.quarters.map((q) => (
-                    <div
-                      key={q.startMs}
-                      className="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                      style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
-                    >
-                      {q.label}
-                    </div>
-                  ))}
-                </div>
-
-                {/* Data rows */}
-                {flat.map(({ node }) => (
-                  <TimelineRowTrack
-                    key={node.id}
-                    node={node}
-                    axis={axis}
-                    today={data.today}
-                    recordBlocked={blocked.record}
-                    onAddValue={(date) => setAdding({ node, date })}
-                    onAddTarget={(date) => setAddingTarget({ node, date })}
-                    onEditReading={(reading) => setEditing({ node, reading })}
-                    onOpenIssueNewTab={onOpenIssueNewTab}
-                    siteUrl={siteUrl}
-                  />
+            {/* Quarter columns — pan horizontally under the sticky KPI column. */}
+            <div className="flex-1" style={{ minWidth: axis.plotWidth + PAD_R }}>
+              {/* Header row: quarter labels (clipped — the last, viewport-filling
+                  quarter may be only partly visible) */}
+              <div
+                className="sticky top-0 z-[25] overflow-hidden border-b border-border bg-surface-sunken"
+                style={{ height: HEADER_H }}
+              >
+                {axis.quarters.map((q) => (
+                  <div
+                    key={q.startMs}
+                    className="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                    style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
+                  >
+                    {q.label}
+                  </div>
                 ))}
               </div>
+
+              {/* Data rows */}
+              {flat.map(({ node }) => (
+                <TimelineRowTrack
+                  key={node.id}
+                  node={node}
+                  axis={axis}
+                  today={data.today}
+                  recordBlocked={blocked.record}
+                  onAddValue={(date) => setAdding({ node, date })}
+                  onAddTarget={(date) => setAddingTarget({ node, date })}
+                  onEditReading={(reading) => setEditing({ node, reading })}
+                  onOpenIssueNewTab={onOpenIssueNewTab}
+                  siteUrl={siteUrl}
+                />
+              ))}
             </div>
 
             {/* Right-pinned "Undated" lane — pending targets that can't sit on the
-                dated axis. Deliberately OUTSIDE the scroll container (Q10).
+                dated axis. Sticky to the right edge so it never pans (Q10).
                 Hidden entirely when no KPI has an undated target. */}
             {hasUndated && (
-              <div className="flex-none border-l border-border" style={{ width: UNDATED_W }}>
+              <div
+                className="sticky right-0 z-30 flex-none border-l border-border bg-surface"
+                style={{ width: UNDATED_W }}
+              >
                 <div
-                  className="flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                  className="sticky top-0 z-10 flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
                   style={{ height: HEADER_H }}
                 >
                   Undated
@@ -514,7 +573,7 @@ export function Timeline({
       </KeyHighlightProvider>
 
       {!blocked.browse && (
-        <p className="mt-3 text-xs text-text-subtle">
+        <p className="mt-3 flex-none text-xs text-text-subtle">
           <span className="font-semibold">Tip:</span>{' '}
           {blocked.record
             ? 'click a future date to add a target · click a target to open its issue.'

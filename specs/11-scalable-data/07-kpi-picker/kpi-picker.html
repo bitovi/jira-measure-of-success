@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec 11·07 — KPI picker across spaces (prototype)</title>
+  <style>
+    :root {
+      --text: var(--ds-text, #172b4d);
+      --text-subtle: var(--ds-text-subtle, #626f86);
+      --text-subtlest: var(--ds-text-subtlest, #8590a2);
+      --border: var(--ds-border, #091e4224);
+      --border-bold: var(--ds-border-bold, #8590a2);
+      --surface: var(--ds-surface, #ffffff);
+      --surface-sunken: var(--ds-surface-sunken, #f7f8f9);
+      --surface-overlay: var(--ds-surface-overlay, #ffffff);
+      --brand: var(--ds-text-brand, #1868db);
+      --focus: var(--ds-border-focused, #388bff);
+      --selected-bg: var(--ds-background-selected, #e9f2ff);
+      --hover-bg: var(--ds-background-neutral-subtle-hovered, #091e420f);
+      --bg-info: var(--ds-background-information, #e9f2ff);
+      --bg-neutral: var(--ds-background-neutral, #091e420f);
+      --bg-warning: var(--ds-background-warning, #fff7d6);
+      --warning: var(--ds-text-warning, #a54800);
+      --bg-danger: var(--ds-background-danger, #ffeceb);
+      --danger: var(--ds-text-danger, #ae2e24);
+      --mark: #fff0b3;
+      --epic: #6e5dc6; --initiative: #1868db; --story: #22a06b;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--text); background: var(--surface-sunken); }
+    header.page { padding: 16px 24px 8px; }
+    header.page h1 { margin: 0; font-size: 20px; line-height: 24px; }
+    header.page p { margin: 4px 0 0; color: var(--text-subtle); max-width: 900px; }
+
+    /* ── Controls ─────────────────────────────────────────────── */
+    .controls { display: flex; flex-wrap: wrap; gap: 16px 28px; padding: 12px 24px; align-items: flex-start; }
+    .ctl { display: flex; flex-direction: column; gap: 4px; }
+    .ctl > span { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-subtlest); }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--surface); }
+    .seg button { border: 0; border-right: 1px solid var(--border); background: transparent; padding: 4px 10px;
+      font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
+    .seg button:last-child { border-right: 0; }
+    .seg button[aria-pressed="true"] { background: var(--selected-bg); color: var(--brand); font-weight: 600; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 1px 8px;
+      font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; color: var(--text); }
+    .chip:hover { background: var(--hover-bg); }
+    label.check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+
+    /* ── Layout ───────────────────────────────────────────────── */
+    main { display: grid; grid-template-columns: auto minmax(280px, 1fr); gap: 24px; padding: 8px 24px 48px; align-items: start; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+    /* ── Simulated Jira issue panel ───────────────────────────── */
+    #panel { width: 440px; min-width: 300px; max-width: 720px; resize: horizontal; overflow: auto;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px;
+      box-shadow: 0 1px 1px #091e4240, 0 0 1px #091e424f; }
+    .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--text-subtle); }
+    .crumbs .sep { color: var(--text-subtlest); }
+    .type { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+    .type.Story { background: var(--story); } .type.Epic { background: var(--epic); } .type.Initiative { background: var(--initiative); }
+    .wi-title { margin: 6px 0 14px; font-size: 18px; line-height: 24px; font-weight: 600; }
+    .panel-h { font-size: 12px; font-weight: 600; color: var(--text-subtle); margin: 0 0 6px; }
+    .tracked-here { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+    .mini-card { border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
+    .mini-card .muted { color: var(--text-subtle); }
+    .form { border: 1px dashed var(--border-bold); border-radius: 6px; padding: 12px; }
+    .form h3 { margin: 0 0 8px; font-size: 14px; font-weight: 500; color: var(--text-subtle); }
+    .lbl { display: block; font-size: 12px; line-height: 16px; color: var(--text-subtle); margin-bottom: 2px; }
+
+    /* ── Combobox ─────────────────────────────────────────────── */
+    .combo { position: relative; }
+    .combo-input { display: flex; align-items: center; border: 2px solid var(--border); border-radius: 4px; background: var(--surface);
+      padding: 0 6px; min-height: 32px; }
+    .combo-input:focus-within { border-color: var(--focus); }
+    .combo-input input { flex: 1; border: 0; outline: none; font: inherit; padding: 4px 2px; background: transparent; color: var(--text); min-width: 0; }
+    .combo-input .chev { color: var(--text-subtle); font-size: 11px; padding: 0 2px; cursor: pointer; user-select: none; }
+    .combo-input .clear { color: var(--text-subtle); cursor: pointer; padding: 0 4px; font-size: 14px; }
+    /* Inline, like the real panel's Select menu (panelMenuProps): an absolutely positioned
+       menu would be clipped by the issue-panel iframe. */
+    .menu { position: relative; margin-top: 4px; max-height: 420px; overflow: auto;
+      background: var(--surface-overlay); border-radius: 4px; padding: 4px 0;
+      box-shadow: 0 8px 12px #091e4226, 0 0 1px #091e424f; }
+    .sec-h { position: sticky; top: -4px; z-index: 1; background: var(--surface-overlay);
+      padding: 8px 12px 4px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-subtle);
+      display: flex; justify-content: space-between; gap: 8px; border-top: 1px solid var(--border); }
+    .sec-h.first { border-top: 0; }
+    .sec-h small { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-subtlest); }
+    .grp-h { padding: 6px 12px 2px; font-size: 12px; font-weight: 600; color: var(--text-subtle); display: flex; align-items: center; gap: 6px; }
+    .grp-h.toggle { cursor: pointer; }
+    .grp-h.toggle:hover { background: var(--hover-bg); }
+    .grp-h .space-key { font: 600 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg-neutral); border-radius: 3px; padding: 0 4px; color: var(--text); }
+    .grp-h .count { margin-left: auto; font-weight: 400; color: var(--text-subtlest); }
+    .opt { padding: 5px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 1px; }
+    .opt.active { background: var(--hover-bg); box-shadow: inset 2px 0 0 var(--focus); }
+    .opt.selected { background: var(--selected-bg); }
+    .opt .line1 { display: flex; align-items: baseline; gap: 6px; }
+    .opt .name { flex: 0 1 auto; }
+    .opt .unit { color: var(--text-subtle); }
+    .opt .key { margin-left: auto; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-subtlest); white-space: nowrap; }
+    .opt .line2 { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; line-height: 16px; color: var(--text-subtle); }
+    .badge { display: inline-flex; align-items: center; gap: 3px; background: var(--bg-info); color: var(--brand); border-radius: 3px; padding: 0 4px; font-size: 11px; line-height: 16px; font-weight: 600; }
+    .badge .type { width: 9px; height: 9px; margin: 0; }
+    .sub-tag { background: var(--bg-neutral); color: var(--text-subtle); border-radius: 3px; padding: 0 4px; font-size: 11px; line-height: 16px; }
+    .hint { color: var(--text-subtlest); }
+    .msg { padding: 6px 12px; font-size: 13px; color: var(--text-subtle); }
+    .msg.warn { background: var(--bg-warning); color: var(--warning); margin: 4px 8px; border-radius: 3px; }
+    .msg.err { background: var(--bg-danger); color: var(--danger); margin: 4px 8px; border-radius: 3px; }
+    .msg a, .footer a { color: var(--brand); cursor: pointer; text-decoration: none; }
+    .footer { padding: 8px 12px 6px; font-size: 12px; color: var(--text-subtle); border-top: 1px solid var(--border); margin-top: 4px; }
+    mark { background: var(--mark); color: inherit; border-radius: 2px; }
+    .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--brand); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .picked { margin-top: 8px; font-size: 12px; line-height: 16px; color: var(--text-subtle); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+    .fake-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    .fake-field { border: 1px solid var(--border); border-radius: 4px; height: 32px; background: var(--surface-sunken); }
+
+    /* ── Notes ────────────────────────────────────────────────── */
+    .notes { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px 20px; font-size: 13px; }
+    .notes h2 { font-size: 14px; margin: 0 0 6px; }
+    .notes h2:not(:first-child) { margin-top: 16px; }
+    .notes ol, .notes ul { margin: 0; padding-left: 20px; }
+    .notes li { margin: 2px 0; }
+    .notes code { font-size: 12px; background: var(--bg-neutral); padding: 0 3px; border-radius: 3px; }
+    .notes table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    .notes td, .notes th { border-bottom: 1px solid var(--border); padding: 3px 6px; text-align: left; vertical-align: top; }
+  </style>
+</head>
+<body>
+  <header class="page">
+    <h1>KPI picker across spaces <small style="font-weight:400;color:var(--text-subtle)">· spec 11 stage 07 prototype</small></h1>
+    <p>
+      KPIs live in many company-managed spaces. The "Set a KPI target" picker suggests KPIs
+      <b>in your space</b> first, then KPIs <b>tracked above you</b> (anything your parent chain targets), then
+      <b>other KPIs you can access</b>. Each KPI appears once. Nesting is shown within a space.
+      Use the controls to switch scenarios and try the open UX questions.
+    </p>
+  </header>
+
+  <div class="controls">
+    <div class="ctl"><span>Work item</span><div class="seg" id="scenarioSeg"></div></div>
+    <div class="ctl"><span>Q1 · "Other KPIs" before typing</span><div class="seg" id="variantSeg"></div></div>
+    <div class="ctl"><span>Q2 · Tracked above you</span>
+      <label class="check"><input type="checkbox" id="subKpis" checked /> also show same-space sub-KPIs</label>
+    </div>
+    <div class="ctl"><span>Try typing or pasting</span><div class="chips" id="chips"></div></div>
+  </div>
+
+  <main>
+    <section id="panel" aria-label="Simulated KPIs issue panel">
+      <div class="crumbs" id="crumbs"></div>
+      <div class="wi-title" id="wiTitle"></div>
+
+      <div class="panel-h">Tracked here</div>
+      <div class="tracked-here" id="trackedHere"></div>
+
+      <section class="form" aria-labelledby="formTitle">
+        <h3 id="formTitle">Set a KPI target</h3>
+        <label class="lbl" for="kpiInput">KPI</label>
+        <div class="combo" id="combo">
+          <div class="combo-input">
+            <input id="kpiInput" role="combobox" aria-expanded="false" aria-controls="kpiMenu" aria-autocomplete="list"
+              autocomplete="off" placeholder="Choose KPI, search, or paste a key…" />
+            <span class="clear" id="clearBtn" title="Clear" hidden>×</span>
+            <span class="chev" id="chevBtn" aria-hidden="true">▼</span>
+          </div>
+          <div class="menu" id="kpiMenu" role="listbox" hidden></div>
+        </div>
+        <div class="picked" id="picked"></div>
+        <div class="fake-row" aria-hidden="true"><div class="fake-field"></div><div class="fake-field"></div></div>
+      </section>
+    </section>
+
+    <aside class="notes">
+      <h2>Rules shown here</h2>
+      <ol>
+        <li><b>Each KPI appears once</b>, in its highest section. A KPI in your space that's also tracked above
+          keeps its place in section 1 and gets a <span class="badge">Tracked by …</span> badge.</li>
+        <li><b>Nesting within a space</b> works as it does today: children are indented under their parent.</li>
+        <li><b>A parent in another space isn't pulled in.</b> The child shows at the top of its own space with
+          a hint, e.g. <span class="hint">under PROG · Conversion rate</span>.</li>
+        <li>KPIs <b>already tracked</b> on the work item are left out.</li>
+        <li><b>Search</b> filters every section. "Other KPIs" results arrive after a short delay (a server
+          search over every space you can browse).</li>
+        <li><b>Paste a key or URL</b> to jump straight to a KPI from anywhere. Old keys of moved KPIs resolve to the
+          new key (stage 03).</li>
+      </ol>
+
+      <h2>Scenarios</h2>
+      <table>
+        <tr><th>Work item</th><th>What it shows</th></tr>
+        <tr><td>TEAM-123 Story</td><td>The usual case: own space has KPIs; the Epic and Initiative above track KPIs in three spaces.</td></tr>
+        <tr><td>NEW-8 Story</td><td>A new team: its space has no KPIs yet, so "Tracked above you" does the work.</td></tr>
+        <tr><td>PORT-7 Initiative</td><td>Top of the hierarchy: nothing above it.</td></tr>
+      </table>
+
+      <h2>Data in this prototype</h2>
+      <ul>
+        <li>Chain: <code>TEAM-123</code> Story → <code>PROG-45</code> Epic (targets Conversion rate, Checkout conversion)
+          → <code>PORT-7</code> Initiative (targets Net revenue, Conversion rate).</li>
+        <li>Spaces you can browse: TEAM, PROG, PORT, OPS, MKT, NEW. <b>FIN</b> is hidden from you.</li>
+        <li><code>KPI-5</code> is the old key of <code>PORT-20</code> (moved out of the original KPI project).</li>
+      </ul>
+
+      <h2>Keyboard</h2>
+      <p style="margin:0">↑ ↓ to move, Enter to pick, Esc closes the menu only.</p>
+    </aside>
+  </main>
+
+  <script>
+    // ── Data ─────────────────────────────────────────────────────────────
+    const SPACES = {
+      TEAM: 'Checkout Team', PROG: 'Growth Program', PORT: 'Company Portfolio',
+      OPS: 'Platform Ops', MKT: 'Marketing', NEW: 'Loyalty Squad', FIN: 'Finance',
+    };
+    const BROWSABLE = new Set(['TEAM', 'PROG', 'PORT', 'OPS', 'MKT', 'NEW']);
+
+    // Array order = rank order within siblings. `parent` is the KPI-tree parent (any space).
+    const KPIS = [
+      { key: 'TEAM-501', name: 'Checkout conversion', unit: '%', parent: 'PROG-210' },
+      { key: 'TEAM-502', name: 'Cart abandonment', unit: '%', parent: 'TEAM-501' },
+      { key: 'TEAM-505', name: 'Saved-card usage', unit: '%', parent: 'TEAM-501' },
+      { key: 'TEAM-503', name: 'Checkout p95 latency', unit: 'ms', parent: null },
+      { key: 'TEAM-504', name: 'Payment errors / day', unit: 'count', parent: null },
+      { key: 'PROG-210', name: 'Conversion rate', unit: '%', parent: 'PORT-12' },
+      { key: 'PROG-211', name: 'Trial-to-paid', unit: '%', parent: 'PROG-210' },
+      { key: 'PROG-214', name: 'Signup-to-trial', unit: '%', parent: 'PROG-210' },
+      { key: 'PROG-212', name: 'Activation rate', unit: '%', parent: null },
+      { key: 'PROG-213', name: 'Day-7 retention', unit: '%', parent: 'PROG-212' },
+      { key: 'PORT-12', name: 'Net revenue', unit: '$', parent: null },
+      { key: 'PORT-13', name: 'Expansion revenue', unit: '$', parent: 'PORT-12' },
+      { key: 'PORT-14', name: 'Gross margin', unit: '%', parent: null },
+      { key: 'PORT-20', name: 'Customer NPS', unit: 'score', parent: null },
+      { key: 'OPS-40', name: 'Uptime', unit: '%', parent: null },
+      { key: 'OPS-41', name: 'Incident MTTR', unit: 'h', parent: 'OPS-40' },
+      { key: 'OPS-42', name: 'Deploys / week', unit: 'count', parent: null },
+      { key: 'MKT-9', name: 'Signups / week', unit: 'count', parent: null },
+      { key: 'MKT-10', name: 'Customer acquisition cost', unit: '$', parent: 'MKT-9' },
+      { key: 'MKT-11', name: 'Conversion from paid ads', unit: '%', parent: 'MKT-9' },
+      { key: 'FIN-2', name: 'Operating cash flow', unit: '$', parent: null }, // hidden from this user
+    ].map((k, i) => ({ ...k, space: k.key.split('-')[0], rank: i }));
+    const KPI = new Map(KPIS.map((k) => [k.key, k]));
+    const MOVED = { 'KPI-5': 'PORT-20' };
+
+    const WORK = {
+      'PORT-7': { key: 'PORT-7', type: 'Initiative', summary: 'FY27 growth', parent: null, targets: ['PORT-12', 'PROG-210'] },
+      'PROG-45': { key: 'PROG-45', type: 'Epic', summary: 'Frictionless checkout', parent: 'PORT-7', targets: ['PROG-210', 'TEAM-501'] },
+      'TEAM-123': { key: 'TEAM-123', type: 'Story', summary: 'Apple Pay at checkout', parent: 'PROG-45', targets: ['TEAM-503'] },
+      'NEW-8': { key: 'NEW-8', type: 'Story', summary: 'Points on every order', parent: 'PROG-45', targets: [] },
+    };
+    const spaceOf = (key) => key.split('-')[0];
+
+    // ── State ────────────────────────────────────────────────────────────
+    const state = {
+      scenario: 'TEAM-123', variant: 'A', subKpis: true,
+      query: '', open: false, active: -1, selected: null,
+      expanded: new Set(), searchReadyFor: null, searchTimer: null,
+      currentValue: null, currentTimer: null,
+    };
+
+    // ── Suggestion builder (mirrors stage 07's pure `buildKpiSuggestions`) ──
+    function chainOf(item) {
+      const out = []; const seen = new Set([item.key]);
+      let p = item.parent;
+      while (p && WORK[p] && !seen.has(p) && out.length < 10) { out.push(WORK[p]); seen.add(p); p = WORK[p].parent; }
+      return out;
+    }
+
+    function buildModel(item) {
+      const own = spaceOf(item.key);
+      const chain = chainOf(item);
+      const excluded = new Set(item.targets);
+      const visible = KPIS.filter((k) => BROWSABLE.has(k.space) && !excluded.has(k.key));
+
+      const trackedBy = new Map();
+      for (const anc of chain) for (const t of anc.targets) {
+        if (!trackedBy.has(t)) trackedBy.set(t, []);
+        trackedBy.get(t).push(anc);
+      }
+
+      const s1 = visible.filter((k) => k.space === own);
+      const inS1 = new Set(s1.map((k) => k.key));
+
+      const s2keys = new Set(visible.filter((k) => trackedBy.has(k.key) && !inS1.has(k.key)).map((k) => k.key));
+      const subOf = new Map(); // key -> tracked ancestor it's a sub-KPI of
+      if (state.subKpis) {
+        const addDesc = (rootKey) => {
+          for (const k of visible) if (k.parent === rootKey && k.space === spaceOf(rootKey) && !inS1.has(k.key) && !s2keys.has(k.key)) {
+            s2keys.add(k.key); subOf.set(k.key, subOf.get(rootKey) ?? rootKey); addDesc(k.key);
+          }
+        };
+        for (const key of [...s2keys]) if (trackedBy.has(key)) addDesc(key);
+      }
+      const s2 = visible.filter((k) => s2keys.has(k.key));
+      const inS2 = s2keys;
+
+      const s3 = visible.filter((k) => !inS1.has(k.key) && !inS2.has(k.key));
+      const chainSpaces = [...new Set(chain.map((a) => spaceOf(a.key)))].filter((s) => s !== own);
+
+      return { own, chain, trackedBy, subOf, s1, s2, s3, chainSpaces };
+    }
+
+    // Tree-order a set of same-space KPIs; nest only when the parent is in the same set.
+    function treeRows(kpis) {
+      const set = new Set(kpis.map((k) => k.key));
+      const kids = new Map();
+      const roots = [];
+      for (const k of [...kpis].sort((a, b) => a.rank - b.rank)) {
+        if (k.parent && set.has(k.parent)) { if (!kids.has(k.parent)) kids.set(k.parent, []); kids.get(k.parent).push(k); }
+        else roots.push(k);
+      }
+      const out = [];
+      const walk = (k, depth) => {
+        let hint = null;
+        if (depth === 0 && k.parent && KPI.has(k.parent)) {
+          const p = KPI.get(k.parent);
+          if (BROWSABLE.has(p.space)) hint = p.space === k.space ? `under ${p.name}` : `under ${p.space} · ${p.name}`;
+        }
+        out.push({ kpi: k, depth, hint });
+        for (const c of kids.get(k.key) ?? []) walk(c, depth + 1);
+      };
+      roots.forEach((r) => walk(r, 0));
+      return out;
+    }
+
+    function groupBySpace(kpis, spaceOrder) {
+      const by = new Map();
+      for (const k of kpis) { if (!by.has(k.space)) by.set(k.space, []); by.get(k.space).push(k); }
+      const order = [...new Set([...(spaceOrder ?? []), ...[...by.keys()].sort()])].filter((s) => by.has(s));
+      return order.map((space) => ({ space, rows: treeRows(by.get(space)) }));
+    }
+
+    // ── Key / URL parsing (stage 07 `parseKpiRefInput`) ───────────────────
+    function parseRef(text) {
+      const t = text.trim();
+      const url = t.match(/\/browse\/([A-Z][A-Z0-9_]*-\d+)/i);
+      if (url) return url[1].toUpperCase();
+      if (/^[A-Z][A-Z0-9_]*-\d+$/i.test(t)) return t.toUpperCase();
+      return null;
+    }
+
+    function lookup(ref, item, model) {
+      const movedTo = MOVED[ref];
+      const key = movedTo ?? ref;
+      if (WORK[key]) return { kind: 'notKpi', ref, typeName: WORK[key].type };
+      const k = KPI.get(key);
+      if (!k || !BROWSABLE.has(k.space)) return { kind: 'hidden', ref };
+      if (item.targets.includes(key)) return { kind: 'tracked', ref, kpi: k };
+      const section = model.s1.includes(k) ? 'In your space' : model.s2.includes(k) ? 'Tracked above you' : 'Other KPIs';
+      return { kind: 'kpi', ref, kpi: k, movedFrom: movedTo ? ref : null, section };
+    }
+
+    // ── Rendering ────────────────────────────────────────────────────────
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const hl = (text, q) => {
+      if (!q) return esc(text);
+      const i = text.toLowerCase().indexOf(q.toLowerCase());
+      if (i < 0) return esc(text);
+      return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length));
+    };
+    const typeDot = (t) => `<span class="type ${t}" title="${t}"></span>`;
+    const matches = (k, q) => !q || k.name.toLowerCase().includes(q.toLowerCase()) || k.key.toLowerCase().includes(q.toLowerCase());
+
+    let optionKeys = []; // flat list of selectable keys, in menu order
+
+    function optionHtml(row, model, q) {
+      const k = row.kpi;
+      const idx = optionKeys.push(k.key) - 1;
+      const tb = model.trackedBy.get(k.key);
+      const sub = model.subOf.get(k.key);
+      const bits = [];
+      if (tb) bits.push(`<span class="badge">${typeDot(tb[0].type)}Tracked by ${tb.map((a) => esc(a.key)).join(', ')}</span>`);
+      if (sub && !tb) bits.push(`<span class="sub-tag">sub-KPI of ${esc(KPI.get(sub).name)}</span>`);
+      if (row.hint) bits.push(`<span class="hint">${esc(row.hint)}</span>`);
+      const cls = ['opt', idx === state.active ? 'active' : '', state.selected === k.key ? 'selected' : ''].join(' ');
+      return `<div class="${cls}" role="option" id="opt-${idx}" data-idx="${idx}" aria-selected="${state.selected === k.key}"
+        style="padding-left:${12 + row.depth * 14}px">
+        <div class="line1"><span class="name">${hl(k.name, q)}</span>${k.unit ? `<span class="unit">(${esc(k.unit)})</span>` : ''}<span class="key">${hl(k.key, q)}</span></div>
+        ${bits.length ? `<div class="line2">${bits.join('')}</div>` : ''}
+      </div>`;
+    }
+
+    function groupHtml(g, model, q, { showHeader, collapsible }) {
+      const rows = g.rows;
+      let html = '';
+      if (showHeader) {
+        const open = !collapsible || state.expanded.has(g.space) || q;
+        html += `<div class="grp-h ${collapsible && !q ? 'toggle' : ''}" ${collapsible && !q ? `data-toggle="${g.space}"` : ''}>
+          ${collapsible && !q ? (open ? '▾' : '▸') : ''}<span class="space-key">${g.space}</span>${esc(SPACES[g.space])}
+          ${collapsible ? `<span class="count">${rows.length}</span>` : ''}</div>`;
+        if (!open) return html;
+      }
+      for (const r of rows) html += optionHtml(r, model, q);
+      return html;
+    }
+
+    function filterRows(kpis, q) {
+      // Keep a match's same-space ancestors that also match only; others become roots with hints (treeRows handles it).
+      return kpis.filter((k) => matches(k, q));
+    }
+
+    function renderMenu() {
+      const item = WORK[state.scenario];
+      const model = buildModel(item);
+      const q = state.query.trim();
+      const ref = parseRef(q);
+      optionKeys = [];
+      let html = '';
+
+      // Pasted key / URL → direct lookup.
+      if (ref) {
+        const r = lookup(ref, item, model);
+        html += `<div class="sec-h first">Pasted key<small>looked up directly</small></div>`;
+        if (r.kind === 'kpi') {
+          html += optionHtml({ kpi: r.kpi, depth: 0, hint: `in ${r.section} · ${r.kpi.space}` }, model, '');
+          if (r.movedFrom) html += `<div class="msg warn">${esc(r.movedFrom)} moved to ${esc(r.kpi.key)}. Showing it under its new key.</div>`;
+        } else if (r.kind === 'notKpi') {
+          html += `<div class="msg err">${esc(r.ref)} is ${/^[AEIOU]/.test(r.typeName) ? 'an' : 'a'} ${esc(r.typeName)}, not a KPI.</div>`;
+        } else if (r.kind === 'tracked') {
+          html += `<div class="msg">${esc(r.kpi.key)} · ${esc(r.kpi.name)} is already tracked on this work item.</div>`;
+        } else {
+          html += `<div class="msg err">You don't have access to ${esc(r.ref)}, or it doesn't exist.</div>`;
+        }
+        $('kpiMenu').innerHTML = html;
+        return;
+      }
+
+      // 1 · In your space
+      const s1 = filterRows(model.s1, q);
+      html += `<div class="sec-h first">In ${model.own} · ${esc(SPACES[model.own])}<small>${model.s1.length} KPI${model.s1.length === 1 ? '' : 's'}</small></div>`;
+      if (model.s1.length === 0) {
+        html += `<div class="msg">No KPIs in ${esc(SPACES[model.own])} yet. <a data-action="create">Create one in ${model.own}</a> <span class="hint">(Q6)</span></div>`;
+      } else if (s1.length === 0) {
+        html += `<div class="msg">No matches in ${model.own}.</div>`;
+      } else {
+        for (const g of groupBySpace(s1, [model.own])) html += groupHtml(g, model, q, { showHeader: false });
+      }
+
+      // 2 · Tracked above you
+      const s2 = filterRows(model.s2, q);
+      const chainLabel = model.chain.map((a) => a.key).join(' → ');
+      html += `<div class="sec-h">Tracked above you<small>${model.chain.length ? esc(chainLabel) : ''}</small></div>`;
+      if (model.chain.length === 0) {
+        html += `<div class="msg">${esc(item.key)} is at the top of its hierarchy, so nothing is tracked above it.</div>`;
+      } else if (model.s2.length === 0) {
+        html += `<div class="msg">Everything tracked above is already listed or tracked here.</div>`;
+      } else if (s2.length === 0) {
+        html += `<div class="msg">No matches tracked above.</div>`;
+      } else {
+        const spaceOrder = model.chain.map((a) => spaceOf(a.key));
+        for (const g of groupBySpace(s2, spaceOrder)) html += groupHtml(g, model, q, { showHeader: true });
+      }
+
+      // 3 · Other KPIs you can access
+      const otherSpaces = [...new Set(model.s3.map((k) => k.space))];
+      html += `<div class="sec-h">Other KPIs you can access<small>${model.s3.length} in ${otherSpaces.length} space${otherSpaces.length === 1 ? '' : 's'}</small></div>`;
+      if (q) {
+        if (state.searchReadyFor !== q) {
+          html += `<div class="msg"><span class="spinner"></span>Searching every space you can browse…</div>`;
+        } else {
+          const hits = filterRows(model.s3, q);
+          if (hits.length === 0) html += `<div class="msg">No other KPIs match "${esc(q)}".</div>`;
+          for (const g of groupBySpace(hits, model.chainSpaces)) html += groupHtml(g, model, q, { showHeader: true });
+        }
+      } else if (state.variant === 'A') {
+        const near = model.s3.filter((k) => model.chainSpaces.includes(k.space));
+        for (const g of groupBySpace(near, model.chainSpaces)) html += groupHtml(g, model, q, { showHeader: true });
+        const rest = model.s3.length - near.length;
+        const restSpaces = otherSpaces.filter((s) => !model.chainSpaces.includes(s)).length;
+        html += `<div class="footer">🔍 Type to search ${rest} more KPI${rest === 1 ? '' : 's'} in ${restSpaces} other space${restSpaces === 1 ? '' : 's'}, or paste a key / URL.</div>`;
+      } else if (state.variant === 'B') {
+        html += `<div class="footer">🔍 Type to search ${model.s3.length} more KPIs in ${otherSpaces.length} spaces, or paste a key / URL.</div>`;
+      } else {
+        for (const g of groupBySpace(model.s3, model.chainSpaces)) html += groupHtml(g, model, q, { showHeader: true, collapsible: true });
+        html += `<div class="footer">🔍 Or type to search, or paste a key / URL.</div>`;
+      }
+
+      $('kpiMenu').innerHTML = html;
+      const act = document.getElementById(`opt-${state.active}`);
+      if (act) act.scrollIntoView({ block: 'nearest' });
+    }
+
+    function renderPanel() {
+      const item = WORK[state.scenario];
+      const chain = chainOf(item).reverse();
+      $('crumbs').innerHTML = [...chain, item]
+        .map((w) => `<span>${typeDot(w.type)}${esc(w.key)}</span>`)
+        .join('<span class="sep">›</span>');
+      $('wiTitle').textContent = `${item.key} · ${item.summary}`;
+      $('trackedHere').innerHTML = item.targets.length
+        ? item.targets.map((t) => { const k = KPI.get(t); return `<div class="mini-card"><span>${esc(k.name)} <span class="muted">(${esc(k.unit)})</span></span><span class="muted">${esc(k.key)} · −10% by Mar 31</span></div>`; }).join('')
+        : `<div class="mini-card"><span class="muted">No KPI targets on this work item yet.</span></div>`;
+      renderPicked();
+    }
+
+    function renderPicked() {
+      const el = $('picked');
+      if (!state.selected) { el.innerHTML = ''; $('clearBtn').hidden = true; return; }
+      const item = WORK[state.scenario];
+      const model = buildModel(item);
+      const k = KPI.get(state.selected);
+      const tb = model.trackedBy.get(k.key);
+      const section = model.s1.includes(k) ? 'In your space' : model.s2.includes(k) ? 'Tracked above you' : 'Other KPIs';
+      const cur = state.currentValue === null
+        ? `<span><span class="spinner"></span>current value…</span>`
+        : `<span>Current: <b>${state.currentValue}</b> ${esc(k.unit)}</span>`;
+      el.innerHTML = `<span class="space-key" style="font:600 11px/16px ui-monospace,monospace;background:var(--bg-neutral);border-radius:3px;padding:0 4px">${k.space}</span>
+        <span>${esc(SPACES[k.space])}</span><span>·</span><span>${section}</span>
+        ${tb ? `<span class="badge">${typeDot(tb[0].type)}Tracked by ${tb.map((a) => esc(a.key)).join(', ')}</span>` : ''}
+        <span>·</span>${cur}`;
+      $('clearBtn').hidden = false;
+    }
+
+    function setOpen(open) {
+      state.open = open;
+      $('kpiMenu').hidden = !open;
+      $('kpiInput').setAttribute('aria-expanded', String(open));
+      if (open) renderMenu();
+    }
+
+    function select(key) {
+      state.selected = key;
+      state.query = '';
+      const k = KPI.get(key);
+      $('kpiInput').value = `${k.name}${k.unit ? ` (${k.unit})` : ''}`;
+      setOpen(false);
+      // Stage 07: the preview's current value is fetched for the picked KPI only (getKpiCurrentValue).
+      state.currentValue = null;
+      clearTimeout(state.currentTimer);
+      state.currentTimer = setTimeout(() => { state.currentValue = (37 + (k.rank * 7.3) % 50).toFixed(1); renderPicked(); }, 450);
+      renderPicked();
+    }
+
+    function setQuery(q) {
+      state.query = q;
+      state.active = -1;
+      clearTimeout(state.searchTimer);
+      const t = q.trim();
+      if (t && !parseRef(t)) state.searchTimer = setTimeout(() => { state.searchReadyFor = t; if (state.open) renderMenu(); }, 350);
+      setOpen(true);
+      if (!state.active || state.active < 0) { state.active = optionKeys.length ? 0 : -1; renderMenu(); }
+    }
+
+    function reset() {
+      state.query = ''; state.selected = null; state.active = -1; state.searchReadyFor = null;
+      state.expanded = new Set();
+      $('kpiInput').value = '';
+      setOpen(false);
+      renderPanel();
+    }
+
+    // ── Controls ─────────────────────────────────────────────────────────
+    function segmented(el, options, get, set) {
+      const draw = () => {
+        el.innerHTML = options.map(([v, label]) => `<button type="button" data-v="${v}" aria-pressed="${get() === v}">${label}</button>`).join('');
+      };
+      el.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; set(b.dataset.v); draw(); });
+      draw();
+    }
+    segmented($('scenarioSeg'), [['TEAM-123', 'TEAM-123 Story'], ['NEW-8', 'NEW-8 Story (new space)'], ['PORT-7', 'PORT-7 Initiative (top)']],
+      () => state.scenario, (v) => { state.scenario = v; reset(); });
+    segmented($('variantSeg'), [['A', 'A · nearest spaces'], ['B', 'B · search only'], ['C', 'C · all spaces, collapsed']],
+      () => state.variant, (v) => { state.variant = v; state.expanded = new Set(); if (state.open) renderMenu(); else { setOpen(true); $('kpiInput').focus(); } });
+    $('subKpis').addEventListener('change', (e) => { state.subKpis = e.target.checked; if (state.open) renderMenu(); else { setOpen(true); $('kpiInput').focus(); } });
+
+    const CHIPS = ['conv', 'revenue', 'PORT-14', 'https://acme.atlassian.net/browse/OPS-40', 'KPI-5', 'PROG-45', 'FIN-2', 'TEAM-503'];
+    $('chips').innerHTML = CHIPS.map((c) => `<button type="button" class="chip" data-q="${esc(c)}">${esc(c.length > 28 ? '…/browse/OPS-40' : c)}</button>`).join('');
+    $('chips').addEventListener('click', (e) => {
+      const b = e.target.closest('.chip'); if (!b) return;
+      const input = $('kpiInput');
+      input.value = b.dataset.q; state.selected = null; renderPicked();
+      input.focus(); setQuery(b.dataset.q);
+    });
+
+    // ── Combobox behaviour ───────────────────────────────────────────────
+    const input = $('kpiInput');
+    input.addEventListener('focus', () => { if (!state.open) { if (state.selected) input.select(); setOpen(true); } });
+    input.addEventListener('mousedown', () => { if (!state.open) setOpen(true); });
+    input.addEventListener('input', () => { state.selected = null; renderPicked(); setQuery(input.value); });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!state.open) { setOpen(true); }
+        const n = optionKeys.length; if (!n) return;
+        state.active = e.key === 'ArrowDown' ? (state.active + 1) % n : (state.active - 1 + n) % n;
+        renderMenu();
+      } else if (e.key === 'Enter') {
+        if (state.open && state.active >= 0 && optionKeys[state.active]) { e.preventDefault(); select(optionKeys[state.active]); }
+      } else if (e.key === 'Escape') {
+        if (state.open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+      }
+    });
+    $('chevBtn').addEventListener('mousedown', (e) => { e.preventDefault(); setOpen(!state.open); input.focus(); });
+    $('clearBtn').addEventListener('mousedown', (e) => { e.preventDefault(); state.selected = null; input.value = ''; state.query = ''; renderPicked(); setOpen(true); input.focus(); });
+
+    $('kpiMenu').addEventListener('mousedown', (e) => {
+      e.preventDefault(); // keep focus in the input
+      e.stopPropagation(); // re-rendering detaches e.target, so the outside-click check below would misfire
+      const t = e.target.closest('[data-toggle]');
+      if (t) { const s = t.dataset.toggle; state.expanded.has(s) ? state.expanded.delete(s) : state.expanded.add(s); renderMenu(); return; }
+      const o = e.target.closest('.opt');
+      if (o) { select(optionKeys[Number(o.dataset.idx)]); return; }
+      if (e.target.closest('[data-action="create"]')) alert('Q6: would open the Add KPI form, defaulting to this work item\'s space.');
+    });
+    $('kpiMenu').addEventListener('mousemove', (e) => {
+      const o = e.target.closest('.opt'); if (!o) return;
+      const i = Number(o.dataset.idx); if (i !== state.active) { state.active = i; renderMenu(); }
+    });
+    document.addEventListener('mousedown', (e) => { if (!$('combo').contains(e.target)) setOpen(false); });
+
+    renderPanel();
+    setTimeout(() => { input.focus(); }, 50);
+  </script>
+</body>
+</html>
