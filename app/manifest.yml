@@ -12,7 +12,11 @@ modules:
       resolver:
         function: resolver
       title: KPI Timeline${TITLE_SUFFIX}
-      layout: native
+      # `blank`, not `native`: Jira then sizes the iframe to the window (below its
+      # top bar) instead of growing it to fit the content, so the timeline table
+      # can scroll inside the page with a sticky header. The surface renders its
+      # own title, which `native` used to draw.
+      layout: blank
   jira:adminPage:
     - key: kpi-settings-page
       resource: settings

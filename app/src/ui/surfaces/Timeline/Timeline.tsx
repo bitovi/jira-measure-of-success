@@ -93,6 +93,17 @@ const UNDATED_W = 140;
 // the chevron indents together with the text, not pinned at the left edge).
 const INDENT_STEP = 20;
 
+// The page is the module's whole iframe (`layout: blank` in manifest.yml), which
+// Jira sizes to the window below its top bar — so `h-screen` is the visible
+// area, and only the table scrolls. (With `layout: native` the iframe grows to
+// fit its content and the Jira page scrolls instead.)
+const PAGE_CLASS = 'flex h-screen flex-col overflow-hidden px-6 py-4 text-text';
+
+/** `layout: blank` drops Jira's page heading, so the surface renders its own. */
+function PageTitle() {
+  return <h1 className="text-xl font-semibold">KPI Timeline</h1>;
+}
+
 /** Stable empty set for the issue picker's default `excludedKeys`. */
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
@@ -197,6 +208,10 @@ export function Timeline({
   const [projecting, setProjecting] = useState<{ node: TimelineNodeDto; target: TimelineTargetDto } | null>(
     null,
   );
+  // One scroll box for the whole table (both axes): the header row, KPI column
+  // and Undated lane are sticky inside it, so they stay visible while the rows
+  // scroll. The page is exactly the window's height (`layout: blank` gives us a
+  // window-sized iframe), and the box takes whatever height is left.
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [measureScroll, scrollWidth] = useClientWidth<HTMLDivElement>();
   const setScrollEl = useCallback(
@@ -235,6 +250,27 @@ export function Timeline({
     [data, selectedProjects, targetsPending],
   );
 
+  const flat = useMemo(() => {
+    if (!data) return [];
+    const rows: FlatRow[] = [];
+    const walk = (nodes: TimelineNodeDto[]) => {
+      for (const node of nodes) {
+        const hasChildren = node.children.length > 0;
+        rows.push({ node, hasChildren });
+        if (hasChildren && !collapsed.has(node.id)) walk(node.children);
+      }
+    };
+    walk(filteredRoots);
+    return rows;
+  }, [data, filteredRoots, collapsed]);
+
+  // Only show the right-pinned Undated lane when at least one KPI actually has
+  // undated (pending) targets — otherwise it's just dead space.
+  const hasUndated = flat.some(({ node }) => node.undated.length > 0);
+  // The scroll box also holds the sticky KPI column and Undated lane; the
+  // quarter columns get what's left.
+  const plotViewportWidth = scrollWidth > 0 ? scrollWidth - LABEL_W - (hasUndated ? UNDATED_W : 0) : 0;
+
   // Fit-to-data-range date axis (Feature 04, §4a): the domain is the union of
   // every visible KPI's readings + dated targets (always including today),
   // snapped outward to whole quarters, then padded with future quarters to fill
@@ -251,10 +287,10 @@ export function Timeline({
     };
     walk(filteredRoots);
     return buildAxis(dates, today, {
-      minWidth: scrollWidth - PAD_R,
+      minWidth: plotViewportWidth - PAD_R,
       viewStart: initialViewQuarterStart(today),
     });
-  }, [data, filteredRoots, scrollWidth]);
+  }, [data, filteredRoots, plotViewportWidth]);
 
   // Scroll behavior (spec 06 P4). Once per page load, open with the current
   // quarter at the left edge (the previous one during its first month). After
@@ -280,20 +316,6 @@ export function Timeline({
     }
     prevDomainStart.current = axis.domainStart;
   }, [data, axis, scrollWidth]);
-
-  const flat = useMemo(() => {
-    if (!data) return [];
-    const rows: FlatRow[] = [];
-    const walk = (nodes: TimelineNodeDto[]) => {
-      for (const node of nodes) {
-        const hasChildren = node.children.length > 0;
-        rows.push({ node, hasChildren });
-        if (hasChildren && !collapsed.has(node.id)) walk(node.children);
-      }
-    };
-    walk(filteredRoots);
-    return rows;
-  }, [data, filteredRoots, collapsed]);
 
   // Full flattened KPI list (ignores `collapsed`) for the "Add KPI" parent
   // picker — every existing KPI is a valid parent, not just the visible ones.
@@ -345,34 +367,43 @@ export function Timeline({
     setAddingTarget(null);
   };
 
-  if (error) return <div className="p-6 text-danger">Failed to load timeline: {error}</div>;
+  if (error)
+    return (
+      <div className={PAGE_CLASS}>
+        <PageTitle />
+        <p className="mt-3 text-danger">Failed to load timeline: {error}</p>
+      </div>
+    );
   if (pending || !data) {
     // Same wrapper and span styling as "Loading targets…" so the two states look identical and sit in the same spot
     return (
-      <div className="p-6 text-text">
-        <div className="flex items-start justify-end gap-4">
-          <span role="status" className="mr-auto mt-3 animate-pulse text-sm text-text-subtle">
-            Loading timeline…
-          </span>
+      <div className={PAGE_CLASS}>
+        <div className="flex flex-none items-start justify-end gap-4">
+          <div className="mr-auto flex items-baseline gap-4 self-center">
+            <PageTitle />
+            <span role="status" className="animate-pulse text-sm text-text-subtle">
+              Loading timeline…
+            </span>
+          </div>
           <div className="mt-1 min-h-[40px] flex-none" />
         </div>
       </div>
     );
   }
 
-  // Only show the right-pinned Undated lane when at least one KPI actually has
-  // undated (pending) targets — otherwise it's just dead space.
-  const hasUndated = flat.some(({ node }) => node.undated.length > 0);
   const blocked = blockedReasons(data.access);
 
   return (
-    <div className="p-6 text-text">
-      <div className="flex items-start justify-end gap-4">
-        {targetsPending && (
-          <span role="status" className="mr-auto mt-3 animate-pulse text-sm text-text-subtle">
-            Loading targets…
-          </span>
-        )}
+    <div className={PAGE_CLASS}>
+      <div className="flex flex-none items-start justify-end gap-4">
+        <div className="mr-auto flex items-baseline gap-4 self-center">
+          <PageTitle />
+          {targetsPending && (
+            <span role="status" className="animate-pulse text-sm text-text-subtle">
+              Loading targets…
+            </span>
+          )}
+        </div>
         {/* min-h reserves the filter control's height so the table doesn't jump when it appears with the targets */}
         <div className="mt-1 flex min-h-[40px] flex-none items-center gap-2">
           <ProjectFilterControl
@@ -393,71 +424,79 @@ export function Timeline({
         </div>
       </div>
 
-      {targetsError && <TargetsErrorBanner message={targetsError} onRetry={retryTargets} />}
+      {targetsError && (
+        <div className="flex-none">
+          <TargetsErrorBanner message={targetsError} onRetry={retryTargets} />
+        </div>
+      )}
 
       <KeyHighlightProvider active={highlight.active}>
-        <div className="mt-4 overflow-hidden rounded-lg border border-border bg-surface">
-          <PlotKey summary={keySummary} highlight={highlight} className="border-b border-border" />
-          <div className="flex">
-            {/* Fixed label column — the KPI names. Deliberately OUTSIDE the scroll
-                container so only the quarter columns scroll horizontally. */}
-            <div className="flex-none" style={{ width: LABEL_W }}>
-              <div
-                className="flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                style={{ height: HEADER_H }}
-              >
-                KPI
-              </div>
-              {flat.length === 0 ? (
-                <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
-                  {blocked.browse ? (
-                    blocked.browse
-                  ) : data.roots.length === 0 ? (
-                    <>
-                      No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
-                      your first one.
-                    </>
-                  ) : (
-                    <>
-                      No KPIs match the selected project filter — try{' '}
-                      <Button appearance="subtle" spacing="compact" onClick={() => setSelectedProjects(null)}>
-                        clearing it
-                      </Button>
-                      .
-                    </>
-                  )}
+        {/* Sized to its content, but shrinks (min-h-0) to the height left in the
+            page — then the scroll box below scrolls instead of the page. */}
+        <div className="mt-4 flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface">
+          <PlotKey summary={keySummary} highlight={highlight} className="flex-none border-b border-border" />
+          {/* The one scroll box (both axes). Layering inside it: plot markers
+              z-10/20 < quarter header z-[25] < KPI column / Undated lane z-30. */}
+          <div ref={setScrollEl} data-testid="timeline-scroll" className="min-h-0 overflow-auto">
+            <div className="flex w-max min-w-full">
+              {/* KPI names — sticky to the left edge so only the quarter columns
+                  pan horizontally. */}
+              <div className="sticky left-0 z-30 flex-none bg-surface" style={{ width: LABEL_W }}>
+                <div
+                  className="sticky top-0 z-10 flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                  style={{ height: HEADER_H }}
+                >
+                  KPI
                 </div>
-              ) : (
-                flat.map(({ node, hasChildren }) => (
-                  <TimelineRowLabel
-                    key={node.id}
-                    node={node}
-                    hasChildren={hasChildren}
-                    collapsed={collapsed.has(node.id)}
-                    onToggleCollapse={() => toggleCollapse(node.id)}
-                    onRecord={() => setAdding({ node, date: data.today })}
-                    recordBlocked={blocked.record}
-                    addChildBlocked={blocked.add ?? blocked.nest}
-                    onAddTarget={() => setAddingTarget({ node, date: data.today })}
-                    onAddChild={() =>
-                      setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
-                    }
-                    onEdit={() => setEditingKpi(node)}
-                    editBlocked={blocked.edit}
-                    onOpenIssue={onOpenIssue}
-                    siteUrl={siteUrl}
-                  />
-                ))
-              )}
-            </div>
+                {flat.length === 0 ? (
+                  <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
+                    {blocked.browse ? (
+                      blocked.browse
+                    ) : data.roots.length === 0 ? (
+                      <>
+                        No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
+                        your first one.
+                      </>
+                    ) : (
+                      <>
+                        No KPIs match the selected project filter — try{' '}
+                        <Button appearance="subtle" spacing="compact" onClick={() => setSelectedProjects(null)}>
+                          clearing it
+                        </Button>
+                        .
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  flat.map(({ node, hasChildren }) => (
+                    <TimelineRowLabel
+                      key={node.id}
+                      node={node}
+                      hasChildren={hasChildren}
+                      collapsed={collapsed.has(node.id)}
+                      onToggleCollapse={() => toggleCollapse(node.id)}
+                      onRecord={() => setAdding({ node, date: data.today })}
+                      recordBlocked={blocked.record}
+                      addChildBlocked={blocked.add ?? blocked.nest}
+                      onAddTarget={() => setAddingTarget({ node, date: data.today })}
+                      onAddChild={() =>
+                        setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
+                      }
+                      onEdit={() => setEditingKpi(node)}
+                      editBlocked={blocked.edit}
+                      onOpenIssue={onOpenIssue}
+                      siteUrl={siteUrl}
+                    />
+                  ))
+                )}
+              </div>
 
-            {/* Scrolling plot column — only the quarter columns pan horizontally. */}
-            <div ref={setScrollEl} className="min-w-0 flex-1 overflow-x-auto">
-              <div style={{ width: axis.plotWidth + PAD_R }}>
+              {/* Quarter columns — pan horizontally under the sticky KPI column. */}
+              <div className="flex-1" style={{ minWidth: axis.plotWidth + PAD_R }}>
                 {/* Header row: quarter labels (clipped — the last, viewport-filling
                     quarter may be only partly visible) */}
                 <div
-                  className="relative overflow-hidden border-b border-border bg-surface-sunken"
+                  className="sticky top-0 z-[25] overflow-hidden border-b border-border bg-surface-sunken"
                   style={{ height: HEADER_H }}
                 >
                   {axis.quarters.map((q) => (
@@ -487,34 +526,37 @@ export function Timeline({
                   />
                 ))}
               </div>
-            </div>
 
-            {/* Right-pinned "Undated" lane — pending targets that can't sit on the
-                dated axis. Deliberately OUTSIDE the scroll container (Q10).
-                Hidden entirely when no KPI has an undated target. */}
-            {hasUndated && (
-              <div className="flex-none border-l border-border" style={{ width: UNDATED_W }}>
+              {/* Right-pinned "Undated" lane — pending targets that can't sit on the
+                  dated axis. Sticky to the right edge so it never pans (Q10).
+                  Hidden entirely when no KPI has an undated target. */}
+              {hasUndated && (
                 <div
-                  className="flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                  style={{ height: HEADER_H }}
+                  className="sticky right-0 z-30 flex-none border-l border-border bg-surface"
+                  style={{ width: UNDATED_W }}
                 >
-                  Undated
+                  <div
+                    className="sticky top-0 z-10 flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                    style={{ height: HEADER_H }}
+                  >
+                    Undated
+                  </div>
+                  {flat.map(({ node }) => (
+                    <UndatedLane
+                      key={node.id}
+                      node={node}
+                      onOpenProjection={(target) => setProjecting({ node, target })}
+                    />
+                  ))}
                 </div>
-                {flat.map(({ node }) => (
-                  <UndatedLane
-                    key={node.id}
-                    node={node}
-                    onOpenProjection={(target) => setProjecting({ node, target })}
-                  />
-                ))}
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </KeyHighlightProvider>
 
       {!blocked.browse && (
-        <p className="mt-3 text-xs text-text-subtle">
+        <p className="mt-3 flex-none text-xs text-text-subtle">
           <span className="font-semibold">Tip:</span>{' '}
           {blocked.record
             ? 'click a future date to add a target · click a target to open its issue.'
