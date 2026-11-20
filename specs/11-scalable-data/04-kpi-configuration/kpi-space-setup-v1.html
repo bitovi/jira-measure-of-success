@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec 11·04 — KPI Space setup (Settings prototype)</title>
+  <style>
+    :root {
+      --text: #172b4d; --subtle: #44546f; --subtlest: #626f86; --border: #dcdfe4;
+      --surface: #fff; --sunken: #f7f8f9; --brand: #0c66e4; --brand-hover: #0055cc;
+      --success-bg: #dcfff1; --success: #216e4e; --warn-bg: #fff7d6; --warn: #7f5f01;
+      --danger-bg: #ffeceb; --danger: #ae2e24; --info-bg: #e9f2ff; --info: #0055cc;
+      --neutral-bg: #dcdfe4;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--text); background: var(--sunken); }
+    .proto-bar { position: sticky; top: 0; z-index: 5; background: #1d2125; color: #c7d1db; padding: 10px 24px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+    .proto-bar strong { color: #fff; margin-right: 8px; }
+    .proto-bar button { background: #2c333a; color: #c7d1db; border: 1px solid #454f59; border-radius: 3px; padding: 4px 10px; cursor: pointer; font: inherit; }
+    .proto-bar button.on { background: #579dff; color: #1d2125; border-color: #579dff; font-weight: 600; }
+    .page { max-width: 880px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 24px; line-height: 28px; margin: 8px 0 4px; }
+    .sub { color: var(--subtle); margin: 0 0 8px; }
+    .note { background: var(--info-bg); color: var(--text); border-radius: 3px; padding: 10px 12px; margin: 16px 0 0; font-size: 13px; }
+    .note b { color: var(--info); }
+    section.card { margin-top: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+    .card > header { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-bottom: 1px solid var(--border); }
+    .card > header h2 { font-size: 16px; margin: 0; }
+    .card > header .grow { flex: 1; }
+    .card .body { padding: 16px 20px; }
+    .lozenge { display: inline-block; font-size: 11px; font-weight: 700; line-height: 16px; padding: 0 4px; border-radius: 3px; text-transform: uppercase; white-space: nowrap; }
+    .lz-success { background: var(--success-bg); color: var(--success); }
+    .lz-warn { background: var(--warn-bg); color: var(--warn); }
+    .lz-danger { background: var(--danger-bg); color: var(--danger); }
+    .lz-info { background: var(--info-bg); color: var(--info); }
+    .lz-neutral { background: var(--neutral-bg); color: var(--subtle); }
+    .btn { font: inherit; font-weight: 500; border: 0; border-radius: 3px; padding: 6px 12px; cursor: pointer; background: #091e420f; color: var(--text); white-space: nowrap; }
+    .btn:hover { background: #091e4224; }
+    .btn.primary { background: var(--brand); color: #fff; }
+    .btn.primary:hover { background: var(--brand-hover); }
+    .btn.subtle { background: transparent; color: var(--brand); padding: 6px 8px; }
+    .btn[disabled] { background: #091e4208; color: #091e424f; cursor: not-allowed; }
+    .space-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .space-avatar { width: 24px; height: 24px; border-radius: 4px; background: var(--brand); color: #fff; font-weight: 700; font-size: 11px; display: grid; place-items: center; }
+    code { background: var(--sunken); border-radius: 3px; padding: 1px 6px; font-size: 12px; }
+    .muted { color: var(--subtle); }
+    .small { font-size: 12px; line-height: 16px; }
+    .cfg-head { display: flex; align-items: center; gap: 12px; margin: 20px 0 8px; }
+    .cfg-head h3 { font-size: 14px; margin: 0; }
+    .cfg-head .grow { flex: 1; }
+    .rows { border: 1px solid var(--border); border-radius: 6px; }
+    .row { display: grid; grid-template-columns: 28px 1fr auto; gap: 12px; padding: 14px 16px; border-top: 1px solid var(--border); align-items: start; }
+    .row:first-child { border-top: 0; }
+    .icon { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+    .ic-ok { background: var(--success-bg); color: var(--success); }
+    .ic-warn { background: var(--warn-bg); color: var(--warn); }
+    .ic-busy { background: var(--info-bg); color: var(--info); }
+    .row-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 600; }
+    .row-what { color: var(--subtle); margin: 2px 0 6px; }
+    .row-state { font-size: 13px; }
+    .row-state a, .link { color: var(--brand); text-decoration: none; }
+    .row-state a:hover, .link:hover { text-decoration: underline; }
+    .checklist { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; }
+    .checklist li { display: flex; gap: 6px; }
+    .checklist .ok { color: var(--success); }
+    .checklist .no { color: var(--danger); }
+    details.why { margin-top: 6px; font-size: 13px; color: var(--subtle); }
+    details.why summary { cursor: pointer; color: var(--brand); }
+    details.why p { margin: 6px 0 0; }
+    .row-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+    .legend { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; font-size: 13px; margin-top: 10px; }
+    /* migrations */
+    .mig { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 14px 16px; border-top: 1px solid var(--border); }
+    .mig:first-child { border-top: 0; }
+    .bar { height: 6px; background: var(--neutral-bg); border-radius: 3px; overflow: hidden; margin: 8px 0 4px; }
+    .bar > i { display: block; height: 100%; background: var(--brand); }
+    .banner { display: flex; gap: 10px; align-items: center; background: var(--warn-bg); border-radius: 3px; padding: 10px 12px; margin-top: 16px; font-size: 13px; }
+    /* modal */
+    .scrim { position: fixed; inset: 0; background: #091e427d; display: none; align-items: flex-start; justify-content: center; padding-top: 10vh; z-index: 10; }
+    .scrim.open { display: flex; }
+    .modal { background: var(--surface); border-radius: 3px; width: 560px; max-width: calc(100vw - 32px); box-shadow: 0 8px 12px #091e4226, 0 0 1px #091e424f; }
+    .modal h2 { font-size: 20px; margin: 0; padding: 20px 24px 8px; }
+    .modal .mbody { padding: 0 24px 8px; }
+    .modal ol { padding-left: 20px; }
+    .modal ol li { margin-bottom: 6px; }
+    .modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 24px 20px; }
+    .callout { background: var(--sunken); border-radius: 3px; padding: 8px 12px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="proto-bar">
+    <strong>Prototype — pick a scenario:</strong>
+    <button data-scenario="shared" class="on">1. Existing project on Jira defaults</button>
+    <button data-scenario="partial">2. Partly set up</button>
+    <button data-scenario="ready">3. All set</button>
+    <button data-scenario="new">4. New site (no space yet)</button>
+  </div>
+
+  <div class="page">
+    <h1>KPI Settings</h1>
+    <p class="sub">Jira admins only. Sets up where KPIs live and how they look in Jira.</p>
+
+    <div id="banner"></div>
+
+    <!-- ============================ KPI SPACE ============================ -->
+    <section class="card">
+      <header>
+        <h2>KPI Space</h2>
+        <span id="space-badge"></span>
+        <span class="grow"></span>
+      </header>
+      <div class="body" id="space-body"></div>
+    </section>
+
+    <!-- ============================ MIGRATIONS ============================ -->
+    <section class="card" id="mig-card">
+      <header>
+        <h2>Data migrations</h2>
+        <span id="mig-badge"></span>
+      </header>
+      <div class="body">
+        <p class="muted" style="margin:0 0 12px">Copies existing KPI data into new storage after an app update. Safe to run more than once; you can pause and resume.</p>
+        <div class="rows" id="mig-rows"></div>
+      </div>
+    </section>
+
+    <div class="note">
+      <b>About this prototype.</b> Static HTML for spec 11 stage 04 (KPI configuration). Nothing here talks to Jira.
+      The buttons simulate what would happen. Use the bar at the top to switch scenarios.
+    </div>
+  </div>
+
+  <!-- Confirmation modal -->
+  <div class="scrim" id="scrim">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="m-title">
+      <h2 id="m-title"></h2>
+      <div class="mbody" id="m-body"></div>
+      <footer>
+        <button class="btn subtle" id="m-cancel">Cancel</button>
+        <button class="btn primary" id="m-ok"></button>
+      </footer>
+    </div>
+  </div>
+
+  <script>
+    // ---------------------------------------------------------------------
+    // Data: the three things the app sets up for the KPI space.
+    // state: 'ready' | 'shared' | 'incomplete' | 'busy'
+    // ---------------------------------------------------------------------
+    const ITEMS = {
+      workTypes: {
+        title: 'Work type scheme',
+        what: 'Which work types can be created in the KPI space.',
+        needs: ['Includes the KPI work type', 'Only KPI (no Story, Bug, Task…)'],
+        appName: 'KPI Space: Work Type Scheme',
+        jiraLink: 'Issue type schemes',
+        why: 'If the space allows Story or Bug, people can create things in the KPI space that the app ignores, and the KPI Timeline won\'t show them.',
+      },
+      fields: {
+        title: 'Field scheme',
+        what: 'Which fields a KPI has. This is what connects the KPI work type to its fields.',
+        needs: ['Summary', 'Description', 'KPI Unit', 'KPI Direction', 'KPI Reading (used by the app, not shown)'],
+        appName: 'KPI Space: Field Scheme',
+        jiraLink: 'Field schemes',
+        why: 'If KPI Unit or KPI Direction isn\'t in the field scheme, Jira doesn\'t treat it as a field of KPIs, so it can\'t be shown or saved. Without KPI Reading, recording a value fails.',
+      },
+      screens: {
+        title: 'Screens',
+        what: 'Where fields appear on the KPI\'s page and in the create and edit forms.',
+        needs: ['KPI Unit and KPI Direction on the view screen (Details)', 'KPI Unit and KPI Direction on create and edit', 'KPI Reading on no screen'],
+        appName: 'KPI Space: Screens',
+        jiraLink: 'Screens',
+        why: 'A field can belong to KPIs (field scheme) but still be hidden if it isn\'t on a screen. This is what makes Unit and Direction appear in Details.',
+      },
+    };
+
+    const SCENARIOS = {
+      shared: {
+        space: 'ready',
+        items: {
+          workTypes: { state: 'shared', current: 'Default Issue Type Scheme', others: 14, missing: [1] },
+          fields:    { state: 'shared', current: 'Default Field Scheme', others: 22, missing: [2, 3, 4] },
+          screens:   { state: 'shared', current: 'Default Screen Scheme', others: 22, missing: [0, 1] },
+        },
+        migrations: [
+          { id: 'kpi-meta-to-fields', title: 'Copy unit and direction into the new fields', state: 'pending', done: 0, total: 38, blockedBy: 'fields' },
+        ],
+      },
+      partial: {
+        space: 'ready',
+        items: {
+          workTypes: { state: 'ready', current: 'KPI Space: Work Type Scheme', others: 0, missing: [] },
+          fields:    { state: 'incomplete', current: 'KPI Space: Field Scheme', others: 0, missing: [3] },
+          screens:   { state: 'shared', current: 'Default Screen Scheme', others: 22, missing: [0, 1] },
+        },
+        migrations: [
+          { id: 'kpi-meta-to-fields', title: 'Copy unit and direction into the new fields', state: 'running', done: 15, total: 38, blockedBy: null },
+        ],
+      },
+      ready: {
+        space: 'ready',
+        items: {
+          workTypes: { state: 'ready', current: 'KPI Space: Work Type Scheme', others: 0, missing: [] },
+          fields:    { state: 'ready', current: 'KPI Space: Field Scheme', others: 0, missing: [] },
+          screens:   { state: 'ready', current: 'KPI Space: Screens', others: 0, missing: [] },
+        },
+        migrations: [
+          { id: 'kpi-meta-to-fields', title: 'Copy unit and direction into the new fields', state: 'done', done: 38, total: 38, blockedBy: null },
+        ],
+      },
+      new: { space: 'none', items: {}, migrations: [] },
+    };
+
+    let scenario = structuredClone(SCENARIOS.shared);
+
+    // ---------------------------------------------------------------------
+    const $ = (s) => document.querySelector(s);
+    const lozenge = (cls, text) => `<span class="lozenge ${cls}">${text}</span>`;
+
+    function stateBadge(it) {
+      if (it.state === 'ready') return lozenge('lz-success', 'Ready');
+      if (it.state === 'shared') return lozenge('lz-warn', `Shared with ${it.others} other spaces`);
+      if (it.state === 'incomplete') return lozenge('lz-warn', 'Incomplete');
+      if (it.state === 'busy') return lozenge('lz-info', 'Setting up…');
+      return '';
+    }
+
+    function stateText(key, it) {
+      const def = ITEMS[key];
+      if (it.state === 'ready') {
+        return `Using <a href="#">${it.current}</a>, used only by the KPI space, with everything KPIs need.`;
+      }
+      if (it.state === 'shared') {
+        return `Using <a href="#">${it.current}</a>, which Jira gave this space by default. ` +
+          `<b>${it.others} other spaces</b> use it too, so the app won't change it. ` +
+          `<b>Set up</b> creates <i>${def.appName}</i> for the KPI space only.`;
+      }
+      if (it.state === 'incomplete') {
+        return `Using <a href="#">${it.current}</a> (KPI space only), but it's missing something KPIs need. ` +
+          `<b>Fix</b> adds only what's missing.`;
+      }
+      if (it.state === 'busy') return `Creating <i>${def.appName}</i> and switching the KPI space to it…`;
+      return '';
+    }
+
+    function checklist(key, it) {
+      return '<ul class="checklist">' + ITEMS[key].needs.map((n, i) => {
+        const ok = !it.missing.includes(i);
+        return `<li><span class="${ok ? 'ok' : 'no'}">${ok ? '✓' : '✗'}</span><span>${n}</span></li>`;
+      }).join('') + '</ul>';
+    }
+
+    function rowAction(key, it) {
+      if (it.state === 'shared') return `<button class="btn primary" data-setup="${key}">Set up</button><span class="small muted">Other spaces aren't changed</span>`;
+      if (it.state === 'incomplete') return `<button class="btn primary" data-setup="${key}">Fix</button>`;
+      if (it.state === 'busy') return `<button class="btn" disabled>Setting up…</button>`;
+      return `<a class="link small" href="#">Open in Jira ↗</a>`;
+    }
+
+    function renderSpace() {
+      const body = $('#space-body');
+      if (scenario.space === 'none') {
+        $('#space-badge').innerHTML = lozenge('lz-neutral', 'Not set up');
+        body.innerHTML = `
+          <p class="muted" style="margin-top:0">KPIs are stored as work items in their own Jira space. Pick a key, and the app creates the space with
+          everything set up for KPIs: its own work type scheme, field scheme and screens. Nothing in your other spaces changes.</p>
+          <div class="space-line">
+            <label>Space key <input value="KPI" style="width:80px;padding:5px 8px;border:2px solid var(--border);border-radius:3px;font:inherit"></label>
+            <button class="btn primary" id="create-space">Create space</button>
+            <button class="btn">Use an existing space…</button>
+          </div>`;
+        $('#create-space').onclick = () => openModal('create');
+        return;
+      }
+      const items = scenario.items;
+      const allReady = Object.values(items).every((i) => i.state === 'ready');
+      const todo = Object.values(items).filter((i) => i.state !== 'ready' && i.state !== 'busy').length;
+      const busy = Object.values(items).some((i) => i.state === 'busy');
+      $('#space-badge').innerHTML = allReady ? lozenge('lz-success', 'Ready') : busy ? lozenge('lz-info', 'Setting up…') : lozenge('lz-warn', `${todo} to set up`);
+
+      body.innerHTML = `
+        <div class="space-line">
+          <span class="space-avatar">K</span><b>KPIs (KPI)</b>
+          <span class="muted">KPIs are created as work items in the space <code>KPI</code>.</span>
+        </div>
+
+        <div class="cfg-head">
+          <h3>Space configuration</h3>
+          <span class="grow"></span>
+          ${allReady || todo === 0 ? '' : `<button class="btn primary" id="setup-all">Set up all (${todo})</button>`}
+        </div>
+        <p class="muted small" style="margin:0 0 10px">
+          Every Jira space uses one of each of these. The app needs them set up its way so KPI Unit and KPI Direction appear on
+          each KPI's page. The app only ever changes configuration used by the KPI space alone.
+        </p>
+        <div class="rows">
+          ${Object.keys(ITEMS).map((key) => {
+            const it = items[key], def = ITEMS[key];
+            const icon = it.state === 'ready' ? '<span class="icon ic-ok">✓</span>' :
+              it.state === 'busy' ? '<span class="icon ic-busy">…</span>' : '<span class="icon ic-warn">!</span>';
+            return `<div class="row">
+              ${icon}
+              <div>
+                <div class="row-title">${def.title} ${stateBadge(it)}</div>
+                <div class="row-what">${def.what}</div>
+                <div class="row-state">${stateText(key, it)}</div>
+                ${it.state === 'ready' ? '' : checklist(key, it)}
+                <details class="why"><summary>Why does this matter?</summary><p>${def.why}</p></details>
+              </div>
+              <div class="row-actions">${rowAction(key, it)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+        <details class="why" style="margin-top:12px"><summary>What do Ready, Shared and Incomplete mean?</summary>
+          <div class="legend">
+            ${lozenge('lz-success', 'Ready')}<span>Used only by the KPI space, and has everything KPIs need.</span>
+            ${lozenge('lz-warn', 'Shared')}<span>Used by the KPI space <i>and</i> other spaces. Usually this is a Jira default every new space gets; nobody chose it for KPIs. The app won't edit it, because that would change the other spaces too. Set up makes a KPI-only copy and switches the KPI space to it.</span>
+            ${lozenge('lz-warn', 'Incomplete')}<span>Used only by the KPI space, but missing something (e.g. someone removed KPI Direction). Fix adds only what's missing and leaves everything else alone.</span>
+          </div>
+        </details>`;
+
+      body.querySelectorAll('[data-setup]').forEach((b) => (b.onclick = () => openModal(b.dataset.setup)));
+      const all = $('#setup-all');
+      if (all) all.onclick = () => openModal('all');
+    }
+
+    function renderMigrations() {
+      const card = $('#mig-card');
+      if (!scenario.migrations.length) { card.style.display = 'none'; return; }
+      card.style.display = '';
+      const m = scenario.migrations;
+      const allDone = m.every((x) => x.state === 'done');
+      $('#mig-badge').innerHTML = allDone ? lozenge('lz-success', 'All data up to date') : lozenge('lz-warn', 'Action needed');
+      $('#mig-rows').innerHTML = m.map((x) => {
+        const fieldsReady = scenario.items.fields?.state === 'ready';
+        const blocked = x.blockedBy === 'fields' && !fieldsReady;
+        const pct = Math.round((x.done / x.total) * 100);
+        let badge, action, detail;
+        if (x.state === 'done') { badge = lozenge('lz-success', 'Done'); action = '<a class="link small" href="#">Run again</a>'; detail = `${x.total} of ${x.total} KPIs`; }
+        else if (x.state === 'running') { badge = lozenge('lz-info', 'Running'); action = `<button class="btn" data-mig="pause">Pause</button>`; detail = `${x.done} of ${x.total} KPIs · keep this page open`; }
+        else if (x.state === 'paused') { badge = lozenge('lz-neutral', 'Paused'); action = `<button class="btn primary" data-mig="run">Resume</button>`; detail = `${x.done} of ${x.total} KPIs`; }
+        else { badge = lozenge('lz-neutral', 'Not run'); action = blocked ? `<button class="btn" disabled title="Set up the field scheme first">Run</button><span class="small muted">Set up the field scheme first</span>` : `<button class="btn primary" data-mig="run">Run</button>`; detail = `${x.total} KPIs to copy`; }
+        return `<div class="mig">
+          <div>
+            <div class="row-title">${x.title} ${badge}</div>
+            <div class="row-what">Copies each KPI's unit and direction from where older versions stored them into the KPI Unit and KPI Direction fields. Old values are kept for now.</div>
+            ${x.state === 'pending' ? '' : `<div class="bar"><i style="width:${pct}%"></i></div>`}
+            <div class="small muted">${detail}</div>
+          </div>
+          <div class="row-actions">${action}</div>
+        </div>`;
+      }).join('');
+      $('#mig-rows').querySelectorAll('[data-mig]').forEach((b) => (b.onclick = () => migAction(b.dataset.mig)));
+    }
+
+    function renderBanner() {
+      const items = Object.values(scenario.items);
+      const needs = items.some((i) => i.state !== 'ready') || scenario.migrations.some((x) => x.state !== 'done');
+      $('#banner').innerHTML = scenario.space !== 'none' && needs
+        ? `<div class="banner"><span>⚠️</span><span><b>KPI Unit and KPI Direction aren't showing on KPI pages yet.</b> Finish the steps below.</span></div>`
+        : '';
+    }
+
+    function render() { renderBanner(); renderSpace(); renderMigrations(); }
+
+    // ---------------------------------------------------------------------
+    // Confirmation modal: says exactly what will change
+    // ---------------------------------------------------------------------
+    let pending = null;
+    function changesFor(key) {
+      const it = scenario.items[key], def = ITEMS[key];
+      if (it.state === 'incomplete') {
+        return [`Add ${it.missing.map((i) => `<b>${def.needs[i]}</b>`).join(', ')} to <i>${it.current}</i>.`];
+      }
+      const base = {
+        workTypes: [`Create <b>${def.appName}</b> with only the KPI work type.`],
+        fields: [`Create <b>${def.appName}</b> as a copy of <i>${it.current}</i>, then add KPI Unit, KPI Direction and KPI Reading for the KPI work type.`],
+        screens: [`Create <b>KPI Space: View</b>, <b>Create</b> and <b>Edit</b> screens with KPI Unit and KPI Direction, plus the screen schemes that connect them.`],
+      }[key];
+      return [...base, `Switch the KPI space from <i>${it.current}</i> to it.`];
+    }
+
+    function openModal(what) {
+      pending = what;
+      let title, html, ok;
+      if (what === 'create') {
+        title = 'Create the KPI space?';
+        ok = 'Create space';
+        html = `<p>The app will:</p><ol>
+          <li>Create the space <b>KPIs (KPI)</b>.</li>
+          <li>Create <b>KPI Space: Work Type Scheme</b>, <b>KPI Space: Field Scheme</b> and <b>KPI Space: Screens</b>, and use them for this space only.</li>
+          <li>Create the <b>KPI Hierarchy</b> link type, if it doesn't exist.</li></ol>
+          <div class="callout">Nothing in your other spaces changes. Everything created is named "KPI Space: …" so you can find it in Jira admin.</div>`;
+      } else if (what === 'all') {
+        title = 'Set up the KPI space configuration?';
+        ok = 'Set up all';
+        const keys = Object.keys(ITEMS).filter((k) => !['ready', 'busy'].includes(scenario.items[k].state));
+        html = `<p>The app will:</p><ol>${keys.flatMap(changesFor).map((c) => `<li>${c}</li>`).join('')}</ol>
+          <div class="callout">The shared Jira defaults stay as they are, so the ${Math.max(...keys.map((k) => scenario.items[k].others))} other spaces using them aren't affected. Existing KPIs keep their data.</div>`;
+      } else {
+        const it = scenario.items[what];
+        title = it.state === 'incomplete' ? `Fix the ${ITEMS[what].title.toLowerCase()}?` : `Set up a KPI-only ${ITEMS[what].title.toLowerCase()}?`;
+        ok = it.state === 'incomplete' ? 'Fix' : 'Set up';
+        html = `<p>The app will:</p><ol>${changesFor(what).map((c) => `<li>${c}</li>`).join('')}</ol>` +
+          (it.state === 'shared' ? `<div class="callout"><i>${it.current}</i> stays as it is, so the ${it.others} other spaces using it aren't affected.</div>` : '');
+      }
+      $('#m-title').textContent = title;
+      $('#m-body').innerHTML = html;
+      $('#m-ok').textContent = ok;
+      $('#scrim').classList.add('open');
+    }
+    const closeModal = () => $('#scrim').classList.remove('open');
+    $('#m-cancel').onclick = closeModal;
+    $('#scrim').onclick = (e) => { if (e.target.id === 'scrim') closeModal(); };
+
+    $('#m-ok').onclick = () => {
+      closeModal();
+      if (pending === 'create') {
+        scenario = structuredClone(SCENARIOS.ready);
+        scenario.migrations = [];
+        render();
+        return;
+      }
+      const keys = pending === 'all' ? Object.keys(ITEMS).filter((k) => !['ready', 'busy'].includes(scenario.items[k].state)) : [pending];
+      keys.forEach((k) => (scenario.items[k].state = 'busy'));
+      render();
+      keys.forEach((k, i) => setTimeout(() => {
+        const def = ITEMS[k];
+        scenario.items[k] = { state: 'ready', current: k === 'screens' ? 'KPI Space: Screens' : def.appName, others: 0, missing: [] };
+        render();
+      }, 900 + i * 700));
+    };
+
+    // ---------------------------------------------------------------------
+    // Migration simulation
+    // ---------------------------------------------------------------------
+    let timer = null;
+    function migAction(a) {
+      const m = scenario.migrations[0];
+      if (a === 'pause') { clearInterval(timer); m.state = 'paused'; render(); return; }
+      m.state = 'running'; render();
+      clearInterval(timer);
+      timer = setInterval(() => {
+        m.done = Math.min(m.total, m.done + 25 > m.total ? m.total : m.done + 25);
+        if (m.done >= m.total) { m.state = 'done'; clearInterval(timer); }
+        render();
+      }, 900);
+    }
+
+    // ---------------------------------------------------------------------
+    document.querySelectorAll('[data-scenario]').forEach((b) => (b.onclick = () => {
+      document.querySelectorAll('[data-scenario]').forEach((x) => x.classList.toggle('on', x === b));
+      clearInterval(timer);
+      scenario = structuredClone(SCENARIOS[b.dataset.scenario]);
+      if (b.dataset.scenario === 'partial') migAction('run');
+      render();
+    }));
+    render();
+  </script>
+</body>
+</html>
