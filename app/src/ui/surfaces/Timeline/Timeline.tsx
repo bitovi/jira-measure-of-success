@@ -96,8 +96,15 @@ const INDENT_STEP = 20;
 // The page is the module's whole iframe (`layout: blank` in manifest.yml), which
 // Jira sizes to the window below its top bar — so `h-screen` is the visible
 // area, and only the table scrolls. (With `layout: native` the iframe grows to
-// fit its content and the Jira page scrolls instead.)
-const PAGE_CLASS = 'flex h-screen flex-col overflow-hidden px-6 py-4 text-text';
+// fit its content and the Jira page scrolls instead.) In a window too short to
+// fit the table's minimum height (MIN_VISIBLE_ROWS) the page scrolls as a fallback.
+const PAGE_CLASS = 'flex h-screen flex-col overflow-y-auto px-6 py-4 text-text';
+// The table never shrinks below this many rows (or all of them, if fewer).
+const MIN_VISIBLE_ROWS = 3;
+// Title (+ loading status) on the left, controls on the right; in a narrow
+// window the controls wrap onto their own line instead of pushing the title out.
+const TOOLBAR_CLASS = 'flex flex-none flex-wrap items-start justify-end gap-x-4 gap-y-2';
+const TITLE_GROUP_CLASS = 'mr-auto flex items-baseline gap-4 self-center';
 
 /** `layout: blank` drops Jira's page heading, so the surface renders its own. */
 function PageTitle() {
@@ -378,8 +385,8 @@ export function Timeline({
     // Same wrapper and span styling as "Loading targets…" so the two states look identical and sit in the same spot
     return (
       <div className={PAGE_CLASS}>
-        <div className="flex flex-none items-start justify-end gap-4">
-          <div className="mr-auto flex items-baseline gap-4 self-center">
+        <div className={TOOLBAR_CLASS}>
+          <div className={TITLE_GROUP_CLASS}>
             <PageTitle />
             <span role="status" className="animate-pulse text-sm text-text-subtle">
               Loading timeline…
@@ -395,8 +402,8 @@ export function Timeline({
 
   return (
     <div className={PAGE_CLASS}>
-      <div className="flex flex-none items-start justify-end gap-4">
-        <div className="mr-auto flex items-baseline gap-4 self-center">
+      <div className={TOOLBAR_CLASS}>
+        <div className={TITLE_GROUP_CLASS}>
           <PageTitle />
           {targetsPending && (
             <span role="status" className="animate-pulse text-sm text-text-subtle">
@@ -405,7 +412,7 @@ export function Timeline({
           )}
         </div>
         {/* min-h reserves the filter control's height so the table doesn't jump when it appears with the targets */}
-        <div className="mt-1 flex min-h-[40px] flex-none items-center gap-2">
+        <div className="mt-1 flex min-h-[40px] max-w-full flex-wrap items-center justify-end gap-2">
           <ProjectFilterControl
             projects={availableProjects}
             selected={selectedProjects}
@@ -431,126 +438,136 @@ export function Timeline({
       )}
 
       <KeyHighlightProvider active={highlight.active}>
-        {/* Sized to its content, but shrinks (min-h-0) to the height left in the
-            page — then the scroll box below scrolls instead of the page. */}
-        <div className="mt-4 flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-surface">
-          <PlotKey summary={keySummary} highlight={highlight} className="flex-none border-b border-border" />
-          {/* The one scroll box (both axes). Layering inside it: plot markers
-              z-10/20 < quarter header z-[25] < KPI column / Undated lane z-30. */}
-          <div ref={setScrollEl} data-testid="timeline-scroll" className="min-h-0 overflow-auto">
-            <div className="flex w-max min-w-full">
-              {/* KPI names — sticky to the left edge so only the quarter columns
-                  pan horizontally. */}
-              <div className="sticky left-0 z-30 flex-none bg-surface" style={{ width: LABEL_W }}>
-                <div
-                  className="sticky top-0 z-10 flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                  style={{ height: HEADER_H }}
-                >
-                  KPI
-                </div>
-                {flat.length === 0 ? (
-                  <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
-                    {blocked.browse ? (
-                      blocked.browse
-                    ) : data.roots.length === 0 ? (
-                      <>
-                        No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
-                        your first one.
-                      </>
-                    ) : (
-                      <>
-                        No KPIs match the selected project filter — try{' '}
-                        <Button appearance="subtle" spacing="compact" onClick={() => setSelectedProjects(null)}>
-                          clearing it
-                        </Button>
-                        .
-                      </>
-                    )}
-                  </div>
-                ) : (
-                  flat.map(({ node, hasChildren }) => (
-                    <TimelineRowLabel
-                      key={node.id}
-                      node={node}
-                      hasChildren={hasChildren}
-                      collapsed={collapsed.has(node.id)}
-                      onToggleCollapse={() => toggleCollapse(node.id)}
-                      onRecord={() => setAdding({ node, date: data.today })}
-                      recordBlocked={blocked.record}
-                      addChildBlocked={blocked.add ?? blocked.nest}
-                      onAddTarget={() => setAddingTarget({ node, date: data.today })}
-                      onAddChild={() =>
-                        setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
-                      }
-                      onEdit={() => setEditingKpi(node)}
-                      editBlocked={blocked.edit}
-                      onOpenIssue={onOpenIssue}
-                      siteUrl={siteUrl}
-                    />
-                  ))
-                )}
+        {/* The key and the scroll box are the two halves of one bordered card, but
+            separate page flex items: the scroll box is sized to its rows and
+            shrinks to the height left in the page (never below its minHeight —
+            then the page scrolls), while the key keeps its natural height. */}
+        <div className="mt-4 flex-none overflow-hidden rounded-t-lg border border-border bg-surface">
+          <PlotKey summary={keySummary} highlight={highlight} />
+        </div>
+        {/* The one scroll box (both axes). Layering inside it: plot markers
+            z-10/20 < quarter header z-[25] < KPI column / Undated lane z-30;
+            `isolate` keeps all of that below the toolbar's project menu. A stable
+            scrollbar gutter keeps its width (and so the axis) from changing when
+            expanding rows brings in a vertical scrollbar. */}
+        <div
+          ref={setScrollEl}
+          data-testid="timeline-scroll"
+          className="isolate overflow-auto rounded-b-lg border border-t-0 border-border bg-surface [scrollbar-gutter:stable]"
+          style={{ minHeight: HEADER_H + Math.min(flat.length, MIN_VISIBLE_ROWS) * ROW_H }}
+        >
+          <div className="flex w-max min-w-full">
+            {/* KPI names — sticky to the left edge so only the quarter columns
+                pan horizontally. */}
+            <div className="sticky left-0 z-30 flex-none bg-surface" style={{ width: LABEL_W }}>
+              <div
+                className="sticky top-0 z-10 flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                style={{ height: HEADER_H }}
+              >
+                KPI
               </div>
-
-              {/* Quarter columns — pan horizontally under the sticky KPI column. */}
-              <div className="flex-1" style={{ minWidth: axis.plotWidth + PAD_R }}>
-                {/* Header row: quarter labels (clipped — the last, viewport-filling
-                    quarter may be only partly visible) */}
-                <div
-                  className="sticky top-0 z-[25] overflow-hidden border-b border-border bg-surface-sunken"
-                  style={{ height: HEADER_H }}
-                >
-                  {axis.quarters.map((q) => (
-                    <div
-                      key={q.startMs}
-                      className="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                      style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
-                    >
-                      {q.label}
-                    </div>
-                  ))}
+              {flat.length === 0 ? (
+                <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
+                  {blocked.browse ? (
+                    blocked.browse
+                  ) : data.roots.length === 0 ? (
+                    <>
+                      No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
+                      your first one.
+                    </>
+                  ) : (
+                    <>
+                      No KPIs match the selected project filter — try{' '}
+                      <Button appearance="subtle" spacing="compact" onClick={() => setSelectedProjects(null)}>
+                        clearing it
+                      </Button>
+                      .
+                    </>
+                  )}
                 </div>
-
-                {/* Data rows */}
-                {flat.map(({ node }) => (
-                  <TimelineRowTrack
+              ) : (
+                flat.map(({ node, hasChildren }) => (
+                  <TimelineRowLabel
                     key={node.id}
                     node={node}
-                    axis={axis}
-                    today={data.today}
+                    hasChildren={hasChildren}
+                    collapsed={collapsed.has(node.id)}
+                    onToggleCollapse={() => toggleCollapse(node.id)}
+                    onRecord={() => setAdding({ node, date: data.today })}
                     recordBlocked={blocked.record}
-                    onAddValue={(date) => setAdding({ node, date })}
-                    onAddTarget={(date) => setAddingTarget({ node, date })}
-                    onEditReading={(reading) => setEditing({ node, reading })}
-                    onOpenIssueNewTab={onOpenIssueNewTab}
+                    addChildBlocked={blocked.add ?? blocked.nest}
+                    onAddTarget={() => setAddingTarget({ node, date: data.today })}
+                    onAddChild={() =>
+                      setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
+                    }
+                    onEdit={() => setEditingKpi(node)}
+                    editBlocked={blocked.edit}
+                    onOpenIssue={onOpenIssue}
                     siteUrl={siteUrl}
                   />
+                ))
+              )}
+            </div>
+
+            {/* Quarter columns — pan horizontally under the sticky KPI column. */}
+            <div className="flex-1" style={{ minWidth: axis.plotWidth + PAD_R }}>
+              {/* Header row: quarter labels (clipped — the last, viewport-filling
+                  quarter may be only partly visible) */}
+              <div
+                className="sticky top-0 z-[25] overflow-hidden border-b border-border bg-surface-sunken"
+                style={{ height: HEADER_H }}
+              >
+                {axis.quarters.map((q) => (
+                  <div
+                    key={q.startMs}
+                    className="absolute top-0 border-l border-border py-2 pl-2 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                    style={{ left: axis.xOf(new Date(q.startMs).toISOString().slice(0, 10)) }}
+                  >
+                    {q.label}
+                  </div>
                 ))}
               </div>
 
-              {/* Right-pinned "Undated" lane — pending targets that can't sit on the
-                  dated axis. Sticky to the right edge so it never pans (Q10).
-                  Hidden entirely when no KPI has an undated target. */}
-              {hasUndated && (
-                <div
-                  className="sticky right-0 z-30 flex-none border-l border-border bg-surface"
-                  style={{ width: UNDATED_W }}
-                >
-                  <div
-                    className="sticky top-0 z-10 flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
-                    style={{ height: HEADER_H }}
-                  >
-                    Undated
-                  </div>
-                  {flat.map(({ node }) => (
-                    <UndatedLane
-                      key={node.id}
-                      node={node}
-                      onOpenProjection={(target) => setProjecting({ node, target })}
-                    />
-                  ))}
-                </div>
-              )}
+              {/* Data rows */}
+              {flat.map(({ node }) => (
+                <TimelineRowTrack
+                  key={node.id}
+                  node={node}
+                  axis={axis}
+                  today={data.today}
+                  recordBlocked={blocked.record}
+                  onAddValue={(date) => setAdding({ node, date })}
+                  onAddTarget={(date) => setAddingTarget({ node, date })}
+                  onEditReading={(reading) => setEditing({ node, reading })}
+                  onOpenIssueNewTab={onOpenIssueNewTab}
+                  siteUrl={siteUrl}
+                />
+              ))}
             </div>
+
+            {/* Right-pinned "Undated" lane — pending targets that can't sit on the
+                dated axis. Sticky to the right edge so it never pans (Q10).
+                Hidden entirely when no KPI has an undated target. */}
+            {hasUndated && (
+              <div
+                className="sticky right-0 z-30 flex-none border-l border-border bg-surface"
+                style={{ width: UNDATED_W }}
+              >
+                <div
+                  className="sticky top-0 z-10 flex items-center border-b border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
+                  style={{ height: HEADER_H }}
+                >
+                  Undated
+                </div>
+                {flat.map(({ node }) => (
+                  <UndatedLane
+                    key={node.id}
+                    node={node}
+                    onOpenProjection={(target) => setProjecting({ node, target })}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </KeyHighlightProvider>
