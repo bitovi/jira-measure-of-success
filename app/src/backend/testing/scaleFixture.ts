@@ -598,8 +598,12 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!may(issue, as, 'edit')) return forbidden(`edit ${issue.key}`);
       const req = JSON.parse(String(body)) as {
         fields?: Record<string, unknown>;
+        update?: Record<string, unknown>;
         properties?: Array<{ key: string; value: unknown }>;
       };
+      if (!req.fields && !req.update) {
+        return respond(400, { errorMessages: ["one of 'fields' or 'update' required"], errors: {} });
+      }
       if (typeof req.fields?.summary === 'string') issue.summary = req.fields.summary;
       for (const p of req.properties ?? []) issue.properties[p.key] = p.value;
       const reading = req.fields?.[READING_FIELD_ID];
