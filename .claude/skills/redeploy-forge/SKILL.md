@@ -68,7 +68,7 @@ npx tsc --noEmit && npx vitest run && npx vitest run -c vitest.stories.config.ts
 
 - **Bundler resolution:** Forge's webpack bundler resolves neither `.js` import extensions nor tsconfig path aliases (`@domain`, `@ui`). Everything reachable from `src/index.ts` (the whole `src/backend` + `src/domain` source graph) must use **extensionless, relative** imports (e.g. `../domain/index`, `./jira`). Test files (`*.test.ts`) are not bundled and may keep `.js`. UI surfaces are prebuilt (not forge-bundled) and keep `@ui`/`@domain` + `.js`.
 - **`tsconfig.json` `noEmit` must stay `false`** — Forge's ts-loader needs emit. The `typecheck` script still passes `--noEmit` on the CLI, so typechecking is unaffected.
-- **Manifest limits:** only one `jira:projectPage` is allowed (Timeline). Settings is a `jira:adminPage`. `jira:issuePanel` needs an `icon`. `jira:entityProperty` uses `propertyKey` + `values[{path,type,searchAlias}]`.
+- **Manifest limits:** the Timeline is a `jira:globalPage` and Settings a `jira:adminPage` (a `jira:projectPage` per space was spiked and deferred: spec 11 · 01 F1). Adding or removing a scope makes the deploy a major version: rerun with `--approve MAJOR_VERSION_RULE`, then `install --upgrade`. `jira:issuePanel` needs an `icon`. `jira:entityProperty` uses `propertyKey` + `values[{path,type,searchAlias}]`.
 - **Custom fields propagate slowly:** after deploying a new `jira:customField`, allow a couple of minutes and hard-refresh Jira before expecting it on issues.
 - Filter CLI noise with `2>&1 | grep -viE "punycode|trace-deprecation"`.
 - Do not pipe long-running/interactive forge commands through `tail` — it hides prompts.

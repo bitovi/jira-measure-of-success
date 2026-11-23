@@ -39,12 +39,13 @@ extra issue type) is listed in *Clean-up* and removed or recorded at the end.
 
 | # | Check | Feeds |
 |---|---|---|
-| B1 | Which screen scheme and field configuration does a project made by today's `createKpiProject` use? Is it shared with other projects? | 04 |
+| B1 | Which screen scheme, field configuration and **work type scheme** does a project made by today's `createKpiProject` use? Is any of them shared with other projects? On bitovi-training, does `issuetype = KPI AND project != KPI` return anything? (If the KPI project's work type scheme is shared, other projects already offer the KPI type, and 06's "a KPI is an issue of the KPI work type" would pick up their KPI-typed issues.) | 04, 06 (overview *Sites this affects*) |
 | B2 | **Field schemes**: the v3 prototype assumes Jira's newer *field schemes*. On the dev site, do we have field schemes or the older *field configuration schemes*? Which REST API creates them, adds a field for one work type, and assigns one to a project? | 04 Q3 |
 | B3 | Over REST: create a **work type scheme**, **screens**, a **screen scheme** and a **work type screen scheme**, and assign them to a project. Which calls need Jira admin (`asUser` from Settings), and which work `asApp`? | 04 |
 | B4 | **Who can enable KPIs in a space?** As a **project admin who isn't a Jira admin**, on a company-managed project: can they add the KPI work type to their project? Can they add KPI Unit / KPI Direction to its layout, with and without *extended project administration*? With a project created from a **shared configuration** of a KPI-enabled project, do the type and screens come along automatically? | 04 (the "other spaces" guide) |
 | B5 | **Partly set-up space**: KPI type added, fields on **no** screen. Can the app still create a KPI there with unit and direction, record readings (`kpi-reading`), and read them all back? | 05, 06 |
 | B6 | `GET /project/search?action=create&expand=issueTypes` as the user: does it list the KPI type only for KPI-enabled projects? How many pages does the dev site need? | 08 |
+| B7 | **Work type avatar**: can Settings upload an SVG or PNG avatar for a work type (`POST /rest/api/3/universal_avatar/type/issuetype/owner/{typeId}`) and select it (`PUT /rest/api/3/issuetype/{id}` with `avatarId`), as the admin, with the app's scopes? Does `issuetype.iconUrl` then return it, and does `inlineIssueTypeIcons` load it? | 04 Q11 |
 
 ### C. Finding KPIs across spaces (feeds 06 and 07)
 
@@ -59,10 +60,11 @@ extra issue type) is listed in *Clean-up* and removed or recorded at the end.
 
 | # | Check | Feeds |
 |---|---|---|
-| D1 | Move a KPI to another project. Does `GET /issue/{oldKey}` through Forge `requestJira` (as the user) return the moved issue, with its **new** key and the **same** id? | 03 |
-| D2 | **Adding** a second index path to the `kpi-assignments` entity property (e.g. `kpiIssueIds`, `type: string`): are properties **already written** indexed under the new path after deploy, or only properties written afterwards? | 03 Q2 |
+| D1 | Move a KPI to another project. Does `GET /issue/{oldKey}` through Forge `requestJira` (as the user **and** as the app) return the moved issue, with its **new** key and the **same** id? | 03 |
+| D2 | **Adding** index paths to the `kpi-assignments` entity property (`kpiIssueIds`, `type: string`; `refsVersion`, `type: number`): are properties **already written** indexed under the new paths after deploy, or only properties written afterwards? | 03 Q2 |
 | D3 | On a `string` index, does `issue.property[kpi-assignments].kpiIssueIds = "10234"` match exactly, with no tokenising? Does `IS NOT EMPTY` work as it does on the `text` path? | 03 |
-| D4 | Does the existing `text` path (`kpiIds`) keep working, unchanged, after D2's deploy? (Older installs and the customer's app search with it.) | 03 |
+| D4 | Does the existing `text` path (`kpiIds`) keep working, unchanged, after D2's deploy? (The customer's app searches with it.) | 03 |
+| D5 | On the `number` path, does `kpiIds IS NOT EMPTY AND refsVersion IS EMPTY` return exactly the issues without the marker (including ones written before the path existed)? | 03 |
 
 ### E. Migrations at scale (feeds 02)
 
@@ -71,6 +73,20 @@ extra issue type) is listed in *Clean-up* and removed or recorded at the end.
 | E1 | In one resolver invocation (as the user): how many `PUT /issue/{id}` fit comfortably inside the time limit? Try 25 and 50 | 02 Q1 |
 | E2 | `issuetype = {id} AND id > {n} ORDER BY id ASC` paginates stably while issues are being edited | 02 |
 | E3 | An `asApp` JQL count (`search/approximate-count` or paging `search/jql` with `fields=id`) for "KPIs still to migrate" sees issues the admin can't browse | 02 |
+
+### F. Space pages (`jira:projectPage`, feeds 08)
+
+Started early (2026-11-21), ahead of the rest of 01, so 08's space-page prototype rests on real
+behaviour. The spike (module `kpi-space-page`, "KPIs (dev)" in each space, with a read-only
+`probeSpacePage` resolver) ran on **dev** as v9.0.0 and was **removed** in v10.0.0 once 08 deferred space
+pages (2026-11-21). F2–F4 are left for when space pages are picked up.
+
+| # | Check | Feeds |
+|---|---|---|
+| F1 | What a project page's context carries (in the browser and in the resolver), whether it knows the space's **board** and that board's **JQL**, and whether we need a KPI-only board | 08 |
+| F2 | **Which board** the context names in a space with several boards (the last one visited? the first?), and with none | 08 |
+| F3 | As a **non-admin** user: can they read the board configuration (`read:board-scope.admin`), or only as the app? Does the page appear for them, and in team-managed spaces? | 08 |
+| F4 | **Where the tab appears** in the new navigation (horizontal tabs, "More", the sidebar) and whether a space admin can pin or hide it. Can `displayConditions` hide it in spaces without the KPI type (e.g. `jiraExpression` on the project's issue types)? | 08 |
 
 ## Implementation steps
 
@@ -81,16 +97,16 @@ extra issue type) is listed in *Clean-up* and removed or recorded at the end.
   A9 (A9 uses a temporary trigger module that only logs).
 - **Verify:** every A item has a finding with the exact request and response shape used.
 
-### Step 2 — Screens, schemes, spaces (B1–B6)
+### Step 2 — Screens, schemes, spaces (B1–B7)
 
 - Use a `SPIKE` company-managed project, a `SPIKETM` team-managed project and the second (non-admin)
   user.
 - **Verify:** every B item has a finding. B4 has a clear "space admin can / needs a Jira admin" answer
   for each action.
 
-### Step 3 — Search and ids (C1–C4, D1–D4)
+### Step 3 — Search and ids (C1–C4, D1–D5)
 
-- Move one throwaway KPI between `SPIKE` projects for D1. Deploy the extra index path for D2–D4.
+- Move one throwaway KPI between `SPIKE` projects for D1. Deploy the extra index paths for D2–D5.
 - **Verify:** every C and D item has a finding. D2 says whether stage 03's migration must rewrite
   every property just to get it indexed.
 
@@ -109,7 +125,33 @@ extra issue type) is listed in *Clean-up* and removed or recorded at the end.
 
 ## Findings
 
-_To be filled in during this stage._
+### F1: space page context (2026-11-21, dev v9.0.0, space ECOM)
+
+- **The context names the space and a board, in the browser and in the resolver:**
+  `extension: { type: 'jira:projectPage', project: { id: '10126', key: 'ECOM', type: 'software' },
+  board: { id: '117', type: 'kanban' }, jira: { isNewNavigation: true } }`. The resolver gets the same
+  `extension` (without `location`), set by Forge, so the backend can trust the project and doesn't
+  need it in the payload.
+- **It doesn't carry the board's JQL.** We can look it up: `GET /rest/agile/1.0/board/117/configuration`
+  → `filter.id` (plus `subQuery`, kanban only) → `GET /rest/api/3/filter/{id}` → `jql`. ECOM's board is
+  `type = Initiative and Project = ECOM ORDER BY Rank`. Worked as the user (a Jira admin).
+- **Reading boards costs new scopes:** `read:board-scope:jira-software` (list boards),
+  `read:board-scope.admin:jira-software` (board configuration) and `read:project:jira`. Jira Software
+  has no classic scopes. Adding them made this a **major version** (`forge deploy --approve
+  MAJOR_VERSION_RULE`, then `install --upgrade`), so on the customer's site an admin has to approve
+  the update.
+- **No KPI board is needed.** The page knows the project id, so it finds the space's KPIs directly
+  (`issuetype = KPI AND project = 10126`). The board's filter usually **excludes** KPIs anyway (ECOM's
+  board shows only Initiatives: 0 KPIs), so scoping by the board would hide them. Recommendation: the
+  space page ignores boards; drop the two board scopes before release unless 08 finds a use for the
+  board's JQL (e.g. "work on this board that targets a KPI").
+- Adding a `jira:projectPage` needed no other change: it shares the app's one resolver and its
+  existing scopes for everything else (`read:jira-work`). `moduleKey` is `kpi-space-page`, so
+  `requireSettingsPage` still keeps Settings writes on the admin page.
+- The URL is `/jira/software/projects/{KEY}/apps/{appId}/{envId}`. It worked on a company-managed
+  space. The tab didn't show among the space's visible tabs (reached by URL; possibly under "More").
+- **Removing** the scopes was a major version too (v10.0.0, `--approve MAJOR_VERSION_RULE`). Every
+  scope change, either way, needs an admin's approval on the customer's site.
 
 ## Clean-up
 

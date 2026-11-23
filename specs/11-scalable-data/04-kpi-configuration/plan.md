@@ -59,13 +59,13 @@ records plus a hard-coded type name:
 ```ts
 KpiSiteConfig = {
   workType: { id: string; name: string } | null;
+  /** null = not chosen yet (05 keeps using `kpi-meta` only). Unit and direction are chosen together. */
   fields: {
-    unit: { fieldId: string } | null;
+    unit: { fieldId: string };
     direction:
       | { fieldId: string; kind: 'text' }                                        // 'increase' | 'decrease'
-      | { fieldId: string; kind: 'select'; optionIds: { increase: string; decrease: string } }
-      | null;
-  };
+      | { fieldId: string; kind: 'select'; optionIds: { increase: string; decrease: string } };
+  } | null;
   centralSpace: { projectId: string; key: string; name: string } | null;
   hierarchy: KpiHierarchyLink | null;                     // today's kpi:hierarchy
   /** Optional building blocks, recorded so Settings can show "Using …". Not used by reads/writes. */
@@ -82,6 +82,10 @@ KpiSiteConfig = {
   `kpi-meta` only, as today. So an upgraded install works before anyone opens Settings.
 - On load, Settings checks that every configured id still exists (a deleted field or type) and marks
   that block **broken**, with a fix action.
+- **`fields` is all or nothing.** It's `null` until both the unit and direction fields are chosen, and
+  they're saved together. There's no half-configured state: once `fields` is set, 05 reads unit and
+  direction from the fields only, so a missing direction field would mean no direction at all. A field
+  deleted later keeps its id and shows as **broken** (above); it isn't set to `null`.
 
 ### Provisioning (backend, `defineSettingsWrite`, as the admin)
 
@@ -90,7 +94,7 @@ everything* is just those functions run in order:
 
 | Block | Function (draft) | Notes |
 |---|---|---|
-| Work type | `ensureKpiWorkType()` | Today's `ensureKpiIssueType`, generalised to "create or use existing" |
+| Work type | `ensureKpiWorkType()` | Today's `ensureKpiIssueType`, generalised to "create or use existing". A type the app **creates** gets the app's **target avatar** (Q11), so KPIs look like KPIs everywhere Jira shows a type icon, and in the app (which inlines the type's `iconUrl`) |
 | Fields | `ensureKpiFields()` | Depends on Q1/Q2 |
 | Work type scheme | `ensureKpiWorkTypeScheme()` | If kept (Q4) |
 | Field scheme / context | `ensureKpiFieldScheme()` or `ensureKpiFieldContexts()` | Depends on Q3 and 01 B2 |
@@ -105,8 +109,9 @@ admin, as spec 10 does for provisioning today.
 ### Upgrade data card
 
 Built on 02's resolvers (`getMigrations`, `runMigrationBatch`, `retryMigration`). The rows, states and
-behaviour (run, pause, retry failed, blocked by a dependency, "N new items since the last run", not
-applicable yet) come from 02. Where it sits on the page, and whether there's a single **Upgrade**
+behaviour (run, pause, retry failed, blocked by a dependency, not applicable yet) come from 02.
+The app shows incomplete data until these have run (overview, *Compatibility*), so the card is the
+first thing an admin sees after upgrading. Where it sits on the page, and whether there's a single **Upgrade**
 action that runs every pending migration in order, is decided at G2 (Q7).
 
 ### Guide for other spaces
@@ -138,7 +143,9 @@ section 3. Who does what (Jira admin vs space admin) comes from 01 B4. The same 
 - `KpiSiteConfig` schema, the derivation from legacy records, `readKpiSiteConfig` / `writeKpiSiteConfig`,
   the per-invocation cache, and existence checks.
 - **Verify:** table tests for the derivation (nothing set up; old install with space + hierarchy; old
-  install with a space whose `KPI` type was renamed; new config already saved). Backend tests: an
+  install with a space whose `KPI` type was renamed; new config already saved). Every derived config
+  parses with the `KpiSiteConfig` schema (`fields: null`); a `fields` block with only one of the two
+  entries is rejected. Backend tests: an
   upgraded install with no new record behaves exactly as before (Timeline and panel snapshots
   unchanged). Request-log tests: still one `/field` call and one config read per invocation.
 
@@ -158,8 +165,8 @@ section 3. Who does what (Jira admin vs space admin) comes from 01 B4. The same 
 ### Step 6 — Settings UI: Upgrade data card
 
 - The card on 02's harness mocks (`?migrations=…`).
-- **Verify:** run, pause, resume, retry failed, blocked, not applicable and "new items" states in light
-  and dark, clean console. Story tests pass.
+- **Verify:** run, pause, resume, retry failed, blocked and not applicable states in light and dark,
+  clean console. Story tests pass.
 
 ### Step 7 — Live check (dev)
 
@@ -189,7 +196,7 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
 4. **KPI work type scheme**: keep this optional block (a scheme with only the KPI type, for KPI-only
    spaces like the central one)?
 5. **Is the central space optional?** v3 lets you skip it. Existing installs always have one (and the
-   customer's report needs it). If it's skipped, 08 must handle Add KPI with no default space.
+   customer's report needs it). (Add KPI no longer depends on it: 08 never defaults to it.)
 6. **"Set up everything with defaults"**: keep the shortcut?
 7. **Upgrade data**: where on the page, shown only when there's something to do (or collapsed "All data
    is up to date")? One **Upgrade** button that runs every pending migration in order, or a Run button
@@ -201,3 +208,8 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
    should Settings offer "use the same as another install"?
 10. **Field names** when the app creates them: "KPI Unit" / "KPI Direction" (draft), or
     "Unit" / "Direction"?
+11. **KPI type icon.** A work type the app creates gets a target (bullseye) avatar, as in the
+    [picker prototype](../07-kpi-picker/kpi-picker.html). Should Settings also offer to set it on an
+    **existing** KPI type (e.g. bitovi-training's, which has Jira's generic checkbox avatar), or leave
+    existing types' icons alone? Changing it affects every space that uses the type. 01 B7 checks the
+    API.

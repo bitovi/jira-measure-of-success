@@ -28,8 +28,12 @@ allowed are changes someone made on purpose during testing.
 1. Merge `feat/11-scalable-data` into `main`.
 2. Deploy **staging**, then run the upgrade on staging's Settings (dev already ran it, so this should be
    all "already done").
-3. Deploy **production** (`forge install --upgrade` if 05's trigger or any scope was added).
-4. Each customer site's admin follows the **upgrade runbook** below.
+3. **Before upgrading the customer site**, check it the way 01 B1 checked bitovi-training: is the KPI
+   project's work type scheme shared with other projects, and does `issuetype = KPI AND project != KPI`
+   return anything? If so, fix the scheme (or move or retype those issues) first, or they become KPIs
+   (06).
+4. Deploy **production** (`forge install --upgrade` if 05's trigger or any scope was added).
+5. The customer site's admin follows the **upgrade runbook** below.
 
 ### Upgrade runbook (README "Upgrading to scalable KPI data")
 
@@ -38,11 +42,16 @@ For a Jira admin on an existing install:
 1. Open **KPI Settings**. The work type and central space are already filled in from the old setup.
 2. Choose or create the **KPI fields** (and any optional building blocks, per 04's final design).
 3. Under **Upgrade data**, run the pending migrations. They can be paused and resumed, and are safe to
-   run again.
+   run again. Run them **when nobody is editing targets** (e.g. outside working hours): a target saved
+   at the exact moment the migration rewrites that work item can be lost (03, *Known race*). If a run
+   ends **failed**, use **Retry failed** until it's done.
 4. Optional: follow **Using KPIs in other spaces** to let teams hold their own KPIs.
 
-The app works throughout: before step 2 it behaves exactly as before, and during step 3 it reads both
-the old and new formats.
+Do steps 1–3 **right after the upgrade is deployed**. The app reads only the new formats, so until
+step 3 finishes it shows incomplete data: targets are missing from the Timeline, panels show targets
+as pointing at deleted KPIs, and once the fields are chosen (step 2), units and directions are empty
+until their migration runs. The customer's reporting app keeps working throughout: every write still
+produces the old formats.
 
 ### Cleanup release (later, separate branch)
 
@@ -54,7 +63,7 @@ our own sites runs this release.
 | Area | Change |
 |---|---|
 | Unit & direction | Stop writing `kpi-meta`; remove the sync trigger (05); `resolveKpiMeta` reads fields only |
-| Target references | Stop writing `kpiId` (key) and `kpiIds`; reads use `kpiIssueId` only; drop the `kpiIds` `text` index path |
+| Target references | Stop writing `kpiId` (key) and `kpiIds`; drop the `kpiIds` `text` index path. Reads and Timeline discovery already use `kpiIssueId` / `kpiIssueIds` (03), so nothing else changes |
 | Config | Remove the derivation from `kpi:space` / `kpi:hierarchy` (04) once every install has saved a `kpi:config:site` |
 | Data | `kpi-meta-cleanup`: delete the `kpi-meta` property from every KPI. `kpi-target-refs-cleanup`: strip `kpiId` / `kpiIds` from every `kpi-assignments`. Both on 02's framework, and only runnable when their copy migrations are done with nothing pending |
 | Docs | [storage-model.md](../../01-initial-build/storage-model.md) and README: remove the compatibility notes |
@@ -67,13 +76,14 @@ our own sites runs this release.
   at the start of 03) and save the output in this folder (`legacy-report.before.txt`).
 - **Verify:** running it twice in a row gives identical output.
 
-### Step 2 — Whole-branch live run (dev, with staging as the older install)
+### Step 2 — Whole-branch live run (dev)
 
 - Fresh deploy of the branch to dev. Run every migration from Settings.
 - **Verify** on `bitovi-training`:
-  - the legacy report matches `before` (apart from deliberate test edits);
-  - staging (`main`) shows the same KPIs, units, directions and targets as dev in the central space;
-  - edits in staging show in dev, and edits in dev show in staging;
+  - the legacy report matches `before` (apart from deliberate test edits), and edits made in dev show
+    in it (what the customer's app would see);
+  - after every migration is `done`, dev shows the same KPIs, units, directions and targets as
+    screenshots of `main` taken before the first migration;
   - a KPI moved to another space keeps all its targets in dev;
   - every stage's own live check still passes.
 
@@ -85,7 +95,7 @@ our own sites runs this release.
 
 ### Step 4 — Release
 
-- Steps 1–3 of *Release order*.
+- Steps 1–5 of *Release order*.
 - **Verify:** staging's and production's upgrades on our own sites complete; the legacy report on those
   sites is unchanged.
 
@@ -99,5 +109,5 @@ our own sites runs this release.
    shipped)? It needs an API token, so it never runs in CI.
 2. **Customer site upgrade.** Do we run the upgrade runbook with the customer's admin (screen share), or
    send them the runbook?
-3. **Production on our sites.** Which production sites (if any, besides `bitovi-training`) have KPI
-   data that needs upgrading?
+3. ~~**Production on our sites.**~~ **Answered (2026-11-20):** the only production site with KPI data is
+   the one customer site we manage; bitovi-training is our test site (overview, *Sites this affects*).

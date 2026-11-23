@@ -21,7 +21,8 @@ That doesn't scale across many teams:
   - this spans every company-managed space that uses the type;
   - it never matches a team-managed space (their types are private and have their own ids, 01 C1);
   - Jira filters the results to what the user may browse (searches run `asUser`, spec 10).
-- **The central space** (04) is where Settings puts company-wide KPIs and where Add KPI defaults (08).
+- **The central space** (04) is where Settings puts company-wide KPIs. Add KPI doesn't default to it:
+  the user picks a space (08).
   On existing installs, it's the current KPI project. **No data moves**, so the customer's
   `project = KPI` report keeps finding the KPIs it knows.
 - **KPIs are ordinary work items in their space.** They can show up on that team's boards and
@@ -29,6 +30,15 @@ That doesn't scale across many teams:
   The app doesn't force a hierarchy level.
 - **Nesting across spaces works.** The KPI hierarchy link type is site-wide, so a KPI can sit under a
   parent KPI in another space.
+- **A KPI has at most one parent KPI (decided 2026-11-21).** The KPI hierarchy stays a **tree**, not a
+  graph: supporting several parents would complicate the tree, rollups and every surface that draws it.
+  Jira's own link UI can still add a second hierarchy link, so:
+  - **reads pick one parent deterministically**: the hierarchy link with the **lowest link id** (the
+    oldest), not link order, so every surface and invocation agrees;
+  - **writes keep it single**: nesting (`updateKpi` / `linkKpiParent`) replaces every existing parent
+    link, as today;
+  - a KPI with extra parent links is **flagged** (e.g. in the KPI view: "Linked under 2 KPIs in Jira;
+    showing PORT-12. Remove the other link in Jira."), never silently shown twice.
 - **Partly set-up spaces work.** Reads and writes never depend on the fields being on a space's
   screens (01 B5).
 
@@ -38,15 +48,16 @@ That doesn't scale across many teams:
 
 | Today | After |
 |---|---|
-| `kpi:space` decides what a KPI is | `KpiSiteConfig.workType.id` decides. `centralSpace` is only the default home for new KPIs |
+| `kpi:space` decides what a KPI is | `KpiSiteConfig.workType.id` decides. `centralSpace` is where Settings puts company-wide KPIs, nothing more |
 | `fetchKpiSpaceIssues(projectKey)` | `fetchKpis({ projects?, ids?, text?, limit? })`, always `issuetype = {workTypeId}` (+ 05's fields and `kpi-meta`) |
 | `isKpiIssue(issueKey, spaceKey)` compares project keys | Compares the issue's type id with `workTypeId` |
 | `requireTargetableKpi`, `recordValue`, `updateKpi`: "…isn't a KPI: only KPIs in the KPI space…" | "…isn't a KPI" when its type isn't the KPI type. The message doesn't name a space |
 | Spec 10 `fetchKpiSpaceAccess(spaceKey)` | `fetchKpiAccess(projectKey)`, asked for **the KPI's own project**. Cached per project per invocation |
-| Nesting (`linkKpiParent`) requires both KPIs in the KPI space | Both must be KPIs; they may be in different spaces. Link Issues is checked on the child's project (Q2) |
+| Nesting (`linkKpiParent`) requires both KPIs in the KPI space | Both must be KPIs; they may be in different spaces. Link Issues is checked on the child's project (Q2). Still one parent per KPI |
+| `parentFromIssueLinks` takes the **first** hierarchy link whose parent is in the loaded set | Takes the **lowest-id** hierarchy link to a KPI, and reports any extra parent links (one-parent rule, above). A parent that isn't loaded (another space outside the view, or one the user can't browse) is 08's question |
 | Timeline: `project = KPI` | `issuetype = {workTypeId}`: every KPI the user can browse. The Space filter is 08 |
-| Panel catalog: every KPI in the space | **Temporarily** every KPI the user can browse (capped), until 07 replaces it with suggestions (Q1) |
-| `createKpi` creates in the KPI project | Takes an optional `projectId`, defaulting to the central space. Fails with a clear message when there's neither. The space choice UI is 08 |
+| Panel catalog: every KPI in the space | **Temporarily** every KPI the user can browse (capped), until 07's KPI browser replaces it (Q1) |
+| `createKpi` creates in the KPI project | Takes a required `projectId`; the UI fills it only when there's one possible space (08). Fails with a clear message without one |
 | `createKpiIssue` uses `issuetype: { name: 'KPI' }` | `issuetype: { id: workTypeId }` |
 
 ### Where the spaces come from (derived, never stored)
@@ -100,7 +111,8 @@ are looked up once per invocation and only for projects that have KPIs on screen
 - Timeline by type; panel catalog by type (temporary, capped); `createKpi` with optional `projectId`;
   cross-space nesting.
 - **Verify:** the cross-space KPI tree renders as one tree in the harness Timeline; targets, readings
-  and nesting across spaces work in backend tests; creating with no central space and no `projectId`
+  and nesting across spaces work in backend tests; a KPI with two hierarchy links in Jira shows once,
+  under its lowest-id parent, and is flagged; creating without a `projectId`
   fails with the message; a KPI created in a second space has its fields and marked `kpi-meta` (05).
 
 ### Step 5 — Live check (dev)

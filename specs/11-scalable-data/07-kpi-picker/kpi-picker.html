@@ -6,7 +6,7 @@
   <title>Spec 11·07 — KPI picker across spaces (prototype)</title>
   <style>
     :root {
-      --text: var(--ds-text, #172b4d);
+      --text: var(--ds-text, #292a2e);
       --text-subtle: var(--ds-text-subtle, #626f86);
       --text-subtlest: var(--ds-text-subtlest, #8590a2);
       --border: var(--ds-border, #091e4224);
@@ -15,6 +15,7 @@
       --surface-sunken: var(--ds-surface-sunken, #f7f8f9);
       --surface-overlay: var(--ds-surface-overlay, #ffffff);
       --brand: var(--ds-text-brand, #1868db);
+      --border-brand: var(--ds-border-brand, #1868db);
       --focus: var(--ds-border-focused, #388bff);
       --selected-bg: var(--ds-background-selected, #e9f2ff);
       --hover-bg: var(--ds-background-neutral-subtle-hovered, #091e420f);
@@ -25,17 +26,17 @@
       --bg-danger: var(--ds-background-danger, #ffeceb);
       --danger: var(--ds-text-danger, #ae2e24);
       --mark: #fff0b3;
-      --epic: #6e5dc6; --initiative: #1868db; --story: #22a06b;
+      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font: 14px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    body { margin: 0; font: 14px/20px "Atlassian Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif;
       color: var(--text); background: var(--surface-sunken); }
     header.page { padding: 16px 24px 8px; }
     header.page h1 { margin: 0; font-size: 20px; line-height: 24px; }
-    header.page p { margin: 4px 0 0; color: var(--text-subtle); max-width: 900px; }
+    header.page p { margin: 4px 0 0; color: var(--text-subtle); max-width: 980px; }
 
-    /* ── Controls ─────────────────────────────────────────────── */
-    .controls { display: flex; flex-wrap: wrap; gap: 16px 28px; padding: 12px 24px; align-items: flex-start; }
+    /* ── Prototype controls ───────────────────────────────────── */
+    .controls { display: flex; flex-wrap: wrap; gap: 14px 28px; padding: 12px 24px; align-items: flex-start; }
     .ctl { display: flex; flex-direction: column; gap: 4px; }
     .ctl > span { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-subtlest); }
     .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--surface); }
@@ -43,32 +44,53 @@
       font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
     .seg button:last-child { border-right: 0; }
     .seg button[aria-pressed="true"] { background: var(--selected-bg); color: var(--brand); font-weight: 600; }
+    .seg button:disabled { color: var(--text-subtlest); cursor: not-allowed; }
     .chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .chip { border: 1px solid var(--border); background: var(--surface); border-radius: 12px; padding: 1px 8px;
-      font: 12px/18px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; color: var(--text); }
+      font: 12px/18px var(--mono); cursor: pointer; color: var(--text); }
     .chip:hover { background: var(--hover-bg); }
-    label.check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
 
-    /* ── Layout ───────────────────────────────────────────────── */
-    main { display: grid; grid-template-columns: auto minmax(280px, 1fr); gap: 24px; padding: 8px 24px 48px; align-items: start; }
-    @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-
-    /* ── Simulated Jira issue panel ───────────────────────────── */
-    #panel { width: 440px; min-width: 300px; max-width: 720px; resize: horizontal; overflow: auto;
-      background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px;
+    /* ── Simulated Jira issue view ────────────────────────────── */
+    main { padding: 8px 24px 48px; display: flex; flex-direction: column; gap: 20px; }
+    .issue { width: 1180px; max-width: 100%; min-width: 620px; resize: horizontal; overflow: auto;
+      display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 28px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 20px 24px;
       box-shadow: 0 1px 1px #091e4240, 0 0 1px #091e424f; }
+    @media (max-width: 1000px) { .issue { grid-template-columns: minmax(0, 1fr); } .issue-side { display: none; } }
     .crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; color: var(--text-subtle); }
     .crumbs .sep { color: var(--text-subtlest); }
-    .type { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
-    .type.Story { background: var(--story); } .type.Epic { background: var(--epic); } .type.Initiative { background: var(--initiative); }
-    .wi-title { margin: 6px 0 14px; font-size: 18px; line-height: 24px; font-weight: 600; }
+    .wi-title { margin: 6px 0 12px; font-size: 22px; line-height: 28px; font-weight: 600; }
+    .issue-side .box { border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; }
+    .issue-side .row { display: grid; grid-template-columns: 90px 1fr; gap: 8px; font-size: 12px; color: var(--text-subtle); margin: 6px 0; }
+    .issue-side .row div:last-child { height: 10px; margin-top: 5px; border-radius: 3px; background: var(--bg-neutral); }
+
+    .app-panel { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+    .app-h { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 10px; }
+    .app-h .logo { width: 16px; height: 16px; border-radius: 4px; background: linear-gradient(135deg, #1868db, #6e5dc6); }
+    .app-h .pw { margin-left: auto; font: 11px/16px var(--mono); font-weight: 400; color: var(--text-subtlest); }
     .panel-h { font-size: 12px; font-weight: 600; color: var(--text-subtle); margin: 0 0 6px; }
     .tracked-here { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
-    .mini-card { border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-size: 13px; display: flex; justify-content: space-between; gap: 8px; }
-    .mini-card .muted { color: var(--text-subtle); }
+    .mini-card { border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .mini-card .muted, .muted { color: var(--text-subtle); }
     .form { border: 1px dashed var(--border-bold); border-radius: 6px; padding: 12px; }
-    .form h3 { margin: 0 0 8px; font-size: 14px; font-weight: 500; color: var(--text-subtle); }
+    .form h3 { margin: 0 0 10px; font-size: 14px; font-weight: 500; color: var(--text-subtle); }
     .lbl { display: block; font-size: 12px; line-height: 16px; color: var(--text-subtle); margin-bottom: 2px; }
+
+    /* ── Scope bar (above the select) ─────────────────────────── */
+    .scope { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+    .scope[hidden] { display: none; }
+    .scope .scope-l { font-size: 12px; color: var(--text-subtle); margin-right: 2px; }
+    .scope .seg button { display: inline-flex; gap: 6px; align-items: baseline; }
+    .scope .n { font-size: 11px; color: var(--text-subtlest); font-weight: 400; }
+    .pill { border: 1px solid var(--border); background: var(--surface); border-radius: 14px; padding: 2px 10px;
+      font: inherit; font-size: 13px; cursor: pointer; color: var(--text); display: inline-flex; gap: 6px; align-items: baseline; }
+    .pill:hover { background: var(--hover-bg); }
+    .pill[aria-pressed="true"] { background: var(--selected-bg); color: var(--brand); border-color: var(--border-brand); font-weight: 600; }
+    .pill:disabled { color: var(--text-subtlest); cursor: not-allowed; background: var(--surface); }
+    .pill .ck { width: 10px; display: inline-block; }
+    .pill .sk { font: 600 11px/16px var(--mono); }
+    .pill.more { border-style: dashed; color: var(--text-subtle); }
+    .scope .divider { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
 
     /* ── Combobox ─────────────────────────────────────────────── */
     .combo { position: relative; }
@@ -80,7 +102,7 @@
     .combo-input .clear { color: var(--text-subtle); cursor: pointer; padding: 0 4px; font-size: 14px; }
     /* Inline, like the real panel's Select menu (panelMenuProps): an absolutely positioned
        menu would be clipped by the issue-panel iframe. */
-    .menu { position: relative; margin-top: 4px; max-height: 420px; overflow: auto;
+    .menu { position: relative; margin-top: 4px; max-height: 440px; overflow: auto;
       background: var(--surface-overlay); border-radius: 4px; padding: 4px 0;
       box-shadow: 0 8px 12px #091e4226, 0 0 1px #091e424f; }
     .sec-h { position: sticky; top: -4px; z-index: 1; background: var(--surface-overlay);
@@ -89,134 +111,251 @@
     .sec-h.first { border-top: 0; }
     .sec-h small { font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-subtlest); }
     .grp-h { padding: 6px 12px 2px; font-size: 12px; font-weight: 600; color: var(--text-subtle); display: flex; align-items: center; gap: 6px; }
-    .grp-h.toggle { cursor: pointer; }
-    .grp-h.toggle:hover { background: var(--hover-bg); }
-    .grp-h .space-key { font: 600 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg-neutral); border-radius: 3px; padding: 0 4px; color: var(--text); }
+    .space-key { font: 600 11px/16px var(--mono); background: var(--bg-neutral); border-radius: 3px; padding: 0 4px; color: var(--text); }
     .grp-h .count { margin-left: auto; font-weight: 400; color: var(--text-subtlest); }
-    .opt { padding: 5px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 1px; }
+
+    /* Option: two-line */
+    .opt { padding: 6px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
     .opt.active { background: var(--hover-bg); box-shadow: inset 2px 0 0 var(--focus); }
     .opt.selected { background: var(--selected-bg); }
-    .opt .line1 { display: flex; align-items: baseline; gap: 6px; }
-    .opt .name { flex: 0 1 auto; }
-    .opt .unit { color: var(--text-subtle); }
-    .opt .key { margin-left: auto; font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text-subtlest); white-space: nowrap; }
-    .opt .line2 { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 12px; line-height: 16px; color: var(--text-subtle); }
-    .badge { display: inline-flex; align-items: center; gap: 3px; background: var(--bg-info); color: var(--brand); border-radius: 3px; padding: 0 4px; font-size: 11px; line-height: 16px; font-weight: 600; }
-    .badge .type { width: 9px; height: 9px; margin: 0; }
-    .sub-tag { background: var(--bg-neutral); color: var(--text-subtle); border-radius: 3px; padding: 0 4px; font-size: 11px; line-height: 16px; }
+    .opt .line1 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .opt .unit { color: var(--text-subtle); flex: none; }
+    .opt .line2 { display: flex; flex-wrap: wrap; gap: 2px 12px; padding-left: 21px; font-size: 12px; line-height: 16px; color: var(--text-subtle); }
+    /* Option: columns (rows like Jira Plans: 40px, centred) */
+    .cols { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 12px; align-items: center; }
+    .cols.t3 { grid-template-columns: minmax(0, 1fr) 48px 140px; }
+    .opt.cols { flex-direction: unset; min-height: 36px; padding-top: 4px; padding-bottom: 4px; }
+    .opt.cols .c-name { min-width: 0; display: flex; align-items: center; gap: 0; }
+    .opt.cols .c-hint { font-size: 12px; flex: none; margin-left: 8px; }
+    .c-target { font-size: 12px; color: var(--text-subtle); white-space: nowrap; }
+    .opt .line1 .c-target { margin-left: auto; }
+    .col-h span:first-child { display: inline-flex; align-items: center; }
+    /* Expand/collapse chevron (Plans-style); a same-width spacer keeps icons aligned on leaf rows. */
+    .tgl, .tgl-sp { width: 24px; height: 24px; flex: none; }
+    .tgl-sp { display: inline-block; }
+    .tgl { display: inline-grid; place-items: center; border: 0; padding: 0; margin: 0; background: transparent; color: var(--text-subtle);
+      border-radius: 3px; cursor: pointer; }
+    .tgl:hover { background: var(--hover-bg); color: var(--text); }
+    .grp-h.item { display: flex; align-items: center; }
+    .grp-h.item { padding: 6px 12px; margin-top: 6px; font-size: 14px; font-weight: 400; color: var(--text);
+      background: var(--ds-surface-sunken, #f1f2f4); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); cursor: default; }
+    .grp-h.item.first { margin-top: 0; }
+    /* In the browser pane the band stays pinned while its KPIs scroll under it. */
+    .blist .grp-h.item { position: sticky; top: 0; z-index: 1; }
+    /* Atlaskit-style tooltip (dark, small, below the target) for type icons */
+    #tip { position: fixed; z-index: 100; pointer-events: none; max-width: 240px; padding: 2px 6px; border-radius: 3px;
+      background: var(--ds-background-neutral-bold, #44546f); color: var(--ds-text-inverse, #fff); font-size: 12px; line-height: 16px; }
+    #tip[hidden] { display: none; }
+    .col-h { padding: 6px 12px 4px; font-size: 12px; font-weight: 600; color: var(--text-subtle); border-bottom: 1px solid var(--border); }
+
+    /* Work item: {type icon} {key} {summary}, styled like Jira Plans */
+    .ti { width: 16px; height: 16px; flex: none; vertical-align: -3px; margin-right: 5px; }
+    .wi { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
+    .wi-key { color: var(--brand); margin-right: 4px; white-space: nowrap; flex: none; }
+    .wi-sum { font-weight: 500; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .wi-sum.plain { font-weight: 400; }
+    .wi.small { font-size: 12px; line-height: 16px; }
+    .wi.small .ti { width: 14px; height: 14px; margin-right: 4px; }
+    .wi-row { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+
+    .combo-input .ti { margin: 0 4px 0 4px; }
+    .combo-input .ti[hidden] { display: none; }
+    .crumb { display: inline-flex; align-items: center; }
     .hint { color: var(--text-subtlest); }
     .msg { padding: 6px 12px; font-size: 13px; color: var(--text-subtle); }
     .msg.warn { background: var(--bg-warning); color: var(--warning); margin: 4px 8px; border-radius: 3px; }
     .msg.err { background: var(--bg-danger); color: var(--danger); margin: 4px 8px; border-radius: 3px; }
-    .msg a, .footer a { color: var(--brand); cursor: pointer; text-decoration: none; }
+    .msg a, .footer a { color: var(--brand); cursor: pointer; text-decoration: none; font-weight: 600; }
     .footer { padding: 8px 12px 6px; font-size: 12px; color: var(--text-subtle); border-top: 1px solid var(--border); margin-top: 4px; }
     mark { background: var(--mark); color: inherit; border-radius: 2px; }
     .spinner { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--border); border-top-color: var(--brand); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    .picked { margin-top: 8px; font-size: 12px; line-height: 16px; color: var(--text-subtle); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
-    .fake-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+    /* ── Two-pane browser (opens under the field, like a big dropdown menu) ── */
+    .browser { display: grid; grid-template-columns: 200px minmax(0, 1fr); border-radius: 4px;
+      height: 420px; overflow: hidden; background: var(--surface-overlay); }
+    .browser[hidden] { display: none; }
+    .browser.pop { margin-top: 4px; box-shadow: 0 8px 12px #091e4226, 0 0 1px #091e424f; }
+    .bnav { border-right: 1px solid var(--border); overflow: auto; padding: 6px 0; background: var(--surface-sunken); }
+    .nv { padding: 5px 12px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; font-size: 13px; }
+    .nv:hover { background: var(--hover-bg); }
+    .nv.on { background: var(--selected-bg); color: var(--brand); font-weight: 600; box-shadow: inset 2px 0 0 var(--border-brand); }
+    .nv .n { margin-left: auto; font-size: 11px; color: var(--text-subtlest); font-weight: 400; }
+    .nv.empty, .nv.empty .nv-sub { color: var(--text-subtlest); }
+    .nv.empty .space-key { opacity: .6; }
+    .nv .nv-sub { color: var(--text-subtle); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nv-g { padding: 10px 12px 2px; font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--text-subtlest); }
+    .btitle { padding: 8px 12px 2px; font-size: 13px; font-weight: 600; display: flex; gap: 8px; align-items: baseline; }
+    .btitle small { font-weight: 400; color: var(--text-subtlest); }
+    .blist { overflow: auto; flex: 1; padding-bottom: 6px; }
+    .bmain { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+    .nv-sep { border-top: 1px solid var(--border); margin: 8px 12px; }
+    /* All KPIs' space filter */
+    .bfilter { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); position: relative; }
+    .bfilter[hidden] { display: none; }
+    .bf-l { font-size: 12px; color: var(--text-subtle); }
+    .bf-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: var(--surface); border-radius: 4px;
+      padding: 2px 8px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
+    .bf-btn:hover { background: var(--hover-bg); }
+    .bf-chev { color: var(--text-subtle); font-size: 11px; }
+    .bf-x { border: 0; background: transparent; color: var(--text-subtle); cursor: pointer; font-size: 15px; padding: 0 4px; }
+    .bf-menu { position: absolute; top: 100%; left: 52px; z-index: 3; width: 280px; background: var(--surface-overlay); border-radius: 4px;
+      box-shadow: 0 8px 12px #091e4226, 0 0 1px #091e424f; padding: 6px 0; }
+    .bf-menu input { width: calc(100% - 16px); margin: 0 8px 6px; border: 2px solid var(--focus); border-radius: 4px; padding: 3px 6px; font: inherit; outline: none; }
+    #spaceOpts { max-height: 220px; overflow: auto; }
+    .bf-opt { display: flex; align-items: center; gap: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
+    .bf-opt:hover { background: var(--hover-bg); }
+    .bf-opt .n { margin-left: auto; font-size: 11px; color: var(--text-subtlest); }
+
+    .picked { margin-top: 8px; font-size: 12px; line-height: 16px; color: var(--text-subtle); display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-height: 16px; }
+    .fake-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
     .fake-field { border: 1px solid var(--border); border-radius: 4px; height: 32px; background: var(--surface-sunken); }
 
     /* ── Notes ────────────────────────────────────────────────── */
-    .notes { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 16px 20px; font-size: 13px; }
-    .notes h2 { font-size: 14px; margin: 0 0 6px; }
-    .notes h2:not(:first-child) { margin-top: 16px; }
-    .notes ol, .notes ul { margin: 0; padding-left: 20px; }
-    .notes li { margin: 2px 0; }
-    .notes code { font-size: 12px; background: var(--bg-neutral); padding: 0 3px; border-radius: 3px; }
-    .notes table { border-collapse: collapse; width: 100%; font-size: 12px; }
-    .notes td, .notes th { border-bottom: 1px solid var(--border); padding: 3px 6px; text-align: left; vertical-align: top; }
+    .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; max-width: 1180px; }
+    .note { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 14px 18px; font-size: 13px; }
+    .note h2 { font-size: 14px; margin: 0 0 6px; }
+    .note ol, .note ul { margin: 0; padding-left: 20px; }
+    .note li { margin: 3px 0; }
+    .note code { font-size: 12px; background: var(--bg-neutral); padding: 0 3px; border-radius: 3px; }
+    .note dt { font-weight: 600; margin-top: 6px; }
+    .note dd { margin: 0 0 0 0; color: var(--text-subtle); }
   </style>
 </head>
 <body>
   <header class="page">
     <h1>KPI picker across spaces <small style="font-weight:400;color:var(--text-subtle)">· spec 11 stage 07 prototype</small></h1>
     <p>
-      KPIs live in many company-managed spaces. The "Set a KPI target" picker suggests KPIs
-      <b>in your space</b> first, then KPIs <b>tracked above you</b> (anything your parent chain targets), then
-      <b>other KPIs you can access</b>. Each KPI appears once. Nesting is shown within a space.
-      Use the controls to switch scenarios and try the open UX questions.
+      The "Set a KPI target" form sits in the <b>main column</b> of a Jira issue. The chosen design (reviewed
+      2026-11-20, see <code>plan.md</code>) is <b>Layout: Two-pane browser</b>: a KPI field that expands into a browser
+      with views on the left and KPIs on the right. The other layouts and the <b>Scope buttons</b> variants are earlier
+      explorations, kept only for comparison. Drag the issue's bottom-right corner to try narrower widths.
     </p>
   </header>
 
   <div class="controls">
     <div class="ctl"><span>Work item</span><div class="seg" id="scenarioSeg"></div></div>
-    <div class="ctl"><span>Q1 · "Other KPIs" before typing</span><div class="seg" id="variantSeg"></div></div>
-    <div class="ctl"><span>Q2 · Tracked above you</span>
-      <label class="check"><input type="checkbox" id="subKpis" checked /> also show same-space sub-KPIs</label>
-    </div>
+    <div class="ctl"><span>Central space (04 Q5)</span><div class="seg" id="centralSeg"></div></div>
+    <div class="ctl"><span>Layout</span><div class="seg" id="layoutSeg"></div></div>
+    <div class="ctl"><span>Scope buttons</span><div class="seg" id="styleSeg"></div></div>
     <div class="ctl"><span>Try typing or pasting</span><div class="chips" id="chips"></div></div>
   </div>
 
   <main>
-    <section id="panel" aria-label="Simulated KPIs issue panel">
-      <div class="crumbs" id="crumbs"></div>
-      <div class="wi-title" id="wiTitle"></div>
+    <section class="issue" id="issue" aria-label="Simulated Jira issue">
+      <div class="issue-main">
+        <div class="crumbs" id="crumbs"></div>
+        <div class="wi-title" id="wiTitle"></div>
 
-      <div class="panel-h">Tracked here</div>
-      <div class="tracked-here" id="trackedHere"></div>
-
-      <section class="form" aria-labelledby="formTitle">
-        <h3 id="formTitle">Set a KPI target</h3>
-        <label class="lbl" for="kpiInput">KPI</label>
-        <div class="combo" id="combo">
-          <div class="combo-input">
-            <input id="kpiInput" role="combobox" aria-expanded="false" aria-controls="kpiMenu" aria-autocomplete="list"
-              autocomplete="off" placeholder="Choose KPI, search, or paste a key…" />
-            <span class="clear" id="clearBtn" title="Clear" hidden>×</span>
-            <span class="chev" id="chevBtn" aria-hidden="true">▼</span>
-          </div>
-          <div class="menu" id="kpiMenu" role="listbox" hidden></div>
+        <section class="app-panel" id="appPanel" aria-label="Simulated KPIs issue panel">
+          <div class="app-h"><span class="logo"></span>KPIs<span class="pw" id="pw"></span></div>
+          <div class="panel-h">Tracked here</div>
+          <div class="tracked-here" id="trackedHere"></div>
+          <section class="form" aria-labelledby="formTitle">
+            <h3 id="formTitle">Set a KPI target</h3>
+            <div id="picker"></div>
+            <div class="picked" id="picked"></div>
+            <div class="fake-row" aria-hidden="true"><div class="fake-field"></div><div class="fake-field"></div><div class="fake-field"></div></div>
+          </section>
+        </section>
+      </div>
+      <aside class="issue-side" aria-hidden="true">
+        <div class="box">
+          <div style="font-weight:600;font-size:13px;margin-bottom:4px">Details</div>
+          <div class="row"><span>Assignee</span><div></div></div>
+          <div class="row"><span>Parent</span><div></div></div>
+          <div class="row"><span>Sprint</span><div></div></div>
+          <div class="row"><span>Story points</span><div></div></div>
+          <div class="row"><span>Labels</span><div></div></div>
         </div>
-        <div class="picked" id="picked"></div>
-        <div class="fake-row" aria-hidden="true"><div class="fake-field"></div><div class="fake-field"></div></div>
-      </section>
+      </aside>
     </section>
 
-    <aside class="notes">
-      <h2>Rules shown here</h2>
-      <ol>
-        <li><b>Each KPI appears once</b>, in its highest section. A KPI in your space that's also tracked above
-          keeps its place in section 1 and gets a <span class="badge">Tracked by …</span> badge.</li>
-        <li><b>Nesting within a space</b> works as it does today: children are indented under their parent.</li>
-        <li><b>A parent in another space isn't pulled in.</b> The child shows at the top of its own space with
-          a hint, e.g. <span class="hint">under PROG · Conversion rate</span>.</li>
-        <li>KPIs <b>already tracked</b> on the work item are left out.</li>
-        <li><b>Search</b> filters every section. "Other KPIs" results arrive after a short delay (a server
-          search over every space you can browse).</li>
-        <li><b>Paste a key or URL</b> to jump straight to a KPI from anywhere. Old keys of moved KPIs resolve to the
-          new key (stage 03).</li>
-      </ol>
-
-      <h2>Scenarios</h2>
-      <table>
-        <tr><th>Work item</th><th>What it shows</th></tr>
-        <tr><td>TEAM-123 Story</td><td>The usual case: own space has KPIs; the Epic and Initiative above track KPIs in three spaces.</td></tr>
-        <tr><td>NEW-8 Story</td><td>A new team: its space has no KPIs yet, so "Tracked above you" does the work.</td></tr>
-        <tr><td>PORT-7 Initiative</td><td>Top of the hierarchy: nothing above it.</td></tr>
-      </table>
-
-      <h2>Data in this prototype</h2>
-      <ul>
-        <li>Chain: <code>TEAM-123</code> Story → <code>PROG-45</code> Epic (targets Conversion rate, Checkout conversion)
-          → <code>PORT-7</code> Initiative (targets Net revenue, Conversion rate).</li>
-        <li>Spaces you can browse: TEAM, PROG, PORT, OPS, MKT, NEW. <b>FIN</b> is hidden from you.</li>
-        <li><code>KPI-5</code> is the old key of <code>PORT-20</code> (moved out of the original KPI project).</li>
-      </ul>
-
-      <h2>Keyboard</h2>
-      <p style="margin:0">↑ ↓ to move, Enter to pick, Esc closes the menu only.</p>
-    </aside>
+    <div class="notes">
+      <div class="note">
+        <h2>Scope buttons</h2>
+        <dl>
+          <dt>Widening (pick one)</dt>
+          <dd>Three nested scopes: <i>Tracked + this space</i> → <i>+ Parent spaces</i> → <i>All spaces</i>. Each includes the one before it.</dd>
+          <dt>On/off chips</dt>
+          <dd><i>Tracked by parents</i>, <i>This space</i>, <i>Parent spaces</i>, <i>Other spaces</i>, each switched on or off. The list is everything that's on.</dd>
+          <dt>Pick spaces</dt>
+          <dd><i>Tracked by parents</i> plus one chip per space: this one, then the parent chain's, then <i>+ more</i> for the rest.</dd>
+          <dt>None (v1 sections)</dt>
+          <dd>The earlier design for comparison: fixed sections, everything else only by search.</dd>
+        </dl>
+        <p class="muted" style="margin:8px 0 0">All start at <b>Tracked by parents + this space</b>. Searching shows matches outside the scope as
+          "N more matches outside this scope · Include them". Pasting a key or URL looks it up anywhere.</p>
+      </div>
+      <div class="note">
+        <h2>Layouts</h2>
+        <dl>
+          <dt>Two-pane browser</dt><dd>Looks like an ordinary select until you open it. Clicking or tabbing into the field
+            expands a two-pane browser under it, like a big dropdown menu. The left menu lists only views tied to this work item:
+            <i>Tracked by parents</i>, <i>This space</i>, then <i>Parent spaces</i>: the parents' spaces and, last, the central space
+            (<i>Global KPIs</i>, if the site has one), the top of every chain. Then <i>All KPIs</i>. Other spaces (there may be hundreds) aren't listed: reach them through All KPIs.
+            Typing searches <b>the selected view</b>, and says how many matches are elsewhere ("Search all KPIs").
+            All KPIs searches everything and has a <b>Space</b> filter you can type into. Picking a KPI, Esc or clicking outside collapses it.
+            The scope-button choice doesn't apply.</dd>
+          <dt>Two-line list</dt><dd>The earlier option design: the KPI and its unit, plus a second line when there's a note.</dd>
+          <dt>Columns</dt><dd>One line per KPI: <i>KPI · Unit</i>, plus <i>Target</i> in "Tracked by parents".</dd>
+        </dl>
+      </div>
+      <div class="note">
+        <h2>Rules that hold in every variation</h2>
+        <ol>
+          <li><b>Work items show as <i>{type icon} {key} {summary}</i></b>, like Jira Plans: KPIs and the parent work items.
+            Icons arrive from the backend as inlined <code>data:</code> URLs (<code>inlineIssueTypeIcons</code>).</li>
+          <li><b>"Tracked by parents" is grouped by work item.</b> Each parent work item, nearest first, is a shaded band
+            (not selectable). Every KPI it targets is a top-level row under the band; only their same-space sub-KPIs are indented.
+            Targets never nest under each other, and each shows the target the work item set. A KPI targeted at two levels shows under both.</li>
+          <li><b>Sub-KPIs start collapsed</b>, everywhere: click a KPI's chevron (or press → / ←) to open or close it without picking it.
+            Searching opens the path to each match.</li>
+          <li><b>Nesting</b> works as it does today: children are indented under their parent when both are listed. A KPI whose parent
+            KPI isn't listed (e.g. it's in another space) is a top-level row, with no note.</li>
+          <li>KPIs <b>already tracked</b> on the work item are left out.</li>
+          <li><b>Paste a key or URL</b> to jump to a KPI anywhere. Old keys of moved KPIs resolve (stage 03).</li>
+        </ol>
+      </div>
+      <div class="note">
+        <h2>Data</h2>
+        <ul>
+          <li>Chain: <code>TEAM-123</code> Story → <code>PROG-45</code> Epic (targets Conversion rate, Checkout conversion)
+            → <code>PORT-7</code> Initiative (targets Net revenue, Conversion rate).</li>
+          <li>Spaces you can browse: TEAM, PROG, PORT, OPS, MKT, NEW. <b>FIN</b> is hidden from you.</li>
+          <li><code>KPI-5</code> is the old key of <code>PORT-20</code>.</li>
+          <li>Keyboard: ↑ ↓ to move, Enter to pick, Esc closes the menu (or clears the search in the browser).</li>
+        </ul>
+      </div>
+    </div>
   </main>
+  <div id="tip" role="tooltip" hidden></div>
 
   <script>
     // ── Data ─────────────────────────────────────────────────────────────
+    // Issue-type icons, as the backend hands them to the UI: inlined `data:` URLs
+    // (jira.ts inlineIssueTypeIcons; see specs/forge-icon-cors-proxy.md). These are
+    // bitovi-training's real Story, Epic and Initiative icons, and a proposed target
+    // icon for the KPI work type (Settings would set it as the type's avatar, stage 04).
+    const ICONS = {
+      Story: 'data:image/svg+xml;base64,PHN2ZyBmaWxsPSJub25lIiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICAgICAgIGQ9Im00Ljk4MjkxIDIuNWMtLjI3NjE0IDAtLjUuMjIzODYtLjUuNXY5LjgwNTlsMy41MTcyNC0yLjQ3MjcgMy41MTc3NSAyLjQ3Mjh2LTkuODA2YzAtLjI3NjE0LS4yMjM5LS41LS41LS41em0tMiAuNWMwLTEuMTA0NTcuODk1NDMtMiAyLTJoNi4wMzQ5OWMxLjEwNDYgMCAyIC44OTU0MyAyIDJ2MTEuMjVjMCAuMjc5OS0uMTU1OS41MzY2LS40MDQzLjY2NTZzLS41NDguMTA5LS43NzctLjA1MmwtMy44MzY0LTIuNjk2OC0zLjgzNTk1IDIuNjk2OGMtLjIyOS4xNjA5LS41Mjg2LjE4MS0uNzc3MDIuMDUyLS4yNDg0My0uMTI5LS40MDQzMi0uMzg1Ny0uNDA0MzItLjY2NTZ6IgogICAgICAgICAgZmlsbD0iIzZhOWEyMyIgZmlsbC1ydWxlPSJldmVub2RkIi8+Cjwvc3ZnPgo=',
+      Epic: 'data:image/svg+xml;base64,PHN2ZyBmaWxsPSJub25lIiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICAgICAgIGQ9Im0xMC4yNzEuMDUwNjU2Yy4yODg3LjExMTg3MS40NzkuMzg5NjkuNDc5LjY5OTM0NHY0LjYzNTE1bDMuMTQ3MS42Mjk0MWMuMjY1Mi4wNTMwMy40ODEyLjI0NDY5LjU2NTUuNTAxNjFzLjAyMzguNTM5MzMtLjE1ODQuNzM5MTRsLTcuNzQ5OTcgOC40OTk5OWMtLjIwODYzLjIyODgtLjUzNjQ0LjMwNTktLjgyNTE3LjE5NC0uMjg4NzQtLjExMTgtLjQ3OTA1LS4zODk2LS40NzkwNS0uNjk5M3YtNC42MzUxbC0zLjE0NzA4LS42Mjk0N2MtLjI2NTE1LS4wNTMwMy0uNDgxMjMtLjI0NDY4LS41NjU1My0uNTAxNi0uMDg0MzEtLjI1NjkyLS4wMjM3OS0uNTM5MzMuMTU4NC0uNzM5MTVsNy43NS04LjQ5OTk5NmMuMjA4NjMtLjIyODgyMDEuNTM2NDMtLjMwNTg5OS44MjUyLS4xOTQwMjh6bS02LjU3Mjc2IDguNzI0MTM0IDMuMDUxNzcuNjEwMzZ2My45MjkxNWw1LjU1MTc5LTYuMDg5MDktMy4wNTE3OS0uNjEwMzZ2LTMuOTI5MXoiCiAgICAgICAgICBmaWxsPSIjYmY2M2YzIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiLz4KPC9zdmc+Cg==',
+      Initiative: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIgogICAgICAgICAgZD0iTTggMS41QzUuNTE0NzIgMS41IDMuNSAzLjUxNDcyIDMuNSA2QzMuNSA3LjU1MjU1IDQuMjg1NTkgOC45MjE4NyA1LjQ4NDQxIDkuNzMxODNDNi4wMjg5OSAxMC4wOTk4IDYuNDg2MzMgMTAuNzI2IDYuNDk5NyAxMS41SDkuNTAwM0M5LjUxMzY3IDEwLjcyNiA5Ljk3MTAxIDEwLjA5OTggMTAuNTE1NiA5LjczMTgzQzExLjcxNDQgOC45MjE4NyAxMi41IDcuNTUyNTUgMTIuNSA2QzEyLjUgMy41MTQ3MiAxMC40ODUzIDEuNSA4IDEuNVpNOS41IDEzSDYuNVYxNEM2LjUgMTQuMjc2MSA2LjcyMzg2IDE0LjUgNyAxNC41SDlDOS4yNzYxNCAxNC41IDkuNSAxNC4yNzYxIDkuNSAxNFYxM1pNMiA2QzIgMi42ODYyOSA0LjY4NjI5IDAgOCAwQzExLjMxMzcgMCAxNCAyLjY4NjI5IDE0IDZDMTQgOC4wNzE3IDEyLjk0OTQgOS44OTc3NSAxMS4zNTUzIDEwLjk3NDdDMTEuMTA4NCAxMS4xNDE2IDExIDExLjM1OTcgMTEgMTEuNTM0OFYxNEMxMSAxNS4xMDQ2IDEwLjEwNDYgMTYgOSAxNkg3QzUuODk1NDMgMTYgNSAxNS4xMDQ2IDUgMTRWMTEuNTM0OEM1IDExLjM1OTcgNC44OTE2MyAxMS4xNDE2IDQuNjQ0NjYgMTAuOTc0N0MzLjA1MDYyIDkuODk3NzUgMiA4LjA3MTcgMiA2WiIKICAgICAgICAgIGZpbGw9IiNCMzg2MDAiLz4KPC9zdmc+Cg==',
+      KPI: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8Y2lyY2xlIGN4PSI4IiBjeT0iOCIgcj0iNi43NSIgc3Ryb2tlPSIjQzkzNzJDIiBzdHJva2Utd2lkdGg9IjEuNSIvPgogIDxjaXJjbGUgY3g9IjgiIGN5PSI4IiByPSIzLjc1IiBzdHJva2U9IiNDOTM3MkMiIHN0cm9rZS13aWR0aD0iMS41Ii8+CiAgPGNpcmNsZSBjeD0iOCIgY3k9IjgiIHI9IjEuMjUiIGZpbGw9IiNDOTM3MkMiLz4KPC9zdmc+Cg==',
+    };
+    // The picked KPI as the field shows it, after its type icon.
+    const selectedText = (k) => `${k.key} ${k.name}${k.unit ? ` (${k.unit})` : ''}`;
+
     const SPACES = {
       TEAM: 'Checkout Team', PROG: 'Growth Program', PORT: 'Company Portfolio',
       OPS: 'Platform Ops', MKT: 'Marketing', NEW: 'Loyalty Squad', FIN: 'Finance',
+      KPI: 'Global KPIs', // the central space (04): Settings' home for company-wide KPIs
+      // A few of the many other spaces a real site has; only reachable through All KPIs.
+      HR: 'People Ops', SEC: 'Security', DATA: 'Data Platform', MOB: 'Mobile App', WEB: 'Web Storefront',
+      SUP: 'Customer Support', LOG: 'Logistics', LEGAL: 'Legal',
     };
-    const BROWSABLE = new Set(['TEAM', 'PROG', 'PORT', 'OPS', 'MKT', 'NEW']);
+    const CENTRAL_KEY = 'KPI';
+    const BROWSABLE = new Set(['TEAM', 'PROG', 'PORT', 'OPS', 'MKT', 'NEW', 'KPI', 'HR', 'SEC', 'DATA', 'MOB', 'WEB', 'SUP', 'LOG', 'LEGAL']);
 
     // Array order = rank order within siblings. `parent` is the KPI-tree parent (any space).
     const KPIS = [
@@ -241,6 +380,20 @@
       { key: 'MKT-10', name: 'Customer acquisition cost', unit: '$', parent: 'MKT-9' },
       { key: 'MKT-11', name: 'Conversion from paid ads', unit: '%', parent: 'MKT-9' },
       { key: 'FIN-2', name: 'Operating cash flow', unit: '$', parent: null }, // hidden from this user
+      { key: 'KPI-1', name: 'Revenue growth', unit: '%', parent: null },
+      { key: 'KPI-2', name: 'Gross retention', unit: '%', parent: null },
+      { key: 'KPI-3', name: 'Employee engagement', unit: 'score', parent: null },
+      { key: 'KPI-7', name: 'Customer satisfaction (CSAT)', unit: 'score', parent: null },
+      { key: 'HR-3', name: 'Time to hire', unit: 'days', parent: null },
+      { key: 'SEC-8', name: 'Critical vulnerabilities open', unit: 'count', parent: null },
+      { key: 'DATA-4', name: 'Pipeline freshness', unit: 'h', parent: null },
+      { key: 'MOB-6', name: 'App store rating', unit: 'score', parent: null },
+      { key: 'MOB-7', name: 'Mobile checkout conversion', unit: '%', parent: null },
+      { key: 'WEB-9', name: 'Page load (LCP)', unit: 's', parent: null },
+      { key: 'SUP-12', name: 'First response time', unit: 'h', parent: null },
+      { key: 'SUP-13', name: 'Ticket backlog', unit: 'count', parent: 'SUP-12' },
+      { key: 'LOG-2', name: 'On-time delivery', unit: '%', parent: null },
+      { key: 'LEGAL-1', name: 'Contract cycle time', unit: 'days', parent: null },
     ].map((k, i) => ({ ...k, space: k.key.split('-')[0], rank: i }));
     const KPI = new Map(KPIS.map((k) => [k.key, k]));
     const MOVED = { 'KPI-5': 'PORT-20' };
@@ -251,17 +404,29 @@
       'TEAM-123': { key: 'TEAM-123', type: 'Story', summary: 'Apple Pay at checkout', parent: 'PROG-45', targets: ['TEAM-503'] },
       'NEW-8': { key: 'NEW-8', type: 'Story', summary: 'Points on every order', parent: 'PROG-45', targets: [] },
     };
+    // The target each work item set on each KPI (its expected change and date), as the panel's
+    // target cards show it. The chain walk already reads these (kpi-assignments), so it's free.
+    const TARGET_VALUES = {
+      'PORT-7': { 'PORT-12': '+12% by Dec 31', 'PROG-210': '+3 pts by Dec 31' },
+      'PROG-45': { 'PROG-210': '+2 pts by Jun 30', 'TEAM-501': '+5% by Mar 31' },
+    };
     const spaceOf = (key) => key.split('-')[0];
 
     // ── State ────────────────────────────────────────────────────────────
     const state = {
-      scenario: 'TEAM-123', variant: 'A', subKpis: true,
+      scenario: 'TEAM-123', layout: 'twoPane', scopeStyle: 'widening',
+      level: 'mine',                          // widening: 'mine' | 'parents' | 'all'
+      chips: new Set(['mine', 'tracked']),    // on/off chips
+      spaces: new Set(), spacesTracked: true, moreSpaces: false, // pick spaces
+      nav: 'mine',                            // two-pane browser
+      central: true,                          // the site has a central space (04 Q5)
+      spaceFilter: null, spaceMenu: false, spaceFind: '', // All KPIs' space filter
+      expanded: new Set(),                    // KPI rows whose sub-KPIs are shown (`${scope}|${key}`)
       query: '', open: false, active: -1, selected: null,
-      expanded: new Set(), searchReadyFor: null, searchTimer: null,
-      currentValue: null, currentTimer: null,
+      searchReadyFor: null, searchTimer: null, currentValue: null, currentTimer: null,
     };
 
-    // ── Suggestion builder (mirrors stage 07's pure `buildKpiSuggestions`) ──
+    // ── Suggestion model (mirrors stage 07's pure `buildKpiSuggestions`) ──
     function chainOf(item) {
       const out = []; const seen = new Set([item.key]);
       let p = item.parent;
@@ -274,66 +439,58 @@
       const chain = chainOf(item);
       const excluded = new Set(item.targets);
       const visible = KPIS.filter((k) => BROWSABLE.has(k.space) && !excluded.has(k.key));
-
-      const trackedBy = new Map();
-      for (const anc of chain) for (const t of anc.targets) {
-        if (!trackedBy.has(t)) trackedBy.set(t, []);
-        trackedBy.get(t).push(anc);
-      }
+      const isVisible = new Set(visible.map((k) => k.key));
 
       const s1 = visible.filter((k) => k.space === own);
       const inS1 = new Set(s1.map((k) => k.key));
 
-      const s2keys = new Set(visible.filter((k) => trackedBy.has(k.key) && !inS1.has(k.key)).map((k) => k.key));
-      const subOf = new Map(); // key -> tracked ancestor it's a sub-KPI of
-      if (state.subKpis) {
-        const addDesc = (rootKey) => {
-          for (const k of visible) if (k.parent === rootKey && k.space === spaceOf(rootKey) && !inS1.has(k.key) && !s2keys.has(k.key)) {
-            s2keys.add(k.key); subOf.set(k.key, subOf.get(rootKey) ?? rootKey); addDesc(k.key);
-          }
-        };
-        for (const key of [...s2keys]) if (trackedBy.has(key)) addDesc(key);
-      }
+      // "Tracked by parents": one group per work item above this one, nearest first. Each KPI the work
+      // item targets is a top-level entry (targets never nest under each other, so every top-level row
+      // is a target); its same-space sub-KPIs nest under it. A KPI targeted at two levels is in both groups.
+      const trackedGroups = chain.map((anc) => {
+        const targets = anc.targets.filter((t) => isVisible.has(t));
+        const entries = targets.map((t) => {
+          const subs = new Set();
+          const addSubs = (root) => {
+            for (const k of visible) if (k.parent === root && k.space === spaceOf(root) && !subs.has(k.key) && !targets.includes(k.key)) { subs.add(k.key); addSubs(k.key); }
+          };
+          addSubs(t);
+          return { kpi: KPI.get(t), subs: visible.filter((k) => subs.has(k.key)) };
+        }).sort((a, b) => a.kpi.rank - b.kpi.rank);
+        return { item: anc, entries, kpis: entries.flatMap((e) => [e.kpi, ...e.subs]) };
+      }).filter((g) => g.entries.length);
+      const s2keys = new Set(trackedGroups.flatMap((g) => g.kpis.map((k) => k.key)));
       const s2 = visible.filter((k) => s2keys.has(k.key));
-      const inS2 = s2keys;
+      const nearCount = new Set([...inS1, ...s2keys]).size;
 
-      const s3 = visible.filter((k) => !inS1.has(k.key) && !inS2.has(k.key));
-      const chainSpaces = [...new Set(chain.map((a) => spaceOf(a.key)))].filter((s) => s !== own);
-
-      return { own, chain, trackedBy, subOf, s1, s2, s3, chainSpaces };
-    }
-
-    // Tree-order a set of same-space KPIs; nest only when the parent is in the same set.
-    function treeRows(kpis) {
-      const set = new Set(kpis.map((k) => k.key));
-      const kids = new Map();
-      const roots = [];
-      for (const k of [...kpis].sort((a, b) => a.rank - b.rank)) {
-        if (k.parent && set.has(k.parent)) { if (!kids.has(k.parent)) kids.set(k.parent, []); kids.get(k.parent).push(k); }
-        else roots.push(k);
-      }
-      const out = [];
-      const walk = (k, depth) => {
-        let hint = null;
-        if (depth === 0 && k.parent && KPI.has(k.parent)) {
-          const p = KPI.get(k.parent);
-          if (BROWSABLE.has(p.space)) hint = p.space === k.space ? `under ${p.name}` : `under ${p.space} · ${p.name}`;
-        }
-        out.push({ kpi: k, depth, hint });
-        for (const c of kids.get(k.key) ?? []) walk(c, depth + 1);
-      };
-      roots.forEach((r) => walk(r, 0));
-      return out;
+      const rest = visible.filter((k) => !inS1.has(k.key) && !s2keys.has(k.key));
+      const central = state.central && own !== CENTRAL_KEY ? CENTRAL_KEY : null;
+      const centralKpis = central ? visible.filter((k) => k.space === central) : [];
+      const chainSpaces = [...new Set(chain.map((a) => spaceOf(a.key)))].filter((s) => s !== own && s !== central);
+      const parents = rest.filter((k) => chainSpaces.includes(k.space));
+      const others = rest.filter((k) => !chainSpaces.includes(k.space));
+      const otherSpaces = [...new Set(visible.map((k) => k.space))].filter((s) => s !== own && s !== central && !chainSpaces.includes(s)).sort();
+      const spaceOrder = [own, ...chainSpaces, ...(central ? [central] : []), ...otherSpaces];
+      const category = (k) => s2keys.has(k.key) ? 'tracked' : inS1.has(k.key) ? 'mine' : k.space === central ? 'central' : chainSpaces.includes(k.space) ? 'parents' : 'others';
+      return { own, chain, trackedGroups, visible, s1, s2, s2keys, nearCount, central, centralKpis, parents, others, chainSpaces, otherSpaces, spaceOrder, category };
     }
 
     function groupBySpace(kpis, spaceOrder) {
       const by = new Map();
       for (const k of kpis) { if (!by.has(k.space)) by.set(k.space, []); by.get(k.space).push(k); }
       const order = [...new Set([...(spaceOrder ?? []), ...[...by.keys()].sort()])].filter((s) => by.has(s));
-      return order.map((space) => ({ space, rows: treeRows(by.get(space)) }));
+      return order.map((space) => ({ space, kpis: by.get(space) }));
     }
 
-    // ── Key / URL parsing (stage 07 `parseKpiRefInput`) ───────────────────
+    // Search matches plus their ancestors within `pool`, so a matching sub-KPI still shows under its parent.
+    function withAncestors(hits, pool) {
+      const byKey = new Map(pool.map((k) => [k.key, k]));
+      const out = new Set(hits.map((k) => k.key));
+      for (const h of hits) { let p = byKey.get(h.parent); while (p && !out.has(p.key)) { out.add(p.key); p = byKey.get(p.parent); } }
+      return pool.filter((k) => out.has(k.key));
+    }
+
+    // ── Key / URL parsing (stage 07 `parseKpiRefInput`) and lookup ────────
     function parseRef(text) {
       const t = text.trim();
       const url = t.match(/\/browse\/([A-Z][A-Z0-9_]*-\d+)/i);
@@ -341,19 +498,73 @@
       if (/^[A-Z][A-Z0-9_]*-\d+$/i.test(t)) return t.toUpperCase();
       return null;
     }
-
+    const CATEGORY_LABEL = { mine: 'In this space', tracked: 'Tracked by parents', central: 'Global', parents: 'In a parent space', others: 'In another space' };
     function lookup(ref, item, model) {
       const movedTo = MOVED[ref];
       const key = movedTo ?? ref;
-      if (WORK[key]) return { kind: 'notKpi', ref, typeName: WORK[key].type };
+      if (WORK[key]) return { kind: 'notKpi', ref, item: WORK[key] };
       const k = KPI.get(key);
       if (!k || !BROWSABLE.has(k.space)) return { kind: 'hidden', ref };
       if (item.targets.includes(key)) return { kind: 'tracked', ref, kpi: k };
-      const section = model.s1.includes(k) ? 'In your space' : model.s2.includes(k) ? 'Tracked above you' : 'Other KPIs';
-      return { kind: 'kpi', ref, kpi: k, movedFrom: movedTo ? ref : null, section };
+      return { kind: 'kpi', ref, kpi: k, movedFrom: movedTo ? ref : null, where: CATEGORY_LABEL[model.category(k)] };
     }
 
-    // ── Rendering ────────────────────────────────────────────────────────
+    // ── Scope: which sections the dropdown includes ─────────────────────
+    function sectionDefs(model, item) {
+      const plural = (n) => `${n} KPI${n === 1 ? '' : 's'}`;
+      return {
+        mine: { id: 'mine', title: `In ${model.own} · ${SPACES[model.own]}`, small: plural(model.s1.length), kpis: model.s1, order: [model.own], headers: false,
+          empty: `No KPIs in ${esc(SPACES[model.own])} yet. <a data-action="create">Create one in ${model.own}</a>` },
+        tracked: { id: 'tracked', title: 'Tracked by parents', groups: model.trackedGroups, kpis: model.s2,
+          small: model.chain.length ? `${model.chain.length} parent${model.chain.length === 1 ? '' : 's'} of ${item.key}` : '',
+          empty: model.chain.length ? `No parent of ${esc(item.key)} has a KPI target that isn't already tracked here.` : `${esc(item.key)} is at the top of its hierarchy, so it has no parents.` },
+        parents: { id: 'parents', title: 'In parent spaces', small: model.chainSpaces.join(', '), kpis: model.parents, order: model.chainSpaces, headers: true,
+          empty: model.chainSpaces.length ? 'Every KPI in the parent spaces is already listed.' : 'There are no parent spaces.' },
+        central: model.central ? { id: 'central', title: `${model.central} · ${SPACES[model.central]}`, small: plural(model.centralKpis.length),
+          kpis: model.centralKpis, order: [model.central], headers: false, empty: 'No company-wide KPIs yet.' } : null,
+        others: { id: 'others', title: 'In other spaces', small: model.otherSpaces.join(', '), kpis: model.others, order: model.otherSpaces, headers: true,
+          empty: 'There are no other spaces.' },
+      };
+    }
+
+    function scopedSections(model, item, q) {
+      const d = sectionDefs(model, item);
+      switch (state.scopeStyle) {
+        case 'widening':
+          return [d.tracked, d.mine, ...(state.level !== 'mine' ? [d.parents] : []), ...(state.level === 'all' ? [d.others] : [])];
+        case 'chips':
+          return ['mine', 'tracked', 'parents', 'others'].filter((c) => state.chips.has(c)).map((c) => d[c]);
+        case 'spaces': {
+          const out = [];
+          if (state.spacesTracked) out.push(d.tracked);
+          if (state.spaces.has(model.own)) out.push(d.mine);
+          const sel = model.spaceOrder.filter((s) => s !== model.own && state.spaces.has(s));
+          if (sel.length) {
+            const kpis = model.visible.filter((k) => sel.includes(k.space) && !(state.spacesTracked && model.s2keys.has(k.key)));
+            out.push({ id: 'picked', title: 'In selected spaces', small: sel.join(', '), kpis, order: sel, headers: true,
+              empty: 'Everything in these spaces is already listed.' });
+          }
+          return out;
+        }
+        default: // 'none': the v1 sections (variant A: parent spaces listed, other spaces by search)
+          return q ? [d.tracked, d.mine, d.parents, d.others] : [d.tracked, d.mine, d.parents];
+      }
+    }
+
+    // Widen the scope just enough to include the given KPIs.
+    function includeKpis(model, kpis) {
+      if (state.scopeStyle === 'widening') {
+        if (kpis.some((k) => model.category(k) === 'others')) state.level = 'all';
+        else if (kpis.some((k) => model.category(k) === 'parents') && state.level === 'mine') state.level = 'parents';
+      } else if (state.scopeStyle === 'chips') {
+        for (const k of kpis) state.chips.add(model.category(k));
+      } else if (state.scopeStyle === 'spaces') {
+        for (const k of kpis) { if (model.s2keys.has(k.key)) state.spacesTracked = true; else state.spaces.add(k.space); }
+        if (kpis.some((k) => model.otherSpaces.includes(k.space))) state.moreSpaces = true;
+      }
+    }
+
+    // ── Rendering helpers ────────────────────────────────────────────────
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const hl = (text, q) => {
@@ -362,212 +573,454 @@
       if (i < 0) return esc(text);
       return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length));
     };
-    const typeDot = (t) => `<span class="type ${t}" title="${t}"></span>`;
+    const typeIcon = (type) => `<img class="ti" src="${ICONS[type]}" alt="${type}" data-tip="${type}" width="16" height="16" />`;
+    // A work item the way Jira Plans shows one: `{type icon} {key} {summary}`. Used for KPIs and for chain issues.
+    const workItem = (type, key, summary, { q = '', small = false, plain = false } = {}) =>
+      `<span class="wi${small ? ' small' : ''}">${typeIcon(type)}<span class="wi-key">${hl(key, q)}</span><span class="wi-sum${plain ? ' plain' : ''}">${hl(summary, q)}</span></span>`;
+    const kpiItem = (k, opts) => workItem('KPI', k.key, k.name, opts);
     const matches = (k, q) => !q || k.name.toLowerCase().includes(q.toLowerCase()) || k.key.toLowerCase().includes(q.toLowerCase());
+    const useColumns = () => state.layout !== 'twoLine';
 
-    let optionKeys = []; // flat list of selectable keys, in menu order
+    let optionKeys = []; // flat list of selectable keys, in list order
+    let optionToggles = []; // per option: its expand/collapse id, or null if it has no sub-KPIs
 
+    // Plans' chevrons (Atlaskit chevron-right / chevron-down).
+    const CHEV_RIGHT = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="m6.03 1.47 6 6a.75.75 0 0 1 .052 1.004l-.052.056-6 6-1.06-1.06L10.44 8 4.97 2.53z"/></svg>';
+    const CHEV_DOWN = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="m14.53 6.03-6 6a.75.75 0 0 1-1.004.052l-.056-.052-6-6 1.06-1.06L8 10.44l5.47-5.47z"/></svg>';
+
+    // Only a pasted key's "where it was found" note uses the hint now.
+    function contextBits(row) {
+      return row.hint ? [`<span class="hint">${esc(row.hint)}</span>`] : [];
+    }
+
+    // row: { kpi, depth, hint?, toggle?: { id, open }, target?: string (the target the work item above set) }
     function optionHtml(row, model, q) {
       const k = row.kpi;
       const idx = optionKeys.push(k.key) - 1;
-      const tb = model.trackedBy.get(k.key);
-      const sub = model.subOf.get(k.key);
-      const bits = [];
-      if (tb) bits.push(`<span class="badge">${typeDot(tb[0].type)}Tracked by ${tb.map((a) => esc(a.key)).join(', ')}</span>`);
-      if (sub && !tb) bits.push(`<span class="sub-tag">sub-KPI of ${esc(KPI.get(sub).name)}</span>`);
-      if (row.hint) bits.push(`<span class="hint">${esc(row.hint)}</span>`);
-      const cls = ['opt', idx === state.active ? 'active' : '', state.selected === k.key ? 'selected' : ''].join(' ');
-      return `<div class="${cls}" role="option" id="opt-${idx}" data-idx="${idx}" aria-selected="${state.selected === k.key}"
-        style="padding-left:${12 + row.depth * 14}px">
-        <div class="line1"><span class="name">${hl(k.name, q)}</span>${k.unit ? `<span class="unit">(${esc(k.unit)})</span>` : ''}<span class="key">${hl(k.key, q)}</span></div>
+      optionToggles[idx] = row.toggle?.id ?? null;
+      const bits = contextBits(row);
+      const cls = ['opt', useColumns() ? 'cols' : '', idx === state.active ? 'active' : '', state.selected === k.key ? 'selected' : ''].join(' ');
+      const attrs = `class="${cls}" role="option" id="opt-${idx}" data-idx="${idx}" aria-selected="${state.selected === k.key}"`;
+      const tgl = row.toggle
+        ? `<button type="button" class="tgl" data-toggle="${esc(row.toggle.id)}" aria-expanded="${row.toggle.open}" aria-label="${row.toggle.open ? 'Collapse' : 'Expand'} ${esc(k.name)}">${row.toggle.open ? CHEV_DOWN : CHEV_RIGHT}</button>`
+        : '<span class="tgl-sp"></span>';
+      if (useColumns()) {
+        return `<div ${attrs.replace('class="opt cols', `class="opt cols${row.withTarget ? ' t3' : ''}`)}>
+          <span class="c-name" style="padding-left:${row.depth * 24}px">${tgl}${kpiItem(k, { q })}${bits.length ? `<span class="c-hint">${bits.join('')}</span>` : ''}</span>
+          <span class="unit muted">${esc(k.unit)}</span>
+          ${row.withTarget ? `<span class="c-target">${row.target ? esc(row.target) : ''}</span>` : ''}
+        </div>`;
+      }
+      return `<div ${attrs} style="padding-left:${12 + row.depth * 24}px">
+        <div class="line1">${tgl}${kpiItem(k, { q })}${k.unit ? `<span class="unit">(${esc(k.unit)})</span>` : ''}${row.target ? `<span class="c-target">${esc(row.target)}</span>` : ''}</div>
         ${bits.length ? `<div class="line2">${bits.join('')}</div>` : ''}
       </div>`;
     }
 
-    function groupHtml(g, model, q, { showHeader, collapsible }) {
-      const rows = g.rows;
+    // Render KPIs as a collapsible tree: a KPI with sub-KPIs gets a chevron; its sub-KPIs show only
+    // when it's expanded (or while searching, so matches are visible). `scope` keeps expand state
+    // separate for a KPI that appears in several places.
+    function treeHtml(kpis, model, q, scope, { baseDepth = 0, targetOf = null } = {}) {
       let html = '';
-      if (showHeader) {
-        const open = !collapsible || state.expanded.has(g.space) || q;
-        html += `<div class="grp-h ${collapsible && !q ? 'toggle' : ''}" ${collapsible && !q ? `data-toggle="${g.space}"` : ''}>
-          ${collapsible && !q ? (open ? '▾' : '▸') : ''}<span class="space-key">${g.space}</span>${esc(SPACES[g.space])}
-          ${collapsible ? `<span class="count">${rows.length}</span>` : ''}</div>`;
-        if (!open) return html;
+      const set = new Set(kpis.map((k) => k.key));
+      const kids = new Map();
+      const roots = [];
+      for (const k of [...kpis].sort((a, b) => a.rank - b.rank)) {
+        if (k.parent && set.has(k.parent)) { if (!kids.has(k.parent)) kids.set(k.parent, []); kids.get(k.parent).push(k); }
+        else roots.push(k);
       }
-      for (const r of rows) html += optionHtml(r, model, q);
+      const walk = (k, depth) => {
+        const ch = kids.get(k.key) ?? [];
+        const id = `${scope}|${k.key}`;
+        const open = !!q || state.expanded.has(id);
+        html += optionHtml({ kpi: k, depth, hint: null, toggle: ch.length ? { id, open } : null, withTarget: !!targetOf, target: depth === baseDepth ? targetOf?.(k) : null }, model, q);
+        if (open) for (const c of ch) walk(c, depth + 1);
+      };
+      roots.forEach((r) => walk(r, baseDepth));
       return html;
     }
 
-    function filterRows(kpis, q) {
-      // Keep a match's same-space ancestors that also match only; others become roots with hints (treeRows handles it).
-      return kpis.filter((k) => matches(k, q));
+    function groupHtml(g, model, q, showHeader, scope) {
+      let html = '';
+      if (showHeader) html += `<div class="grp-h"><span class="space-key">${g.space}</span>${esc(SPACES[g.space])}</div>`;
+      return html + treeHtml(g.kpis, model, q, `${scope}|${g.space}`);
     }
 
-    function renderMenu() {
-      const item = WORK[state.scenario];
-      const model = buildModel(item);
-      const q = state.query.trim();
-      const ref = parseRef(q);
-      optionKeys = [];
+    // A section's rows: "Tracked by parents" is grouped by the parent work items (each one a
+    // non-selectable band; the KPIs it targets are the top-level rows under it, each showing the
+    // target the work item set, with sub-KPIs collapsed under them); every other section is grouped
+    // by space.
+    function sectionBodyHtml(s, model, q) {
+      if (s.groups) {
+        let html = '';
+        let first = true;
+        for (const g of s.groups) {
+          let rows = '';
+          for (const e of g.entries) {
+            const pool = [e.kpi, ...e.subs];
+            const hits = pool.filter((k) => matches(k, q));
+            if (!hits.length) continue;
+            const shown = q ? [...new Set([e.kpi, ...withAncestors(hits, pool)])] : pool;
+            rows += treeHtml(shown, model, q, `tracked|${g.item.key}`, { targetOf: (k) => TARGET_VALUES[g.item.key]?.[k.key] ?? null });
+          }
+          if (!rows) continue;
+          html += `<div class="grp-h item${first ? ' first' : ''}">${workItem(g.item.type, g.item.key, g.item.summary)}</div>${rows}`;
+          first = false;
+        }
+        return html;
+      }
+      const hits = s.kpis.filter((k) => matches(k, q));
+      const shown = q ? withAncestors(hits, s.kpis) : s.kpis;
+      return groupBySpace(shown, s.order).map((g) => groupHtml(g, model, q, s.headers, s.id ?? 'list')).join('');
+    }
+
+    const colHeader = (withTarget = false) => useColumns()
+      ? `<div class="col-h cols${withTarget ? ' t3' : ''}"><span>KPI</span><span>Unit</span>${withTarget ? '<span>Target</span>' : ''}</div>` : '';
+
+    function lookupHtml(ref, item, model) {
+      const r = lookup(ref, item, model);
+      let html = `<div class="sec-h first">Pasted key<small>looked up directly, in any space</small></div>`;
+      if (r.kind === 'kpi') {
+        html += optionHtml({ kpi: r.kpi, depth: 0, hint: `${r.where} · ${r.kpi.space}` }, model, '');
+        if (r.movedFrom) html += `<div class="msg warn">${esc(r.movedFrom)} moved to ${esc(r.kpi.key)}. Showing it under its new key.</div>`;
+      } else if (r.kind === 'notKpi') {
+        html += `<div class="msg err">${workItem(r.item.type, r.item.key, r.item.summary, { plain: true })} is ${/^[AEIOU]/.test(r.item.type) ? 'an' : 'a'} ${esc(r.item.type)}, not a KPI.</div>`;
+      } else if (r.kind === 'tracked') {
+        html += `<div class="msg">${kpiItem(r.kpi, { plain: true })} is already tracked on this work item.</div>`;
+      } else {
+        html += `<div class="msg err">You don't have access to ${esc(r.ref)}, or it doesn't exist.</div>`;
+      }
+      return html;
+    }
+
+    // ── Picker shell (rebuilt when the layout changes) ───────────────────
+    // Every layout is a select-like field. Opening it shows a dropdown menu, or, in the
+    // two-pane layout, expands the two-pane browser under the field in its place.
+    function renderPicker() {
+      const twoPane = state.layout === 'twoPane';
+      $('picker').innerHTML = `<div class="combo" id="combo">
+          ${twoPane ? '' : '<div class="scope" id="scopeBar"></div>'}
+          <label class="lbl" for="kpiInput">KPI</label>
+          <div class="combo-input">
+            <img id="selIcon" class="ti" src="${ICONS.KPI}" alt="KPI" data-tip="KPI" width="16" height="16" hidden />
+            <input id="kpiInput" role="combobox" aria-expanded="false" aria-controls="kpiList" aria-autocomplete="list"
+              autocomplete="off" placeholder="Choose KPI, search, or paste a key…" />
+            <span class="clear" id="clearBtn" title="Clear" hidden>×</span>
+            <span class="chev" id="chevBtn" aria-hidden="true">▼</span>
+          </div>
+          ${twoPane
+            ? `<div class="browser pop" id="browserBox" hidden>
+                <nav class="bnav" id="bnav" aria-label="KPI views"></nav>
+                <div class="bmain">
+                  <div class="bfilter" id="bfilter" hidden></div>
+                  <div class="blist" id="kpiList" role="listbox"></div>
+                </div>
+              </div>`
+            : '<div class="menu" id="kpiList" role="listbox" hidden></div>'}
+        </div>`;
+      bindInput();
+      if (state.selected) $('kpiInput').value = selectedText(KPI.get(state.selected));
+      renderScope();
+      renderList();
+      renderPicked();
+    }
+
+    // ── Scope bar ────────────────────────────────────────────────────────
+    function renderScope() {
+      const bar = $('scopeBar');
+      if (!bar) return;
+      const model = buildModel(WORK[state.scenario]);
+      const n = (x) => `<span class="n">${x}</span>`;
       let html = '';
-
-      // Pasted key / URL → direct lookup.
-      if (ref) {
-        const r = lookup(ref, item, model);
-        html += `<div class="sec-h first">Pasted key<small>looked up directly</small></div>`;
-        if (r.kind === 'kpi') {
-          html += optionHtml({ kpi: r.kpi, depth: 0, hint: `in ${r.section} · ${r.kpi.space}` }, model, '');
-          if (r.movedFrom) html += `<div class="msg warn">${esc(r.movedFrom)} moved to ${esc(r.kpi.key)}. Showing it under its new key.</div>`;
-        } else if (r.kind === 'notKpi') {
-          html += `<div class="msg err">${esc(r.ref)} is ${/^[AEIOU]/.test(r.typeName) ? 'an' : 'a'} ${esc(r.typeName)}, not a KPI.</div>`;
-        } else if (r.kind === 'tracked') {
-          html += `<div class="msg">${esc(r.kpi.key)} · ${esc(r.kpi.name)} is already tracked on this work item.</div>`;
-        } else {
-          html += `<div class="msg err">You don't have access to ${esc(r.ref)}, or it doesn't exist.</div>`;
-        }
-        $('kpiMenu').innerHTML = html;
-        return;
-      }
-
-      // 1 · In your space
-      const s1 = filterRows(model.s1, q);
-      html += `<div class="sec-h first">In ${model.own} · ${esc(SPACES[model.own])}<small>${model.s1.length} KPI${model.s1.length === 1 ? '' : 's'}</small></div>`;
-      if (model.s1.length === 0) {
-        html += `<div class="msg">No KPIs in ${esc(SPACES[model.own])} yet. <a data-action="create">Create one in ${model.own}</a> <span class="hint">(Q6)</span></div>`;
-      } else if (s1.length === 0) {
-        html += `<div class="msg">No matches in ${model.own}.</div>`;
+      if (state.scopeStyle === 'widening') {
+        const levels = [
+          ['mine', `Tracked + this space`, model.nearCount],
+          ['parents', `+ Parent spaces`, model.nearCount + model.parents.length],
+          ['all', `All spaces`, model.visible.length],
+        ];
+        html = `<span class="scope-l">Show</span><div class="seg">${levels.map(([v, label, c]) => {
+          const off = v === 'parents' && !model.chainSpaces.length;
+          return `<button type="button" data-scope="level:${v}" aria-pressed="${state.level === v}" ${off ? 'disabled title="No parent spaces"' : ''}>${label}${n(c)}</button>`;
+        }).join('')}</div>`;
+      } else if (state.scopeStyle === 'chips') {
+        const chips = [
+          ['tracked', 'Tracked by parents', model.s2.length],
+          ['mine', `This space · ${model.own}`, model.s1.length],
+          ['parents', 'Parent spaces', model.parents.length],
+          ['others', 'Other spaces', model.others.length],
+        ];
+        html = `<span class="scope-l">Include</span>${chips.map(([v, label, c]) => {
+          const on = state.chips.has(v);
+          const off = v === 'parents' && !model.chainSpaces.length;
+          return `<button type="button" class="pill" data-scope="chip:${v}" aria-pressed="${on}" ${off ? 'disabled title="No parent spaces"' : ''}><span class="ck">${on ? '✓' : ''}</span>${label}${n(c)}</button>`;
+        }).join('')}`;
+      } else if (state.scopeStyle === 'spaces') {
+        const countIn = (s) => model.visible.filter((k) => k.space === s).length;
+        const pill = (s, extra = '') => {
+          const on = state.spaces.has(s);
+          return `<button type="button" class="pill" data-scope="space:${s}" aria-pressed="${on}" title="${esc(SPACES[s])}${extra}"><span class="ck">${on ? '✓' : ''}</span><span class="sk">${s}</span>${n(countIn(s))}</button>`;
+        };
+        html = `<span class="scope-l">Include</span>
+          <button type="button" class="pill" data-scope="tracked" aria-pressed="${state.spacesTracked}"><span class="ck">${state.spacesTracked ? '✓' : ''}</span>Tracked by parents${n(model.s2.length)}</button>
+          <span class="divider"></span>
+          ${pill(model.own, ' (this space)')}
+          ${model.chainSpaces.map((s) => pill(s, ' (parent space)')).join('')}
+          ${state.moreSpaces
+            ? model.otherSpaces.map((s) => pill(s)).join('') + `<button type="button" class="pill more" data-scope="more">fewer</button>`
+            : model.otherSpaces.length ? `<button type="button" class="pill more" data-scope="more">+ ${model.otherSpaces.length} more spaces</button>` : ''}`;
       } else {
-        for (const g of groupBySpace(s1, [model.own])) html += groupHtml(g, model, q, { showHeader: false });
+        html = '';
       }
+      bar.innerHTML = html;
+      bar.hidden = !html;
+    }
 
-      // 2 · Tracked above you
-      const s2 = filterRows(model.s2, q);
-      const chainLabel = model.chain.map((a) => a.key).join(' → ');
-      html += `<div class="sec-h">Tracked above you<small>${model.chain.length ? esc(chainLabel) : ''}</small></div>`;
-      if (model.chain.length === 0) {
-        html += `<div class="msg">${esc(item.key)} is at the top of its hierarchy, so nothing is tracked above it.</div>`;
-      } else if (model.s2.length === 0) {
-        html += `<div class="msg">Everything tracked above is already listed or tracked here.</div>`;
-      } else if (s2.length === 0) {
-        html += `<div class="msg">No matches tracked above.</div>`;
-      } else {
-        const spaceOrder = model.chain.map((a) => spaceOf(a.key));
-        for (const g of groupBySpace(s2, spaceOrder)) html += groupHtml(g, model, q, { showHeader: true });
-      }
+    function onScope(token) {
+      const [kind, v] = token.split(':');
+      if (kind === 'level') state.level = v;
+      else if (kind === 'chip') state.chips.has(v) ? state.chips.delete(v) : state.chips.add(v);
+      else if (kind === 'space') state.spaces.has(v) ? state.spaces.delete(v) : state.spaces.add(v);
+      else if (kind === 'tracked') state.spacesTracked = !state.spacesTracked;
+      else if (kind === 'more') state.moreSpaces = !state.moreSpaces;
+      state.active = -1;
+      renderScope();
+      setOpen(true);
+    }
 
-      // 3 · Other KPIs you can access
-      const otherSpaces = [...new Set(model.s3.map((k) => k.space))];
-      html += `<div class="sec-h">Other KPIs you can access<small>${model.s3.length} in ${otherSpaces.length} space${otherSpaces.length === 1 ? '' : 's'}</small></div>`;
-      if (q) {
-        if (state.searchReadyFor !== q) {
-          html += `<div class="msg"><span class="spinner"></span>Searching every space you can browse…</div>`;
-        } else {
-          const hits = filterRows(model.s3, q);
-          if (hits.length === 0) html += `<div class="msg">No other KPIs match "${esc(q)}".</div>`;
-          for (const g of groupBySpace(hits, model.chainSpaces)) html += groupHtml(g, model, q, { showHeader: true });
-        }
-      } else if (state.variant === 'A') {
-        const near = model.s3.filter((k) => model.chainSpaces.includes(k.space));
-        for (const g of groupBySpace(near, model.chainSpaces)) html += groupHtml(g, model, q, { showHeader: true });
-        const rest = model.s3.length - near.length;
-        const restSpaces = otherSpaces.filter((s) => !model.chainSpaces.includes(s)).length;
-        html += `<div class="footer">🔍 Type to search ${rest} more KPI${rest === 1 ? '' : 's'} in ${restSpaces} other space${restSpaces === 1 ? '' : 's'}, or paste a key / URL.</div>`;
-      } else if (state.variant === 'B') {
-        html += `<div class="footer">🔍 Type to search ${model.s3.length} more KPIs in ${otherSpaces.length} spaces, or paste a key / URL.</div>`;
-      } else {
-        for (const g of groupBySpace(model.s3, model.chainSpaces)) html += groupHtml(g, model, q, { showHeader: true, collapsible: true });
-        html += `<div class="footer">🔍 Or type to search, or paste a key / URL.</div>`;
-      }
-
-      $('kpiMenu').innerHTML = html;
+    // ── List (dropdown menu or browser pane) ─────────────────────────────
+    function renderList() {
+      if (state.layout === 'twoPane') renderBrowser(); else renderMenu();
       const act = document.getElementById(`opt-${state.active}`);
       if (act) act.scrollIntoView({ block: 'nearest' });
     }
 
+    function renderMenu() {
+      const list = $('kpiList');
+      if (!list || !state.open) return;
+      const item = WORK[state.scenario];
+      const model = buildModel(item);
+      const q = state.query.trim();
+      const ref = parseRef(q);
+      optionKeys = []; optionToggles = [];
+      if (ref) { list.innerHTML = lookupHtml(ref, item, model); return; }
+
+      const sections = scopedSections(model, item, q);
+      let html = '';
+      let shown = 0;
+      sections.forEach((s, i) => {
+        const hits = s.kpis.filter((k) => matches(k, q));
+        if (q && hits.length === 0) return;
+        // Each section has its own column header; only "Tracked by parents" has a Target column.
+        html += `<div class="sec-h ${shown === 0 ? 'first' : ''}">${esc(s.title)}<small>${esc(s.small)}</small></div>` + (s.kpis.length ? colHeader(s.id === 'tracked') : '');
+        shown++;
+        if (s.kpis.length === 0) { html += `<div class="msg">${s.empty}</div>`; return; }
+        html += sectionBodyHtml(s, model, q);
+      });
+      if (sections.length === 0) html += `<div class="msg">Nothing is included. Switch on a scope above.</div>`;
+      else if (q && shown === 0) html += `<div class="msg">No KPIs in this scope match "${esc(q)}".</div>`;
+
+      const included = new Set(sections.flatMap((s) => s.kpis.map((k) => k.key)));
+      const outside = model.visible.filter((k) => !included.has(k.key));
+      if (q) {
+        if (state.searchReadyFor !== q) {
+          html += `<div class="footer"><span class="spinner"></span>Searching other spaces…</div>`;
+        } else {
+          const outHits = outside.filter((k) => matches(k, q));
+          if (outHits.length && state.scopeStyle !== 'none') {
+            const spaces = [...new Set(outHits.map((k) => k.space))];
+            html += `<div class="footer">🔍 ${outHits.length} more match${outHits.length === 1 ? '' : 'es'} outside this scope (${spaces.join(', ')}) · <a data-action="include">Include them</a></div>`;
+          }
+        }
+      } else if (outside.length) {
+        const spaces = [...new Set(outside.map((k) => k.space))];
+        html += `<div class="footer">🔍 Type to search ${outside.length} more KPI${outside.length === 1 ? '' : 's'} in ${spaces.length} other space${spaces.length === 1 ? '' : 's'}, or paste a key / URL.</div>`;
+      }
+      list.innerHTML = html;
+    }
+
+    // The two-pane browser's left menu: only views tied to this work item, the central space, and All
+    // KPIs. Hundreds of other spaces are reached through All KPIs (search + space filter), never listed.
+    function browserView(model, item) {
+      const d = sectionDefs(model, item);
+      if (state.nav === 'tracked' || state.nav === 'mine') return d[state.nav];
+      if (state.nav === 'central' && model.central) return d.central;
+      if (state.nav === 'all') {
+        const f = state.spaceFilter;
+        const kpis = f ? model.visible.filter((k) => k.space === f) : model.visible;
+        return { id: 'all', title: f ? `All KPIs in ${f} · ${SPACES[f]}` : 'All KPIs you can access', kpis, order: model.spaceOrder, headers: !f,
+          small: f ? `${kpis.length} KPIs` : `${kpis.length} KPIs in ${new Set(kpis.map((k) => k.space)).size} spaces`, empty: 'No KPIs.' };
+      }
+      const s = state.nav.startsWith('space:') ? state.nav.split(':')[1] : null;
+      if (s) { const kpis = model.visible.filter((k) => k.space === s); return { id: `space:${s}`, title: `${s} · ${SPACES[s]}`, small: `${kpis.length} KPIs`, kpis, order: [s], headers: false, empty: 'No KPIs here.' }; }
+      state.nav = 'tracked';
+      return d.tracked;
+    }
+
+    function renderBrowser() {
+      if (!state.open || !$('bnav')) return;
+      const item = WORK[state.scenario];
+      const model = buildModel(item);
+      const q = state.query.trim();
+      const ref = parseRef(q);
+      const view = browserView(model, item);
+      // No counts: they'd cost a request per lazily-loaded view on every open. Only the two views loaded
+      // on open (Tracked by parents, This space) can be known-empty for free; those grey out.
+      const nv = (id, label, sub, empty = false) => `<div class="nv ${state.nav === id ? 'on' : ''}${empty ? ' empty' : ''}" data-nav="${id}"${empty ? ' data-tip="Nothing here"' : ''}>${label}${sub ? `<span class="nv-sub">${esc(sub)}</span>` : ''}</div>`;
+      let nav = nv('tracked', 'Tracked by parents', '', model.s2.length === 0)
+        + nv('mine', `<span class="space-key">${model.own}</span>`, 'This space', model.s1.length === 0);
+      // Parent spaces: the parents' own spaces, then the central space as the top of every chain.
+      const parentNav = model.chainSpaces.map((s) => nv(`space:${s}`, `<span class="space-key">${s}</span>`, SPACES[s]))
+        .concat(model.central ? [nv('central', `<span class="space-key">${model.central}</span>`, 'Global KPIs')] : []);
+      if (parentNav.length) nav += `<div class="nv-g">Parent spaces</div>` + parentNav.join('');
+      nav += `<div class="nv-sep"></div>` + nv('all', 'All KPIs', '');
+      $('bnav').innerHTML = nav;
+      if (!state.spaceMenu) renderSpaceFilter(model);
+
+      optionKeys = []; optionToggles = [];
+      let html = '';
+      if (ref) {
+        html = lookupHtml(ref, item, model);
+      } else {
+        const searchingAll = q && view.id === 'all';
+        const ready = state.searchReadyFor === q;
+        // No title: the selected left-menu entry already says which view this is.
+        html += colHeader(view.id === 'tracked');
+        if (searchingAll && !ready) html += `<div class="msg"><span class="spinner"></span>Searching every space…</div>`;
+        if (!searchingAll || ready) {
+          const body = sectionBodyHtml(view, model, q);
+          html += body || `<div class="msg">${q ? `No KPIs here match "${esc(q)}".` : view.empty}</div>`;
+        }
+        // Search is scoped to the selected view; say how many matches are elsewhere and offer the rest.
+        if (q && !(view.id === 'all' && !state.spaceFilter)) {
+          const viewKeys = new Set(view.kpis.map((k) => k.key));
+          const outside = model.visible.filter((k) => matches(k, q) && !viewKeys.has(k.key));
+          if (!ready) html += `<div class="footer"><span class="spinner"></span>Searching other spaces…</div>`;
+          else if (outside.length) {
+            html += view.id === 'all'
+              ? `<div class="footer">🔍 ${outside.length} more in other spaces · <a data-space-pick="">Search every space</a></div>`
+              : `<div class="footer">🔍 ${outside.length} more in other spaces · <a data-action="searchAll">Search all KPIs</a></div>`;
+          }
+        }
+      }
+      $('kpiList').innerHTML = html;
+    }
+
+    // All KPIs' space filter: a searchable list, because a site can have hundreds of spaces.
+    // (Real data: GET /project/search?query=… for spaces with the KPI type, paged, only when opened.)
+    function renderSpaceFilter(model = buildModel(WORK[state.scenario])) {
+      const el = $('bfilter');
+      if (!el) return;
+      if (state.nav !== 'all') { el.hidden = true; el.innerHTML = ''; return; }
+      el.hidden = false;
+      const f = state.spaceFilter;
+      el.innerHTML = `<span class="bf-l">Space</span>
+        <button type="button" class="bf-btn" data-action="spaceMenu" aria-expanded="${state.spaceMenu}">${f ? `<span class="space-key">${f}</span>${esc(SPACES[f])}` : 'Any space'}<span class="bf-chev">▾</span></button>
+        ${f ? '<button type="button" class="bf-x" data-space-pick="" data-tip="Any space" aria-label="Any space">×</button>' : ''}
+        ${state.spaceMenu ? `<div class="bf-menu"><input id="spaceFind" placeholder="Find a space…" autocomplete="off" value="${esc(state.spaceFind)}" /><div id="spaceOpts" role="listbox"></div></div>` : ''}`;
+      if (state.spaceMenu) renderSpaceOptions(model);
+    }
+    function renderSpaceOptions(model = buildModel(WORK[state.scenario])) {
+      const t = state.spaceFind.trim().toLowerCase();
+      const spaces = model.spaceOrder.filter((s) => !t || s.toLowerCase().includes(t) || SPACES[s].toLowerCase().includes(t));
+      $('spaceOpts').innerHTML = (t ? '' : `<div class="bf-opt" data-space-pick="">Any space</div>`)
+        + spaces.map((s) => `<div class="bf-opt" data-space-pick="${s}"><span class="space-key">${s}</span>${esc(SPACES[s])}</div>`).join('')
+        + (spaces.length ? '' : `<div class="msg">No space matches "${esc(state.spaceFind)}".</div>`);
+    }
+
+    // ── Panel, selection, preview ────────────────────────────────────────
     function renderPanel() {
       const item = WORK[state.scenario];
       const chain = chainOf(item).reverse();
-      $('crumbs').innerHTML = [...chain, item]
-        .map((w) => `<span>${typeDot(w.type)}${esc(w.key)}</span>`)
-        .join('<span class="sep">›</span>');
-      $('wiTitle').textContent = `${item.key} · ${item.summary}`;
+      $('crumbs').innerHTML = [...chain, item].map((w) => `<span class="crumb">${typeIcon(w.type)}${esc(w.key)}</span>`).join('<span class="sep">/</span>');
+      $('wiTitle').textContent = item.summary;
       $('trackedHere').innerHTML = item.targets.length
-        ? item.targets.map((t) => { const k = KPI.get(t); return `<div class="mini-card"><span>${esc(k.name)} <span class="muted">(${esc(k.unit)})</span></span><span class="muted">${esc(k.key)} · −10% by Mar 31</span></div>`; }).join('')
+        ? item.targets.map((t) => { const k = KPI.get(t); return `<div class="mini-card"><span class="wi-row">${kpiItem(k)}<span class="muted">(${esc(k.unit)})</span></span><span class="muted">−10% by Mar 31</span></div>`; }).join('')
         : `<div class="mini-card"><span class="muted">No KPI targets on this work item yet.</span></div>`;
-      renderPicked();
     }
 
     function renderPicked() {
       const el = $('picked');
-      if (!state.selected) { el.innerHTML = ''; $('clearBtn').hidden = true; return; }
-      const item = WORK[state.scenario];
-      const model = buildModel(item);
+      const clear = $('clearBtn');
+      const selIcon = $('selIcon');
+      if (selIcon) selIcon.hidden = !state.selected;
+      if (!state.selected) { el.innerHTML = ''; if (clear) clear.hidden = !state.query; return; }
+      const model = buildModel(WORK[state.scenario]);
       const k = KPI.get(state.selected);
-      const tb = model.trackedBy.get(k.key);
-      const section = model.s1.includes(k) ? 'In your space' : model.s2.includes(k) ? 'Tracked above you' : 'Other KPIs';
       const cur = state.currentValue === null
         ? `<span><span class="spinner"></span>current value…</span>`
         : `<span>Current: <b>${state.currentValue}</b> ${esc(k.unit)}</span>`;
-      el.innerHTML = `<span class="space-key" style="font:600 11px/16px ui-monospace,monospace;background:var(--bg-neutral);border-radius:3px;padding:0 4px">${k.space}</span>
-        <span>${esc(SPACES[k.space])}</span><span>·</span><span>${section}</span>
-        ${tb ? `<span class="badge">${typeDot(tb[0].type)}Tracked by ${tb.map((a) => esc(a.key)).join(', ')}</span>` : ''}
+      el.innerHTML = `<span class="space-key">${k.space}</span><span>${esc(SPACES[k.space])}</span><span>·</span><span>${CATEGORY_LABEL[model.category(k)]}</span>
         <span>·</span>${cur}`;
-      $('clearBtn').hidden = false;
+      if (clear) clear.hidden = false;
     }
 
     function setOpen(open) {
       state.open = open;
-      $('kpiMenu').hidden = !open;
+      if (!open) state.spaceMenu = false;
+      ($('browserBox') ?? $('kpiList')).hidden = !open;
       $('kpiInput').setAttribute('aria-expanded', String(open));
-      if (open) renderMenu();
+      if (open) renderList();
     }
 
     function select(key) {
       state.selected = key;
       state.query = '';
       const k = KPI.get(key);
-      $('kpiInput').value = `${k.name}${k.unit ? ` (${k.unit})` : ''}`;
-      setOpen(false);
+      $('kpiInput').value = selectedText(k);
       // Stage 07: the preview's current value is fetched for the picked KPI only (getKpiCurrentValue).
       state.currentValue = null;
       clearTimeout(state.currentTimer);
       state.currentTimer = setTimeout(() => { state.currentValue = (37 + (k.rank * 7.3) % 50).toFixed(1); renderPicked(); }, 450);
+      setOpen(false);
       renderPicked();
     }
 
     function setQuery(q) {
       state.query = q;
-      state.active = -1;
       clearTimeout(state.searchTimer);
       const t = q.trim();
-      if (t && !parseRef(t)) state.searchTimer = setTimeout(() => { state.searchReadyFor = t; if (state.open) renderMenu(); }, 350);
+      if (t && !parseRef(t)) state.searchTimer = setTimeout(() => { state.searchReadyFor = t; renderList(); }, 350);
+      state.active = -1;
       setOpen(true);
-      if (!state.active || state.active < 0) { state.active = optionKeys.length ? 0 : -1; renderMenu(); }
+      state.active = optionKeys.length ? 0 : -1;
+      renderList();
     }
 
     function reset() {
-      state.query = ''; state.selected = null; state.active = -1; state.searchReadyFor = null;
-      state.expanded = new Set();
-      $('kpiInput').value = '';
-      setOpen(false);
+      const model = buildModel(WORK[state.scenario]);
+      Object.assign(state, {
+        expanded: new Set(), spaceFilter: null, spaceMenu: false, spaceFind: '',
+        query: '', selected: null, active: -1, searchReadyFor: null, open: false,
+        level: 'mine', chips: new Set(['mine', 'tracked']),
+        spaces: new Set([model.own]), spacesTracked: true, moreSpaces: false,
+        nav: model.s2.length ? 'tracked' : 'mine',
+      });
       renderPanel();
+      renderPicker();
     }
 
-    // ── Controls ─────────────────────────────────────────────────────────
-    function segmented(el, options, get, set) {
+    // ── Prototype controls ───────────────────────────────────────────────
+    function segmented(el, options, get, set, disabled = () => false) {
       const draw = () => {
-        el.innerHTML = options.map(([v, label]) => `<button type="button" data-v="${v}" aria-pressed="${get() === v}">${label}</button>`).join('');
+        el.innerHTML = options.map(([v, label]) => `<button type="button" data-v="${v}" aria-pressed="${get() === v}" ${disabled() ? 'disabled' : ''}>${label}</button>`).join('');
       };
-      el.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; set(b.dataset.v); draw(); });
+      el.addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b || b.disabled) return; set(b.dataset.v); draw(); redrawAll(); });
       draw();
+      return draw;
     }
-    segmented($('scenarioSeg'), [['TEAM-123', 'TEAM-123 Story'], ['NEW-8', 'NEW-8 Story (new space)'], ['PORT-7', 'PORT-7 Initiative (top)']],
-      () => state.scenario, (v) => { state.scenario = v; reset(); });
-    segmented($('variantSeg'), [['A', 'A · nearest spaces'], ['B', 'B · search only'], ['C', 'C · all spaces, collapsed']],
-      () => state.variant, (v) => { state.variant = v; state.expanded = new Set(); if (state.open) renderMenu(); else { setOpen(true); $('kpiInput').focus(); } });
-    $('subKpis').addEventListener('change', (e) => { state.subKpis = e.target.checked; if (state.open) renderMenu(); else { setOpen(true); $('kpiInput').focus(); } });
+    const draws = [];
+    const redrawAll = () => draws.forEach((d) => d());
+    draws.push(segmented($('scenarioSeg'), [['TEAM-123', 'TEAM-123 Story'], ['NEW-8', 'NEW-8 Story (new space)'], ['PORT-7', 'PORT-7 Initiative (top)']],
+      () => state.scenario, (v) => { state.scenario = v; reset(); }));
+    draws.push(segmented($('centralSeg'), [['on', 'KPI · Global KPIs'], ['off', 'None']],
+      () => (state.central ? 'on' : 'off'), (v) => { state.central = v === 'on'; if (!state.central && state.nav === 'central') state.nav = 'tracked'; state.spaceFilter = null; renderScope(); renderList(); }));
+    draws.push(segmented($('layoutSeg'), [['twoPane', 'Two-pane browser'], ['twoLine', 'Two-line list'], ['columns', 'Columns']],
+      () => state.layout, (v) => { state.layout = v; state.open = false; state.active = -1; state.query = ''; renderPicker(); $('kpiInput').focus(); setOpen(true); }));
+    draws.push(segmented($('styleSeg'), [['widening', 'Widening (pick one)'], ['chips', 'On/off chips'], ['spaces', 'Pick spaces'], ['none', 'None (v1 sections)']],
+      () => state.scopeStyle, (v) => { state.scopeStyle = v; state.active = -1; renderScope(); $('kpiInput').focus(); setOpen(true); },
+      () => state.layout === 'twoPane'));
 
-    const CHIPS = ['conv', 'revenue', 'PORT-14', 'https://acme.atlassian.net/browse/OPS-40', 'KPI-5', 'PROG-45', 'FIN-2', 'TEAM-503'];
+    const CHIPS = ['conv', 'revenue', 'uptime', 'PORT-14', 'https://acme.atlassian.net/browse/OPS-40', 'KPI-5', 'PROG-45', 'FIN-2', 'TEAM-503'];
     $('chips').innerHTML = CHIPS.map((c) => `<button type="button" class="chip" data-q="${esc(c)}">${esc(c.length > 28 ? '…/browse/OPS-40' : c)}</button>`).join('');
     $('chips').addEventListener('click', (e) => {
       const b = e.target.closest('.chip'); if (!b) return;
@@ -576,44 +1029,120 @@
       input.focus(); setQuery(b.dataset.q);
     });
 
-    // ── Combobox behaviour ───────────────────────────────────────────────
-    const input = $('kpiInput');
-    input.addEventListener('focus', () => { if (!state.open) { if (state.selected) input.select(); setOpen(true); } });
-    input.addEventListener('mousedown', () => { if (!state.open) setOpen(true); });
-    input.addEventListener('input', () => { state.selected = null; renderPicked(); setQuery(input.value); });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault();
-        if (!state.open) { setOpen(true); }
-        const n = optionKeys.length; if (!n) return;
-        state.active = e.key === 'ArrowDown' ? (state.active + 1) % n : (state.active - 1 + n) % n;
-        renderMenu();
-      } else if (e.key === 'Enter') {
-        if (state.open && state.active >= 0 && optionKeys[state.active]) { e.preventDefault(); select(optionKeys[state.active]); }
-      } else if (e.key === 'Escape') {
-        if (state.open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
-      }
-    });
-    $('chevBtn').addEventListener('mousedown', (e) => { e.preventDefault(); setOpen(!state.open); input.focus(); });
-    $('clearBtn').addEventListener('mousedown', (e) => { e.preventDefault(); state.selected = null; input.value = ''; state.query = ''; renderPicked(); setOpen(true); input.focus(); });
+    // ── Input behaviour (rebound whenever the picker shell is rebuilt) ───
+    function bindInput() {
+      const input = $('kpiInput');
+      input.addEventListener('focus', () => { if (!state.open) { if (state.selected) input.select(); setOpen(true); } });
+      input.addEventListener('mousedown', () => { if (!state.open) setOpen(true); });
+      // Typing over a picked KPI starts a new search instead of appending to its name.
+      input.addEventListener('beforeinput', (e) => { if (state.selected && e.inputType.startsWith('insert')) input.value = ''; });
+      input.addEventListener('input', () => { state.selected = null; renderPicked(); setQuery(input.value); });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          if (!state.open) setOpen(true);
+          const n = optionKeys.length; if (!n) return;
+          state.active = e.key === 'ArrowDown' ? (state.active + 1) % n : (state.active - 1 + n) % n;
+          renderList();
+        } else if (e.key === 'Enter') {
+          if (state.active >= 0 && optionKeys[state.active]) { e.preventDefault(); select(optionKeys[state.active]); }
+        } else if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && !state.query && state.active >= 0 && optionToggles[state.active]) {
+          // → expands the highlighted KPI's sub-KPIs, ← collapses them (as in Jira's tree views).
+          e.preventDefault();
+          const id = optionToggles[state.active];
+          if (e.key === 'ArrowRight') state.expanded.add(id); else state.expanded.delete(id);
+          renderList();
+        } else if (e.key === 'Escape') {
+          if (state.open) { e.preventDefault(); e.stopPropagation(); setOpen(false); }
+        }
+      });
+      const chev = $('chevBtn');
+      if (chev) chev.addEventListener('mousedown', (e) => { e.preventDefault(); setOpen(!state.open); input.focus(); });
+      $('clearBtn').addEventListener('mousedown', (e) => {
+        e.preventDefault(); state.selected = null; input.value = ''; state.query = ''; renderPicked(); setOpen(true); input.focus();
+      });
+    }
 
-    $('kpiMenu').addEventListener('mousedown', (e) => {
+    // Clicks inside the picker (scope bar, menu, browser) — delegated, since the shell is rebuilt.
+    $('picker').addEventListener('mousedown', (e) => {
+      if (e.target.closest('input')) return;
+      const model = buildModel(WORK[state.scenario]);
+      const scope = e.target.closest('[data-scope]');
+      const nav = e.target.closest('[data-nav]');
+      const toggle = e.target.closest('[data-toggle]');
+      const spacePick = e.target.closest('[data-space-pick]');
+      const opt = e.target.closest('.opt');
+      const action = e.target.closest('[data-action]');
+      if (!scope && !nav && !toggle && !spacePick && !opt && !action) return;
       e.preventDefault(); // keep focus in the input
       e.stopPropagation(); // re-rendering detaches e.target, so the outside-click check below would misfire
-      const t = e.target.closest('[data-toggle]');
-      if (t) { const s = t.dataset.toggle; state.expanded.has(s) ? state.expanded.delete(s) : state.expanded.add(s); renderMenu(); return; }
-      const o = e.target.closest('.opt');
-      if (o) { select(optionKeys[Number(o.dataset.idx)]); return; }
-      if (e.target.closest('[data-action="create"]')) alert('Q6: would open the Add KPI form, defaulting to this work item\'s space.');
+      if (toggle) {
+        const id = toggle.dataset.toggle;
+        state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+        renderList(); return;
+      }
+      if (spacePick) {
+        state.spaceFilter = spacePick.dataset.spacePick || null; state.spaceMenu = false; state.active = -1;
+        renderSpaceFilter(); renderList(); $('kpiInput').focus(); return;
+      }
+      if (scope) { onScope(scope.dataset.scope); $('kpiInput').focus(); return; }
+      if (nav) {
+        // The search text stays: switching views re-runs it in the new view.
+        state.nav = nav.dataset.nav; state.active = -1; state.spaceMenu = false;
+        renderList(); return;
+      }
+      if (opt) { select(optionKeys[Number(opt.dataset.idx)]); return; }
+      if (action.dataset.action === 'include') {
+        const q = state.query.trim();
+        const included = new Set(scopedSections(model, WORK[state.scenario], q).flatMap((s) => s.kpis.map((k) => k.key)));
+        includeKpis(model, model.visible.filter((k) => !included.has(k.key) && matches(k, q)));
+        renderScope(); renderList();
+      } else if (action.dataset.action === 'searchAll') {
+        state.nav = 'all'; state.spaceFilter = null; state.active = -1; renderList();
+      } else if (action.dataset.action === 'spaceMenu') {
+        state.spaceMenu = !state.spaceMenu; state.spaceFind = '';
+        renderSpaceFilter();
+        if (state.spaceMenu) setTimeout(() => $('spaceFind')?.focus(), 0); else $('kpiInput').focus();
+      } else if (action.dataset.action === 'create') {
+        alert('Q5: would open the Add KPI form, defaulting to this work item\'s space.');
+      }
     });
-    $('kpiMenu').addEventListener('mousemove', (e) => {
+    // Typing in the space filter's own search box only redraws its option list.
+    $('picker').addEventListener('input', (e) => {
+      if (e.target.id !== 'spaceFind') return;
+      state.spaceFind = e.target.value; renderSpaceOptions();
+    });
+    $('picker').addEventListener('keydown', (e) => {
+      if (e.target.id !== 'spaceFind') return;
+      if (e.key === 'Escape') { e.preventDefault(); state.spaceMenu = false; renderSpaceFilter(); $('kpiInput').focus(); }
+      if (e.key === 'Enter') { e.preventDefault(); $('spaceOpts').querySelector('[data-space-pick]')?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); }
+    });
+    $('picker').addEventListener('mousemove', (e) => {
       const o = e.target.closest('.opt'); if (!o) return;
-      const i = Number(o.dataset.idx); if (i !== state.active) { state.active = i; renderMenu(); }
+      const i = Number(o.dataset.idx); if (i !== state.active) { state.active = i; renderList(); }
     });
-    document.addEventListener('mousedown', (e) => { if (!$('combo').contains(e.target)) setOpen(false); });
+    document.addEventListener('mousedown', (e) => {
+      const combo = $('combo');
+      if (combo && !combo.contains(e.target) && !e.target.closest('.controls')) setOpen(false);
+    });
 
-    renderPanel();
-    setTimeout(() => { input.focus(); }, 50);
+    // Tooltips for anything with data-tip (the type icons): shown below the target, like Atlaskit's Tooltip.
+    // One fixed-position element, so scrolling lists can't clip it.
+    const tip = $('tip');
+    document.addEventListener('mouseover', (e) => {
+      const t = e.target.closest?.('[data-tip]');
+      if (!t) { tip.hidden = true; return; }
+      tip.textContent = t.dataset.tip;
+      tip.hidden = false;
+      const r = t.getBoundingClientRect();
+      tip.style.left = `${Math.max(4, r.left + r.width / 2 - tip.offsetWidth / 2)}px`;
+      tip.style.top = `${r.bottom + 6}px`;
+    });
+    document.addEventListener('scroll', () => { tip.hidden = true; }, true);
+
+    new ResizeObserver(([entry]) => { $('pw').textContent = `panel ${Math.round(entry.contentRect.width)}px wide`; }).observe($('appPanel'));
+
+    reset();
   </script>
 </body>
 </html>
