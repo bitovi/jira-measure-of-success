@@ -26,4 +26,5 @@ export * from './resolve/kpiLinks';
 export * from './resolve/kpiAccess';
 export * from './resolve/migrations';
 export * from './resolve/kpiRef';
+export * from './resolve/kpiSiteConfig';
 export * from './contracts';

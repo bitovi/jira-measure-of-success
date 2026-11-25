@@ -4,7 +4,7 @@ A Jira [Forge](https://developer.atlassian.com/platform/forge/) app for tracking
 
 - **KPIs** issue panel — attach KPIs to an issue, set targets, and record readings.
 - **KPI Timeline** global page — plots KPI targets and readings over time across the hierarchy.
-- **KPI Settings** admin page — provisions the KPI space and configures hierarchy/date rollups.
+- **KPI Settings** admin page — upgrades stored data after an update, sets up the KPI work type, fields and central space, and configures hierarchy/date rollups.
 
 Everything lives under [`app/`](./app): React Custom UI surfaces (`src/ui`), a pure TypeScript domain layer (`src/domain`), and the Forge resolver backend (`src/backend`).
 
@@ -76,7 +76,9 @@ What goes in `.env` (none of it is needed for the harness or Storybook):
    npm run forge -- install --site <your-site>.atlassian.net --product Jira --environment development
    ```
 
-6. **Set up the app in Jira.** Go to **Jira settings → Apps → KPI Settings (dev)**, enter a project key under **KPI Space**, and click **Create space**. This creates the project and the `KPI` issue type. Then configure the hierarchy and date rollups on the same page.
+6. **Set up the app in Jira.** Go to **Jira settings → Apps → KPI Settings (dev)** and click **Set up everything…** under **KPI building blocks**. This creates the `KPI` work type, the **KPI Unit** and **KPI Direction** fields, a central space for company-wide KPIs, and the **KPI Hierarchy** link type. (Or create each one, or point the app at ones the site already has.) Then configure date rollups on the same page.
+
+   **Using KPIs in other spaces** (company-managed only): a Jira admin adds the KPI work type to the space's work type scheme, adds KPI Unit and KPI Direction to the space's field scheme for the KPI work type only, and optionally adds them to the space's screens for that type. Settings → *Using KPIs in other spaces* shows these steps with your site's real names and can do each one for a chosen space.
 
 Then open any issue's **KPIs (dev)** panel, or **Apps → KPI Timeline (dev)**.
 

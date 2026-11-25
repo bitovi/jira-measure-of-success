@@ -1,3 +1,4 @@
+import type { MigrationDto } from '../contracts';
 import {
   EMPTY_MIGRATION_COUNTS,
   MAX_MIGRATION_FAILURES,
@@ -84,4 +85,29 @@ export function migrationReadiness(
     out[migration.id] = { ready: blockedBy.length === 0, blockedBy };
   }
   return out;
+}
+
+/**
+ * How Settings → Upgrade data shows a migration (spec 11 · 04): its record's
+ * state, or `blocked` (a dependency isn't done) / `notApplicable` (its
+ * `status()` says it doesn't apply yet) when it can't run.
+ */
+export type MigrationRowState = 'pending' | 'running' | 'done' | 'failed' | 'blocked' | 'notApplicable';
+
+export function migrationRowState(m: MigrationDto): MigrationRowState {
+  const { state } = m.record;
+  if (state === 'done' || state === 'failed') return state;
+  if (!m.ready) return 'blocked';
+  if (state === 'pending' && m.status?.applicable === false) return 'notApplicable';
+  return state;
+}
+
+/** The first migration (in registry order) the Upgrade button runs next: pending or part-way, and able to run. */
+export function nextMigrationToRun(migrations: readonly MigrationDto[], skip: ReadonlySet<string> = new Set()): MigrationDto | null {
+  return (
+    migrations.find((m) => {
+      const row = migrationRowState(m);
+      return (row === 'pending' || row === 'running') && !skip.has(m.id);
+    }) ?? null
+  );
 }

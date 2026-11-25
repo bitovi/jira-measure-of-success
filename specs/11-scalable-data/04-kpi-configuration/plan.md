@@ -1,6 +1,6 @@
 # 04 — KPI configuration (Settings)
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **G2 decided by the implementer (autopilot), pending Justin's review** · Depends on: 01, 02
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** (G2 decided by the implementer on autopilot, pending Justin's review of the built page) · Depends on: 01, 02
 (and 03 for Step 7's live check only).
 
 Prototypes: [kpi-space-setup.html](./kpi-space-setup.html) (v3, the latest).
@@ -286,3 +286,150 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
     existing types' icons alone? Changing it affects every space that uses the type. 01 B7 checks the
     API. (01 B7: PNG, GIF or JPEG only; SVG is rejected. Ship the bullseye as a PNG.)
     - **Decided (2026-11-24, implementer, autopilot; revisit at review):** only types the app creates get the PNG bullseye; existing types are left alone.
+
+## Implementation notes
+
+Done 2026-11-24 on `feat/11-scalable-data`, Steps 3–6. Step 7 (live check on dev) is pending.
+
+**Files added**
+
+- Domain: `models/kpiSiteConfig.ts` (`KpiSiteConfig`, `StoredKpiSiteConfig`, `KpiFieldsConfig`,
+  `KpiDirectionField`, the Settings payload schemas, default names), `resolve/kpiSiteConfig.ts` (+ test):
+  `deriveKpiSiteConfig`, `kpiSiteConfigFrom`, `parseStoredKpiSiteConfig`, `assessKpiSetup` (the existence
+  checks). `resolve/migrations.ts` gained `migrationRowState` / `nextMigrationToRun` (+ tests).
+- Backend: `kpiConfig.ts` (`loadKpiSiteConfig`, `readKpiSiteConfig`, `writeKpiSiteConfig`),
+  `kpiSetup.ts` (provisioning, pickers, per-space checks, Settings status), `kpiIcon.ts` (48×48 PNG
+  bullseye, base64), `kpiSetup.test.ts` (mock-Jira tests for Steps 3 and 4).
+- UI: `data/useKpiSetupData` (`KpiSetupApi`, `bridgeKpiSetupApi`, `useKpiSetupData(api?)`),
+  `data/useMigrationsData` (`MigrationsApi`, `useMigrationsData(api?)`: the Upgrade loop),
+  `Settings/components/UpgradeDataCard`, `KpiBuildingBlocks` (+ `WorkTypeStep`, `FieldsStep`, `StepCard`),
+  `CentralSpaceCard`, `OtherSpacesGuide` (+ `guideText.ts`), each with stories and a story runner.
+- Harness: `fixtures/kpiSetup.ts` (an in-memory site, `?setup=fresh|upgraded|blocks|configured|broken`,
+  default `upgraded`; stories create their own), `fixtures/mockMigrations.ts` (02's mock migrations as
+  a factory, `createMockMigrations(mode, { applicability })` + `mockMigrationsApi(mock, delayMs)`), and
+  `fixtures/kpiSetup.test.ts`.
+
+**Files changed:** `jira.ts` (`findProject(keyOrId)` with `key` / `issueTypeIds`, per-invocation
+`listIssueTypes()`, `ensureKpiIssueTypeOnProject(projectId, workType)` checks first and takes the
+configured type, `createKpiIssue(..., workType)`, `jiraError` exported; `ensureKpiIssueType` moved to
+`kpiSetup.ensureKpiWorkType`), `requestLog.ts` (`perInvocation(key, load)` / `forgetPerInvocation`),
+`storage.ts` (`readStoredKpiSiteConfig` / `writeStoredKpiSiteConfig`, key `kpi:config:site`; the
+legacy writers drop the cached config), `resolver.ts`, `contracts.ts`, `testing/scaleFixture.ts`
+(custom fields + contexts + options, field schemes, work type screen schemes / screen schemes /
+screens / tabs, avatars, `PUT /issuetype/{id}`, `/project/search`, projects by id, a `TEAM` space
+sharing the KPI space's field scheme `5` and screens, a team-managed `TMP`), the harness
+(`mock-resolvers.ts`, `mock-bridge.ts`), `Settings.tsx` / stories, `useSettingsData` (no more KPI
+space; `reloadHierarchy()`), `test-e2e/jira-api.e2e.ts`, README (setup step + the guide).
+
+**API for 05 / 06**
+
+```ts
+// backend/kpiConfig.ts: the only way backend code learns the KPI type and field ids
+loadKpiSiteConfig(): Promise<{ config: KpiSiteConfig; saved: boolean }> // once per invocation
+readKpiSiteConfig(): Promise<KpiSiteConfig>
+writeKpiSiteConfig(patch: Partial<KpiSiteConfig>): Promise<KpiSiteConfig>
+
+KpiSiteConfig = {
+  workType: { id: string; name: string } | null;
+  fields: {                                   // null until both are chosen (all or nothing)
+    unit: { fieldId: string };
+    direction: { fieldId: string; kind: 'text' }
+             | { fieldId: string; kind: 'select'; optionIds: { increase: string; decrease: string } };
+  } | null;
+  centralSpace: { projectId: string; key: string; name: string } | null;
+  hierarchy: KpiHierarchyLink | null;
+  schemes: { workTypeScheme?: Ref; fieldScheme?: Ref; screenScheme?: Ref };  // display only, unused so far
+};
+```
+
+- `saved: false` = nothing saved yet: `workType` is the type named `KPI` (one `GET /issuetype`,
+  cached per invocation), `fields` is `null`. 05's `kpi-meta-to-fields` should report not applicable
+  while `fields` is `null` (the harness's stand-in already does, with the reason "Choose the KPI
+  fields in Settings first").
+- A created direction field has options **Increase** / **Decrease** in its global context; write by
+  `{ id: optionIds.increase }`, read `.id` (01 A5).
+- `kpiSetup.makeSpaceUsableForKpis(projectId, config)` / `applyKpiSpaceStep` are what 06/08 can reuse
+  to make a space hold KPIs.
+
+**Resolvers added** (all Settings-page only; writes via `defineSettingsWrite`, so Jira admin too)
+
+| Resolver | Payload | Returns |
+|---|---|---|
+| `getKpiSetup` | — | `KpiSetupStatus` (`saved`, `workType`, `fields`, `centralSpace`, each `unset` / `ready` / `broken`, the space also `misconfigured`) |
+| `getKpiWorkTypeChoices` | — | `KpiWorkTypeChoice[]` (standard, site-wide types) |
+| `getKpiFieldChoices` | — | `KpiFieldChoice[]` (`kind: 'text' \| 'select'`) |
+| `getKpiFieldOptions` | `{ fieldId }` | `KpiFieldOption[]` (the global context's enabled options) |
+| `getKpiSpaceChoices` | — | `KpiSpaceChoice[]` (company-managed, `hasKpiWorkType`) |
+| `getKpiSpaceSetup` | `{ projectId }` | `KpiSpaceSetupStatus` (`workType` / `fields` / `screens`: done, not done, or null = can't tell, plus `problem`) |
+| `setUpKpiWorkType` | `{ mode: 'create' } \| { mode: 'existing', id }` | `KpiSetupStatus` |
+| `setUpKpiFields` | `{ unit: { mode: 'create' } \| { mode: 'existing', fieldId }, direction: { mode: 'create' } \| { mode: 'existing', fieldId, kind: 'text' } \| { mode: 'existing', fieldId, kind: 'select', optionIds: { increase, decrease } } }` | `KpiSetupStatus` |
+| `setUpCentralSpace` | `{ mode: 'create', key } \| { mode: 'existing', projectId }` | `KpiSetupStatus` |
+| `setUpKpiSpaceStep` | `{ projectId, step: 'workType' \| 'fields' \| 'screens' }` | `KpiSpaceSetupStatus` |
+| `setUpEverything` | `{ key? }` (default `KPI`) | `KpiSetupStatus` |
+
+Writes return `warnings` when an optional step didn't finish (e.g. the field scheme API failed for
+the central space) instead of failing the whole change. `createKpiSpace` now runs the same code as
+`setUpCentralSpace({ mode: 'create' })` and still returns `KpiSpaceStatus`; `getKpiSpace` /
+`saveKpiSpaceKey` are kept but no longer used by the UI.
+
+**Jira calls** (reads as the app, writes as the admin): work type `GET/POST /issuetype`, then
+`POST /universal_avatar/type/issuetype/owner/{id}?x=0&y=0&size=48` (`image/png`, binary) and
+`PUT /issuetype/{id} { avatarId }` (best effort: a failure is logged, the type is kept); fields
+`GET/POST /field`, `GET /field/{id}/context`, `GET/POST /field/{id}/context/{ctx}/option`; field
+scheme `GET /config/fieldschemes/projects?projectId=`, `GET /config/fieldschemes/{id}/fields?fieldId=…`,
+`PUT /config/fieldschemes/fields { [fieldId]: [{ schemeIds, restrictedToWorkTypes }] }` (keeps the
+types a field already had there; a field in the scheme for every type is left alone); screens
+`GET /issuetypescreenscheme/project`, `…/mapping`, `GET /screenscheme?id=`, `GET /screens/{id}/tabs`,
+`GET/POST /screens/{id}/tabs/{tab}/fields` (first tab, only fields on none of the screen's tabs);
+spaces `GET /project/search?expand=issueTypes` (style `classic` only), `GET /project/{idOrKey}`.
+
+**Decisions made while implementing**
+
+- **Storage:** `kpi:config:site` holds `workType`, `fields` and `schemes` only. The central space and
+  hierarchy stay in `kpi:space` / `kpi:hierarchy` (one source each), which the timeline, panel and
+  createKpi still read until 06 switches them; `readKpiSiteConfig` puts the four together. 09's cleanup
+  can fold them into one record.
+- **Derived until saved.** Nothing is written on read. The first Settings change that touches the
+  work type or fields saves the record, including the derived work type. Saving the hierarchy or
+  space alone doesn't create the record.
+- "Create" is **create-or-use**: an existing standard type named `KPI`, or a field named `KPI Unit`
+  (short text) / `KPI Direction` (single select), is used rather than duplicated. Only a type the app
+  creates gets the icon.
+- Unit must be a **short text** field (`textfield`); direction a short text or a **single select**.
+  Unit and direction must be different fields; a select's two mapped options must exist and differ.
+- The work type picker lists standard types only (no sub-tasks, no team-managed types, level 0).
+- `createKpi` creates the configured work type by id. On an install with nothing saved that's the
+  type named KPI found by id (one extra `GET /issuetype` per createKpi until Settings saves), or
+  `{ name: 'KPI' }` as before when the site has none. Timeline and panel reads are unchanged (budget
+  tests unchanged); 06 does the "is a KPI by type" switch.
+- Changing the work type or fields re-runs the central space's setup (type in its scheme, fields in
+  its field scheme and screens); errors there come back as warnings.
+- Central space: the UI waits for the work type ("First: choose the KPI work type above"); the
+  backend would create the `KPI` type if called without one (as `createKpiSpace` did). A new space
+  still gets KPI nesting set up, best effort.
+- "Set up everything" only fills in **unset** blocks (broken ones need their own fix), and is a no-op
+  the second time (tested: no writes).
+- Upgrade data: one Upgrade button (Resume when a migration is part-way); the loop runs the first
+  runnable migration (pending or running, ready, applicable) in registry order to its end, re-reads the
+  list and carries on; a thrown batch stops the run with the error. Pause takes effect after the batch
+  in flight. Retry failed resets the migration and then runs Upgrade. Rows: To do / Running / Paused /
+  Done / Failed (with up to 5 failures) / Waiting (blocked: "Runs after …") / Not yet (the migration's
+  reason). Settings re-reads the list after any building block change, so choosing fields makes 05's
+  migration runnable without a reload.
+- Prototype differences: no work type scheme block (Q4); no separate "screens" or "field scheme"
+  blocks (they're done per space: for the central space automatically, for other spaces from the
+  guide's **Do it for {space}**); create actions run directly (the step text says what they create)
+  instead of a confirm modal, except **Set up everything…**, which lists its steps first; pickers are
+  inline, not modals. The hierarchy card keeps its existing title ("KPI Hierarchy") and sits between the
+  central space and the guide.
+
+**Live check (Step 7) should verify** on bitovi-training (dev): Settings opens with the Upgrade data
+card first; the KPI type (10436) and the KPI project show as chosen (derived, `saved: false`);
+**Create fields** creates *KPI Unit* / *KPI Direction* (Increase, Decrease) once, adds them to the
+*Default Field Scheme* (5) for type 10436 only (check another space's Story doesn't get them) and to
+the KPI space's screens; a new work type created on a scratch site gets the bullseye icon (the binary
+upload through Forge is the one call 01 B7 only ran from the browser); the guide names the real fields
+and **Do it for {space}** works on a scratch company-managed space; `GET /config/fieldschemes/projects` returns `{ values: [{ projectId,
+schemeId }] }` as the OpenAPI spec says; staging (on `main`) is unaffected; running 03's migration
+from the card works.
+

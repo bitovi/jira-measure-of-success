@@ -1,0 +1,8 @@
+/**
+ * The KPI work type's icon (spec 11 · 04, Q11): a 48×48 PNG bullseye (#C9372C
+ * rings, transparent background), the picker prototype's target icon. Jira only
+ * takes PNG, GIF or JPEG avatars (01 B7). Set only on a type the app creates.
+ */
+export const KPI_WORK_TYPE_ICON_SIZE = 48;
+export const KPI_WORK_TYPE_ICON_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAB5klEQVR42u1ay42EMAylhJRAATlwyzUlpISUQAl0QAmUQAmcc6IESpgS9iNlJRbFyTMDOxNrD5ZGQ7D9HPs5H5pgdFOz3KHUBqPd1+/hIC4+ezsAXTB6DEavwegPUNb4TvdKAD4YvTGcpmSLuv4MgLvI8RQQdycAFYyeb3D8KHO0dSmA71x9ABEcM8X6U9wjMIMPtD7QXM8Zm04WYxffzen2zwLIOb8Eo9sLWKyNuk6BKEWIml5/Q//wmTTtuAAUoQzJTRXzvd81sT7+p07W2oN6l1I0n3Degyw1F2aQAjGjABzTecvswvtubJkgHAJgYxTScAHvDwwC2UoAPME2KQPThc1rImwspWAi0W+ZkV+ikfZAlb5AlwNBsdlZKNHmROQ8N6fRmrHgTHcpACPIvyvhvGKuqyg9SD8aUwDWUsEQNcJ1vgTCA8SypgCQKAv9wT65e0P4PpUdvwBYgHMVg6Ga2H2XKH1mXKqwFdCb7B6AAyJrGf0BzW8qLRHbbg9goKboEFGEYvsMVfYgVabGJWmXAwAZ0xS4nko5pCf8A3jrFKq+iKun0eobmYilRPWLueqX09VvaERsKavf1Is4Vqn+YEvE0WL1h7sijtdFXHCIuGIScckn4ppVzEW3mE8NxHzs8VL5BBGtMgtkOxJnAAAAAElFTkSuQmCC';

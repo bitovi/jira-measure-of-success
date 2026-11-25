@@ -1,31 +1,36 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Button from '@atlaskit/button/new';
-import Lozenge from '@atlaskit/lozenge';
 import Select from '@atlaskit/select';
-import Spinner from '@atlaskit/spinner';
-import Textfield from '@atlaskit/textfield';
 import { useSettingsData, type UseSettings } from '@ui/data/useSettingsData/index.js';
+import { useKpiSetupData, type UseKpiSetup } from '@ui/data/useKpiSetupData/index.js';
+import type { UseMigrations } from '@ui/data/useMigrationsData/index.js';
 import {
   DEFAULT_ROLLUP_METHOD,
   type DateFieldChoice,
   type DateFieldDefaults,
-  isValidProjectKey,
   labelsFor,
   levelKey,
   levelLabel,
   levelSetting,
-  normalizeProjectKey,
   resolveConfig,
   type HierarchyLevel,
-  type KpiSpaceStatus,
   type RollupConfig,
   type RollupMethod,
 } from '@domain/index.js';
 import { DateFieldsTable } from './components/DateFieldsTable/index.js';
 import { KpiHierarchyCard } from './components/KpiHierarchyCard/index.js';
+import { UpgradeDataCard } from './components/UpgradeDataCard/index.js';
+import { KpiBuildingBlocks } from './components/KpiBuildingBlocks/index.js';
+import { CentralSpaceCard } from './components/CentralSpaceCard/index.js';
+import { OtherSpacesGuide } from './components/OtherSpacesGuide/index.js';
 
 /**
- * Settings — Date Rollup (global admin page). Two areas: which date fields each
+ * KPI Settings (global admin page). From the top: Upgrade data (spec 11 · 04,
+ * shown expanded only while a data migration isn't done), the KPI building
+ * blocks, the central KPI space and how KPIs nest, the guide for using KPIs in
+ * other spaces, then Date Rollup.
+ *
+ * Date Rollup: two areas: which date fields each
  * level reads (ST-5), then one parent-vs-children dropdown per discovered
  * hierarchy level (ST-1/ST-2/ST-3). Levels are read at runtime — nothing is
  * hardcoded — and settings are keyed by hierarchy level, so they apply to every
@@ -80,21 +85,38 @@ function toStoredDateFields(
   return out;
 }
 
-export function Settings({ useSettings = useSettingsData }: { useSettings?: UseSettings }) {
+export interface SettingsProps {
+  useSettings?: UseSettings;
+  useKpiSetup?: UseKpiSetup;
+  /** Upgrade data; defaults to the real loader inside the card */
+  useMigrations?: UseMigrations;
+}
+
+export function Settings({ useSettings = useSettingsData, useKpiSetup = useKpiSetupData, useMigrations }: SettingsProps) {
   const {
     levels,
     config,
     dateFields,
-    space,
     pending,
     error,
     save,
-    saveSpaceKey,
-    createSpace,
     hierarchy,
     saveHierarchy,
     createHierarchyLinkType,
+    reloadHierarchy,
   } = useSettings();
+  const kpiSetup = useKpiSetup();
+  // A building block change can make a data migration applicable (05's needs the fields).
+  const [setupVersion, setSetupVersion] = useState(0);
+  const { apply: applySetup } = kpiSetup;
+  const apply = useCallback<typeof applySetup>(
+    async (change) => {
+      const next = await applySetup(change);
+      setSetupVersion((v) => v + 1);
+      return next;
+    },
+    [applySetup],
+  );
   const [methods, setMethods] = useState<Record<string, RollupMethod>>({});
   const [fields, setFields] = useState<Record<string, DateFieldDefaults>>({});
   const [depthCap, setDepthCap] = useState<number | null>(null);
@@ -156,7 +178,28 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
         <h1 className="mx-auto max-w-3xl px-6 py-4 text-xl font-semibold">KPI Settings</h1>
       </header>
       <div className="mx-auto max-w-3xl p-6">
-        {space && <KpiSpaceCard space={space} onSaveKey={saveSpaceKey} onCreate={createSpace} />}
+        <UpgradeDataCard useMigrations={useMigrations} refreshKey={setupVersion} />
+        {kpiSetup.error && (
+          <section className="mt-6 rounded-lg border border-border bg-surface px-5 py-3 text-sm text-danger">
+            Couldn’t read the KPI configuration: {kpiSetup.error}
+          </section>
+        )}
+        {kpiSetup.setup && (
+          <>
+            <KpiBuildingBlocks
+              setup={kpiSetup.setup}
+              api={kpiSetup.api}
+              apply={apply}
+              onSetUpEverything={() => void reloadHierarchy().catch(() => undefined)}
+            />
+            <CentralSpaceCard
+              setup={kpiSetup.setup}
+              api={kpiSetup.api}
+              apply={apply}
+              onChanged={() => void reloadHierarchy().catch(() => undefined)}
+            />
+          </>
+        )}
         {hierarchy && (
           <KpiHierarchyCard
             // Remount on outside changes (e.g. "Create space" also sets up nesting) so the form resyncs.
@@ -166,6 +209,7 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
             onCreate={createHierarchyLinkType}
           />
         )}
+        {kpiSetup.setup && <OtherSpacesGuide setup={kpiSetup.setup} api={kpiSetup.api} />}
 
         {/* Date Rollup card. Without the site's levels (the issue-type lookup failed) there's
             nothing to configure, and saving would overwrite the stored settings, so explain
@@ -278,130 +322,5 @@ export function Settings({ useSettings = useSettingsData }: { useSettings?: UseS
         )}
       </div>
     </div>
-  );
-}
-
-const SPACE_BADGE: Record<
-  KpiSpaceStatus['state'],
-  { label: string; appearance: 'default' | 'removed' | 'moved' | 'success' }
-> = {
-  unset: { label: 'Not set', appearance: 'default' },
-  missing: { label: 'Not created', appearance: 'removed' },
-  misconfigured: { label: 'Needs setup', appearance: 'moved' },
-  ready: { label: 'Connected', appearance: 'success' },
-};
-
-/**
- * KPI Space provisioning (storage-model.md). An admin picks a Jira project key;
- * the app creates the KPI project (or records the key to connect an existing
- * one). KPIs then live as issues in that project.
- */
-function KpiSpaceCard({
-  space,
-  onSaveKey,
-  onCreate,
-}: {
-  space: KpiSpaceStatus;
-  onSaveKey: (key: string) => Promise<KpiSpaceStatus>;
-  onCreate: (key: string) => Promise<KpiSpaceStatus>;
-}) {
-  const [key, setKey] = useState(space.key ?? 'KPI');
-  const [busy, setBusy] = useState<'create' | 'save' | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const badge = SPACE_BADGE[space.state];
-  const valid = isValidProjectKey(key);
-
-  const run = async (which: 'create' | 'save') => {
-    setBusy(which);
-    setErr(null);
-    try {
-      await (which === 'create' ? onCreate(key) : onSaveKey(key));
-    } catch (e: unknown) {
-      setErr(String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  return (
-    <section className="mt-6 rounded-lg border border-border bg-surface">
-      <header className="flex items-center gap-2 border-b border-border px-5 py-3">
-        <h2 className="text-base font-semibold">KPI Space</h2>
-        <Lozenge appearance={badge.appearance}>{badge.label}</Lozenge>
-      </header>
-      <div className="px-5 py-4">
-        {space.state === 'ready' ? (
-          <div className="flex flex-wrap items-center gap-3 text-sm">
-            <span className="grid h-6 w-6 flex-none place-items-center rounded bg-brand text-[11px] font-bold text-white">
-              {key.charAt(0)}
-            </span>
-            <span className="font-medium text-text">{space.name}</span>
-            <span className="text-text-subtle">
-              KPIs are created as work items in the space{' '}
-              <code className="rounded bg-surface-sunken px-1.5 py-0.5 text-xs text-text">{space.key}</code>.
-            </span>
-          </div>
-        ) : (
-          <>
-            <p className="mb-4 text-sm text-text-subtle">
-              KPIs are stored as issues in a dedicated Jira project so they can span every project and
-              be read/written over standard Jira REST. Choose the project key for that space.
-            </p>
-            <div className="flex flex-wrap items-end gap-3">
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="font-medium">Project key</span>
-                <Textfield
-                  width="small"
-                  isCompact
-                  value={key}
-                  onChange={(e) => {
-                    setKey(normalizeProjectKey(e.currentTarget.value));
-                    setErr(null);
-                  }}
-                  placeholder="KPI"
-                  aria-label="Project key"
-                />
-              </label>
-              <Button
-                appearance="primary"
-                onClick={() => run('create')}
-                isDisabled={!valid || busy !== null}
-                isLoading={busy === 'create'}
-              >
-                {busy === 'create' ? 'Creating…' : 'Create space'}
-              </Button>
-              <Button
-                onClick={() => run('save')}
-                isDisabled={!valid || busy !== null}
-                isLoading={busy === 'save'}
-              >
-                {busy === 'save' ? 'Saving…' : 'Save key'}
-              </Button>
-              {!valid && <span className="text-xs text-danger">2–10 letters/digits, starts with a letter.</span>}
-              {space.state === 'missing' && valid && busy === null && (
-                <span className="text-xs text-text-subtle">
-                  No project <strong className="text-text">{space.key}</strong> yet — create it or connect an existing one.
-                </span>
-              )}
-              {space.state === 'misconfigured' && busy === null && (
-                <span className="text-xs text-text-subtle">
-                  Project <strong className="text-text">{space.key}</strong> exists but is missing the{' '}
-                  <strong className="text-text">KPI</strong> issue type — click{' '}
-                  <strong className="text-text">Create space</strong> to finish setup.
-                </span>
-              )}
-            </div>
-            {busy === 'create' && (
-              <p className="mt-3 flex items-center gap-2 text-xs text-text-subtle">
-                <Spinner size="small" label="Creating project" />
-                Creating the project and configuring the KPI work-item type — this can take up to a
-                minute. Please keep this page open.
-              </p>
-            )}
-          </>
-        )}
-        {err && <p className="mt-2 text-xs text-danger">{err}</p>}
-      </div>
-    </section>
   );
 }

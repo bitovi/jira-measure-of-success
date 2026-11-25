@@ -181,3 +181,34 @@ export function summarizeTrace(trace: Trace): TraceSummary {
     stages,
   };
 }
+
+const invocationCaches = new WeakMap<Trace, Map<string, Promise<unknown>>>();
+
+/**
+ * `load()` once per resolver invocation (per trace): later calls in the same
+ * invocation share the result. Outside a trace (a plain call) nothing is
+ * cached. A failed load is forgotten so the next call tries again.
+ */
+export function perInvocation<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const trace = current.getStore();
+  if (!trace) return load();
+  let cache = invocationCaches.get(trace);
+  if (!cache) {
+    cache = new Map();
+    invocationCaches.set(trace, cache);
+  }
+  const hit = cache.get(key) as Promise<T> | undefined;
+  if (hit) return hit;
+  const pending = load();
+  cache.set(key, pending);
+  pending.catch(() => {
+    if (cache.get(key) === pending) cache.delete(key);
+  });
+  return pending;
+}
+
+/** Drop a `perInvocation` result after a write changed what it read. */
+export function forgetPerInvocation(key: string): void {
+  const trace = current.getStore();
+  if (trace) invocationCaches.get(trace)?.delete(key);
+}

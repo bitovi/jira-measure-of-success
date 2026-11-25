@@ -27,6 +27,7 @@ import {
   runMigrationBatch,
   retryMigration,
   kpiKeyOf,
+  kpiSetup,
 } from './fixtures/mock-resolvers.js';
 import {
   accessMode,
@@ -85,6 +86,34 @@ const resolvers: Record<string, Handler> = {
   getKpiHierarchy: () => getKpiHierarchy(),
   saveKpiHierarchy: (p) => saveKpiHierarchy(p),
   createKpiHierarchyLinkType: () => createKpiHierarchyLinkType(),
+  // KPI building blocks (spec 11 · 04). `?setup=fresh|upgraded|blocks|configured|broken`
+  // picks the site; writes take `?mutationDelayMs=` and fail with `?mutationFail=1`.
+  getKpiSetup: () => kpiSetup.getKpiSetup(),
+  getKpiWorkTypeChoices: () => kpiSetup.getKpiWorkTypeChoices(),
+  getKpiFieldChoices: () => kpiSetup.getKpiFieldChoices(),
+  getKpiFieldOptions: (p) => kpiSetup.getKpiFieldOptions(p?.fieldId),
+  getKpiSpaceChoices: () => kpiSetup.getKpiSpaceChoices(),
+  getKpiSpaceSetup: (p) => kpiSetup.getKpiSpaceSetup(p?.projectId),
+  setUpKpiWorkType: async (p) => {
+    await simulateMutation();
+    return kpiSetup.setUpKpiWorkType(p);
+  },
+  setUpKpiFields: async (p) => {
+    await simulateMutation();
+    return kpiSetup.setUpKpiFields(p);
+  },
+  setUpCentralSpace: async (p) => {
+    await simulateMutation();
+    return kpiSetup.setUpCentralSpace(p);
+  },
+  setUpKpiSpaceStep: async (p) => {
+    await simulateMutation();
+    return kpiSetup.setUpKpiSpaceStep(p);
+  },
+  setUpEverything: async (p) => {
+    await simulateMutation();
+    return kpiSetup.setUpEverything(p);
+  },
   // Data migrations (spec 11 · 02). `?migrations=pending|running|done|failed`
   // picks the starting state; each batch takes `?migrationDelayMs=` (default 800).
   getMigrations: () => getMigrations(),

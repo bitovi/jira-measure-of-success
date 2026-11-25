@@ -22,6 +22,7 @@ import {
   writeReading,
   KPI_ISSUE_TYPE,
 } from '../src/backend/jira';
+import { ensureKpiWorkType } from '../src/backend/kpiSetup';
 import { DEFAULT_KPI_LINK_TYPE, type Assignment, type KpiHierarchyLink } from '../src/domain/index';
 
 /**
@@ -138,7 +139,7 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
 
   it('ensureKpiIssueTypeOnProject → associates the KPI issue type', async () => {
     expect(ctx.projectId, 'requires createKpiProject to have succeeded').toBeTruthy();
-    await ensureKpiIssueTypeOnProject(ctx.projectId!);
+    await ensureKpiIssueTypeOnProject(ctx.projectId!, await ensureKpiWorkType({ mode: 'create' }));
     const project = await findProjectByKey(PROJECT_KEY);
     expect(project?.issueTypeNames).toContain(KPI_ISSUE_TYPE);
   });

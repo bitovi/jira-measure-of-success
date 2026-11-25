@@ -1,7 +1,9 @@
 import { kvs } from '@forge/kvs';
+import { forgetPerInvocation } from './requestLog';
 import {
   KpiHierarchyLink,
   MigrationRecord,
+  StoredKpiSiteConfig,
   RollupConfig,
   DEFAULT_ROLLUP_METHOD,
   type RollupConfig as RollupConfigT,
@@ -51,6 +53,7 @@ export async function readKpiSpaceConfig(): Promise<KpiSpaceConfig> {
 
 export async function writeKpiSpaceConfig(cfg: KpiSpaceConfig): Promise<void> {
   await kvs.set(KPI_SPACE_KEY, cfg);
+  forgetPerInvocation(KPI_SITE_CONFIG_CACHE_KEY);
 }
 
 /**
@@ -66,6 +69,27 @@ export async function readKpiHierarchyConfig(): Promise<KpiHierarchyLink | null>
 
 export async function writeKpiHierarchyConfig(cfg: KpiHierarchyLink): Promise<void> {
   await kvs.set(KPI_HIERARCHY_KEY, KpiHierarchyLink.parse(cfg));
+  forgetPerInvocation(KPI_SITE_CONFIG_CACHE_KEY);
+}
+
+/**
+ * The KPI site configuration's own record (spec 11 · 04): work type, fields and
+ * schemes. Raw (unvalidated): `readKpiSiteConfig` (kpiConfig.ts) parses it and
+ * falls back to a derived config.
+ */
+const KPI_SITE_CONFIG_KEY = 'kpi:config:site';
+/** `perInvocation` key of the assembled site config (kpiConfig.ts). */
+export const KPI_SITE_CONFIG_CACHE_KEY = 'kpiSiteConfig';
+
+export async function readStoredKpiSiteConfig(): Promise<unknown> {
+  return kvs.get(KPI_SITE_CONFIG_KEY);
+}
+
+export async function writeStoredKpiSiteConfig(config: StoredKpiSiteConfig): Promise<StoredKpiSiteConfig> {
+  const valid = StoredKpiSiteConfig.parse(config);
+  await kvs.set(KPI_SITE_CONFIG_KEY, valid);
+  forgetPerInvocation(KPI_SITE_CONFIG_CACHE_KEY);
+  return valid;
 }
 
 /**

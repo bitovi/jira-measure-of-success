@@ -1,8 +1,19 @@
+import { useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn, within, userEvent, expect, waitFor } from '@storybook/test';
 import type { DateFieldCatalog, HierarchyLevel, KpiHierarchyStatus, RollupConfig } from '@domain/index.js';
 import { Settings } from './Settings.js';
 import type { SettingsController, UseSettings } from '@ui/data/useSettingsData/index.js';
+import { useKpiSetupData, type KpiSetupApi, type UseKpiSetup } from '@ui/data/useKpiSetupData/index.js';
+import { useMigrationsData, type MigrationsApi, type UseMigrations } from '@ui/data/useMigrationsData/index.js';
+import { createKpiSetupSim, type KpiSetupScenario } from '@harness/fixtures/kpiSetup.js';
+import {
+  createMockMigrations,
+  FIRST_MIGRATION,
+  mockMigrationsApi,
+  SECOND_MIGRATION,
+  type MigrationsMode,
+} from '@harness/fixtures/mockMigrations.js';
 
 /**
  * Scenario stories for Settings — inject a stub loader hook to render each data
@@ -42,26 +53,46 @@ function stub(over: Partial<SettingsController>): UseSettings {
     levels: over.levels ?? null,
     config: over.config ?? null,
     dateFields: over.dateFields === undefined ? DATE_FIELDS : over.dateFields,
-    space: over.space ?? { key: null, projectId: null, name: null, state: 'unset' },
     pending: over.pending ?? false,
     error: over.error ?? null,
     save: over.save ?? (async () => {}),
-    saveSpaceKey:
-      over.saveSpaceKey ??
-      (async (key) => ({ key, projectId: null, name: null, state: 'missing' })),
-    createSpace:
-      over.createSpace ??
-      (async (key) => ({ key, projectId: `p-${key}`, name: `KPIs (${key})`, state: 'ready' })),
     hierarchy: over.hierarchy === undefined ? HIERARCHY : over.hierarchy,
     saveHierarchy: over.saveHierarchy ?? (async () => HIERARCHY),
     createHierarchyLinkType: over.createHierarchyLinkType ?? (async () => HIERARCHY),
+    reloadHierarchy: over.reloadHierarchy ?? (async () => {}),
   });
+}
+
+/** The KPI building blocks on an in-memory site (spec 11 · 04), one per mounted story. */
+function kpiSite(scenario: KpiSetupScenario): UseKpiSetup {
+  return function useStorySite() {
+    const [api] = useState<KpiSetupApi>(() => createKpiSetupSim(scenario));
+    return useKpiSetupData(api);
+  };
+}
+
+/** Upgrade data on in-memory migrations; 05's applies once fields are chosen (`fieldsChosen`). */
+function migrations(mode: MigrationsMode, fieldsChosen = true): UseMigrations {
+  return function useStoryMigrations() {
+    const [api] = useState<MigrationsApi>(() =>
+      mockMigrationsApi(
+        createMockMigrations(mode, {
+          applicability: (id) =>
+            id === SECOND_MIGRATION && !fieldsChosen
+              ? { applicable: false, reason: 'Choose the KPI fields in Settings first (KPI building blocks).' }
+              : { applicable: true },
+        }),
+      ),
+    );
+    return useMigrationsData(api);
+  };
 }
 
 const meta: Meta<typeof Settings> = {
   component: Settings,
   title: 'Surfaces/Settings',
   parameters: { layout: 'padded' },
+  args: { useKpiSetup: kpiSite('configured'), useMigrations: migrations('done') },
 };
 export default meta;
 type Story = StoryObj<typeof Settings>;
@@ -129,7 +160,7 @@ export const LevelsUnavailable: Story = {
     const c = within(canvasElement);
     await expect(c.getByText(/Couldn’t read this site’s issue types/)).toBeInTheDocument();
     await expect(c.queryByRole('button', { name: /Save settings/i })).not.toBeInTheDocument();
-    await expect(c.getByRole('heading', { name: 'KPI Space' })).toBeInTheDocument();
+    await expect(await c.findByRole('heading', { name: 'Central KPI space' })).toBeInTheDocument();
     await expect(c.getByRole('heading', { name: 'KPI Hierarchy' })).toBeInTheDocument();
   },
 };
@@ -269,63 +300,107 @@ export const DateFieldsUnavailable: Story = {
   },
 };
 
-// ── KPI space ────────────────────────────────────────────────────────────────
-export const SpaceUnset: Story = {
+// ── KPI configuration (spec 11 · 04) ───────────────────────────────────────────
+
+/** A fresh install: nothing set up, no data to upgrade. */
+export const FreshInstall: Story = {
+  args: {
+    useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} }, hierarchy: { ...HIERARCHY, state: 'unset', linkType: null, linkTypeId: null } }),
+    useKpiSetup: kpiSite('fresh'),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(await c.findByRole('heading', { name: 'KPI building blocks' })).toBeInTheDocument();
+    await expect(await c.findByText('All data is up to date.')).toBeInTheDocument();
+    await expect(c.getByRole('button', { name: 'Set up everything…' })).toBeInTheDocument();
+    await expect(c.getByText('First: choose the KPI work type above.')).toBeInTheDocument();
+    await expect(c.getByText('Finish the KPI work type and KPI fields first. These steps refer to them.')).toBeInTheDocument();
+  },
+};
+
+/**
+ * An upgraded install: the Upgrade data card is first and expanded; the work
+ * type and central space come from the older version; fields aren't chosen, so
+ * 05's migration doesn't apply yet.
+ */
+export const UpgradedInstall: Story = {
+  args: {
+    useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} } }),
+    useKpiSetup: kpiSite('upgraded'),
+    useMigrations: migrations('pending', false),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await waitFor(() => expect(c.getByRole('heading', { name: 'Upgrade data' })).toBeInTheDocument());
+    await expect(c.getAllByRole('heading', { level: 2 })[0]).toHaveTextContent('Upgrade data');
+    await expect(await c.findByText(/KPIs are created as work items in/)).toBeInTheDocument();
+    await expect(within(c.getByRole('group', { name: 'KPI fields' })).getByText('To do')).toBeInTheDocument();
+  },
+};
+
+/** Fully configured, data upgraded: the card is one line. */
+export const FullyConfigured: Story = {
   args: { useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} } }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(c.getByText('KPI Space')).toBeInTheDocument();
-    await expect(c.getByText('Not set')).toBeInTheDocument();
-    await expect(c.getByRole('button', { name: /Create space/i })).toBeInTheDocument();
+    await expect(await c.findByText('All data is up to date.')).toBeInTheDocument();
+    await expect(await c.findByText('Ready')).toBeInTheDocument();
+    await expect(c.getByRole('heading', { name: 'Using KPIs in other spaces' })).toBeInTheDocument();
+    await expect(c.queryByRole('button', { name: 'Set up everything…' })).not.toBeInTheDocument();
   },
 };
 
-export const SpaceReady: Story = {
+/** A configured field was deleted in Jira. */
+export const BrokenBlock: Story = {
+  args: { useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} } }), useKpiSetup: kpiSite('broken') },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(await c.findByText('Needs attention')).toBeInTheDocument();
+    await expect(c.getByText('Field deleted')).toBeInTheDocument();
+  },
+};
+
+/** "Set up everything" also sets up KPI nesting, so the page re-reads the hierarchy. */
+const reloadSpy = fn(async () => {});
+export const SetUpEverythingReloadsNesting: Story = {
   args: {
-    useSettings: stub({
-      levels: LEVELS,
-      config: { dueDateRollup: {} },
-      space: { key: 'KPI', projectId: 'p-KPI', name: 'KPIs (KPI)', state: 'ready' },
-    }),
+    useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} }, reloadHierarchy: reloadSpy }),
+    useKpiSetup: kpiSite('fresh'),
   },
   play: async ({ canvasElement }) => {
+    reloadSpy.mockClear();
     const c = within(canvasElement);
-    // the KPI Space card and the KPI Hierarchy card are both connected
-    await expect(c.getAllByText('Connected')).toHaveLength(2);
-    await expect(c.getByText('KPIs (KPI)')).toBeInTheDocument();
+    await userEvent.click(await c.findByRole('button', { name: 'Set up everything…' }));
+    await userEvent.click(c.getByRole('button', { name: 'Set it up' }));
+    await waitFor(() => expect(reloadSpy).toHaveBeenCalledTimes(1));
+    await expect(await c.findByText(/KPIs are created as work items in/)).toBeInTheDocument();
   },
 };
 
-/** Project exists but the KPI issue type isn't associated — offer to finish setup. */
-export const SpaceMisconfigured: Story = {
-  args: {
-    useSettings: stub({
-      levels: LEVELS,
-      config: { dueDateRollup: {} },
-      space: { key: 'KPI', projectId: 'p-KPI', name: 'KPIs (KPI)', state: 'misconfigured' },
-    }),
-  },
+/** Choosing the KPI fields makes 05's upgrade applicable: the card re-reads its list. */
+function linkedSite(): { useKpiSetup: UseKpiSetup; useMigrations: UseMigrations } {
+  const sim = createKpiSetupSim('upgraded');
+  const mock = createMockMigrations('pending', {
+    applicability: (id) =>
+      id === SECOND_MIGRATION && !sim.config().fields
+        ? { applicable: false, reason: 'Choose the KPI fields in Settings first (KPI building blocks).' }
+        : { applicable: true },
+  });
+  while (mock.runMigrationBatch(FIRST_MIGRATION).state === 'running');
+  const api = mockMigrationsApi(mock);
+  return { useKpiSetup: () => useKpiSetupData(sim), useMigrations: () => useMigrationsData(api) };
+}
+export const ChoosingFieldsUnblocksTheirUpgrade: Story = {
+  args: { useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} } }), ...linkedSite() },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(c.getByText('Needs setup')).toBeInTheDocument();
-    await expect(c.getByText(/missing the/i)).toBeInTheDocument();
-    await expect(c.getByRole('button', { name: /Create space/i })).toBeInTheDocument();
+    const second = within(await c.findByRole('listitem', { name: 'Move unit and direction into fields' }));
+    await expect(second.getByText('Not yet')).toBeInTheDocument();
+    await userEvent.click(within(c.getByRole('group', { name: 'KPI fields' })).getByRole('button', { name: 'Create fields' }));
+    await waitFor(() => expect(second.getByText('To do')).toBeInTheDocument());
+    await expect(c.getByRole('button', { name: 'Upgrade' })).toBeEnabled();
   },
 };
 
-/** Interaction: entering a key + "Create space" provisions the KPI project. */
-const createSpy = fn(async (key: string) => ({
-  key,
-  projectId: `p-${key}`,
-  name: `KPIs (${key})`,
-  state: 'ready' as const,
-}));
-export const CreateSpaceInteraction: Story = {
-  args: { useSettings: stub({ levels: LEVELS, config: { dueDateRollup: {} }, createSpace: createSpy }) },
-  play: async ({ canvasElement }) => {
-    createSpy.mockClear();
-    const c = within(canvasElement);
-    await userEvent.click(c.getByRole('button', { name: /Create space/i }));
-    await waitFor(() => expect(createSpy).toHaveBeenCalledWith('KPI'));
-  },
-};
+export const UpgradedInstallDark: Story = { ...UpgradedInstall, play: undefined, globals: { theme: 'dark' } };
+export const FullyConfiguredDark: Story = { ...FullyConfigured, play: undefined, globals: { theme: 'dark' } };

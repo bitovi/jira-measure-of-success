@@ -1,5 +1,5 @@
 import { assumeTrustedRoute, getAppContext, route, routeFromAbsolute } from '@forge/api';
-import { asApp, asUser, type RequestJira } from './requestLog';
+import { asApp, asUser, perInvocation, forgetPerInvocation, type RequestJira } from './requestLog';
 import {
   isKpiIssueId,
   KpiMetaProperty,
@@ -36,9 +36,10 @@ import {
 } from '../domain/index';
 
 /**
- * Jira access helpers for the resolver. These are the ONLY place that talks to
- * Jira's REST API; everything else operates on plain domain objects, so the
- * logic stays testable without a live site.
+ * Jira access helpers for the resolver. These (with kpiSetup.ts for the KPI
+ * building blocks' Jira configuration, and the migrations) are the only place
+ * that talks to Jira's REST API; everything else operates on plain domain
+ * objects, so the logic stays testable without a live site.
  */
 const ASSIGNMENT_PROPERTY_KEY = 'kpi-assignments';
 const MAX_DEPTH = 10;
@@ -1100,7 +1101,7 @@ export async function fetchIsJiraAdmin(): Promise<boolean> {
  * letting a downstream `undefined` produce an opaque platform error.
  */
 type JiraResponse = { status: number; json(): Promise<unknown>; text(): Promise<string> };
-async function jiraError(res: JiraResponse, action: string): Promise<string> {
+export async function jiraError(res: JiraResponse, action: string): Promise<string> {
   let detail = '';
   try {
     const body = (await res.json()) as {
@@ -1116,26 +1117,37 @@ async function jiraError(res: JiraResponse, action: string): Promise<string> {
 
 export interface ProjectInfo {
   id: string;
+  key: string;
   name: string;
   /** issue-type names available in the project (via `expand=issueTypes`) */
   issueTypeNames: string[];
+  /** the same types' ids */
+  issueTypeIds: string[];
+}
+
+/** Look up a project (+ its issue types) by key or id; null if it doesn't exist. */
+export async function findProject(keyOrId: string): Promise<ProjectInfo | null> {
+  const res = await asApp().requestJira(route`/rest/api/3/project/${keyOrId}?expand=issueTypes`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(await jiraError(res, `look up project "${keyOrId}"`));
+  const p = (await res.json()) as {
+    id: string | number;
+    key?: string;
+    name: string;
+    issueTypes?: Array<{ id?: string | number; name: string }>;
+  };
+  return {
+    id: String(p.id),
+    key: p.key ?? keyOrId,
+    name: p.name,
+    issueTypeNames: (p.issueTypes ?? []).map((t) => t.name),
+    issueTypeIds: (p.issueTypes ?? []).map((t) => String(t.id ?? '')).filter(Boolean),
+  };
 }
 
 /** Look up a project (+ its issue types) by key; null if it doesn't exist. */
 export async function findProjectByKey(key: string): Promise<ProjectInfo | null> {
-  const res = await asApp().requestJira(route`/rest/api/3/project/${key}?expand=issueTypes`);
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await jiraError(res, `look up project "${key}"`));
-  const p = (await res.json()) as {
-    id: string | number;
-    name: string;
-    issueTypes?: Array<{ name: string }>;
-  };
-  return {
-    id: String(p.id),
-    name: p.name,
-    issueTypeNames: (p.issueTypes ?? []).map((t) => t.name),
-  };
+  return findProject(key);
 }
 
 /**
@@ -1161,40 +1173,58 @@ export async function createKpiProject(
   return { id: String(p.id), name };
 }
 
-/** KPI-space issue-type name that KPI issues are created as. */
+/** The KPI work type's name on an install that hasn't chosen one (spec 11 · 04: `DEFAULT_KPI_WORK_TYPE_NAME`). */
 export const KPI_ISSUE_TYPE = 'KPI';
 
-/** Find (or create) the global "KPI" standard issue type; returns its id. */
-async function ensureKpiIssueType(): Promise<string> {
-  const listRes = await asApp().requestJira(route`/rest/api/3/issuetype`);
-  if (!listRes.ok) throw new Error(await jiraError(listRes, 'list issue types'));
-  const types = (await listRes.json()) as Array<{ id: string; name: string }>;
-  const found = types.find((t) => t.name === KPI_ISSUE_TYPE);
-  if (found) return found.id;
-  // Write as the USER (Administer Jira, spec 10); the list above stays asApp.
-  const createRes = await asUser().requestJira(route`/rest/api/3/issuetype`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: KPI_ISSUE_TYPE,
-      type: 'standard',
-      description: 'App-managed KPI metric (Measure of Success).',
-    }),
+export interface SiteIssueType {
+  id: string;
+  name: string;
+  iconUrl: string | null;
+  subtask: boolean;
+  hierarchyLevel: number | null;
+  /** set for a team-managed space's own type */
+  projectScoped: boolean;
+}
+
+/** Every issue type on the site, read once per invocation (as the app). */
+export function listIssueTypes(): Promise<SiteIssueType[]> {
+  return perInvocation('issueTypes', async () => {
+    const res = await asApp().requestJira(route`/rest/api/3/issuetype`);
+    if (!res.ok) throw new Error(await jiraError(res, 'list issue types'));
+    const types = (await res.json()) as Array<{
+      id: string | number;
+      name: string;
+      iconUrl?: string;
+      subtask?: boolean;
+      hierarchyLevel?: number;
+      scope?: { type?: string };
+    }>;
+    return types.map((t) => ({
+      id: String(t.id),
+      name: t.name,
+      iconUrl: t.iconUrl ?? null,
+      subtask: t.subtask === true,
+      hierarchyLevel: typeof t.hierarchyLevel === 'number' ? t.hierarchyLevel : null,
+      projectScoped: t.scope?.type === 'PROJECT',
+    }));
   });
-  if (!createRes.ok) {
-    throw new Error(await jiraError(createRes, `create the "${KPI_ISSUE_TYPE}" issue type`));
-  }
-  const created = (await createRes.json()) as { id: string };
-  return created.id;
+}
+
+/** After creating or changing a type, so the next `listIssueTypes` sees it. */
+export function forgetIssueTypes(): void {
+  forgetPerInvocation('issueTypes');
 }
 
 /**
- * Ensure the `KPI` issue type exists and is associated with the given project's
- * issue-type scheme, so KPI issues can be created in it. Company-managed only —
- * team-managed projects don't expose a classic scheme.
+ * Ensure the KPI work type is in the given project's issue-type scheme, so KPI
+ * issues can be created in it. Company-managed only — team-managed projects
+ * don't expose a classic scheme. Returns false when it was already there.
  */
-export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<void> {
-  const issueTypeId = await ensureKpiIssueType();
+export async function ensureKpiIssueTypeOnProject(
+  projectId: string,
+  workType: { id: string; name: string },
+): Promise<boolean> {
+  if ((await findProject(projectId))?.issueTypeIds.includes(workType.id)) return false;
   const schemeRes = await asApp()
     .requestJira(route`/rest/api/3/issuetypescheme/project?projectId=${projectId}`);
   if (!schemeRes.ok) throw new Error(await jiraError(schemeRes, 'read the project issue-type scheme'));
@@ -1204,7 +1234,7 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
   const schemeId = body.values?.[0]?.issueTypeScheme?.id;
   if (!schemeId) {
     throw new Error(
-      'No issue-type scheme found for this project. Team-managed projects cannot be used as a KPI space — use a company-managed project.',
+      'No issue-type scheme found for this project. Team-managed projects cannot hold KPIs — use a company-managed project.',
     );
   }
   // Write as the USER (Administer Jira, spec 10); the scheme read above stays asApp.
@@ -1212,12 +1242,14 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
     .requestJira(route`/rest/api/3/issuetypescheme/${schemeId}/issuetype`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ issueTypeIds: [issueTypeId] }),
+      body: JSON.stringify({ issueTypeIds: [workType.id] }),
     });
   // 204 on success; a type already in the scheme is a harmless 409.
-  if (!addRes.ok && addRes.status !== 409) {
-    throw new Error(await jiraError(addRes, `add the "${KPI_ISSUE_TYPE}" issue type to the project`));
+  if (addRes.status === 409) return false;
+  if (!addRes.ok) {
+    throw new Error(await jiraError(addRes, `add the "${workType.name}" work type to the project`));
   }
+  return true;
 }
 
 /**
@@ -1233,6 +1265,7 @@ export async function createKpiIssue(
   projectId: string,
   input: CreateKpiInput,
   hierarchy: KpiHierarchyLink | null,
+  workType: { id: string } | null = null,
 ): Promise<CreatedKpi> {
   if (input.parentKpiId && !hierarchy) {
     throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
@@ -1245,7 +1278,8 @@ export async function createKpiIssue(
   });
   const fields: Record<string, unknown> = {
     project: { id: projectId },
-    issuetype: { name: KPI_ISSUE_TYPE },
+    // The configured KPI work type (spec 11 · 04); an install that hasn't chosen one uses the type named KPI.
+    issuetype: workType ? { id: workType.id } : { name: KPI_ISSUE_TYPE },
     summary: name,
   };
   // As the USER: Jira requires Create Issues in the KPI project (spec 10).

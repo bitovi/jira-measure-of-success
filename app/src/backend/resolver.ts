@@ -1,4 +1,5 @@
 import Resolver, { type ResolverFunction } from '@forge/resolver';
+import type { ZodType, ZodTypeDef } from 'zod';
 import {
   applyTargetContributions,
   assemblePanel,
@@ -27,6 +28,12 @@ import {
   KPI_HIERARCHY_NOT_SET_UP,
   KpiHierarchyLink,
   KpiMetaProperty,
+  SetUpCentralSpaceInput,
+  SetUpKpiFieldsInput,
+  SetUpKpiSpaceStepInput,
+  SetUpKpiWorkTypeInput,
+  type KpiSetupStatus,
+  type KpiSiteConfig,
   hierarchyParentLinks,
   wouldCreateKpiCycle,
   UpdateKpiInput,
@@ -61,6 +68,7 @@ import {
   fetchSubtreeTimingNodesForRoots,
   fetchTargetContributions,
   fetchTargetSourceIssue,
+  findProject,
   findProjectByKey,
   createKpiIssue,
   createKpiProject,
@@ -70,7 +78,6 @@ import {
   updateKpiDefinition,
   ensureKpiHierarchyLinkType,
   listIssueLinkTypes,
-  ensureKpiIssueTypeOnProject,
   inlineIssueTypeIcons,
   JiraForbiddenError,
   KPI_ISSUE_TYPE,
@@ -82,6 +89,19 @@ import {
   type KpiSpaceIssue,
 } from './jira';
 import { listMigrations, retryMigration, runMigrationBatch } from './migrations/runner';
+import { loadKpiSiteConfig, readKpiSiteConfig, writeKpiSiteConfig } from './kpiConfig';
+import {
+  applyKpiSpaceStep,
+  ensureKpiFields,
+  ensureKpiWorkType,
+  kpiSetupStatus,
+  kpiSpaceSetupStatus,
+  listKpiFieldChoices,
+  listKpiFieldOptions,
+  listKpiSpaceChoices,
+  listKpiWorkTypeChoices,
+  makeSpaceUsableForKpis,
+} from './kpiSetup';
 import { stage, traced } from './requestLog';
 import {
   type KpiSpaceConfig,
@@ -503,10 +523,11 @@ async function kpiSpaceStatus(): Promise<KpiSpaceStatus> {
   if (!cfg.key) return { key: null, projectId: null, name: null, state: 'unset' };
   const project = await findProjectByKey(cfg.key);
   if (!project) return { key: cfg.key, projectId: null, name: null, state: 'missing' };
-  // The project exists, but KPI issues can only be created if the KPI issue type
+  // The project exists, but KPI issues can only be created if the KPI work type
   // is available in it — otherwise it's connected-but-not-usable.
-  const state = project.issueTypeNames.includes(KPI_ISSUE_TYPE) ? 'ready' : 'misconfigured';
-  return { key: cfg.key, projectId: project.id, name: project.name, state };
+  const { workType } = await readKpiSiteConfig();
+  const hasType = workType ? project.issueTypeIds.includes(workType.id) : project.issueTypeNames.includes(KPI_ISSUE_TYPE);
+  return { key: cfg.key, projectId: project.id, name: project.name, state: hasType ? 'ready' : 'misconfigured' };
 }
 
 define('getKpiSpace', async () => kpiSpaceStatus());
@@ -535,30 +556,168 @@ defineSettingsWrite('saveKpiSpaceKey', async ({ payload }) => {
   return kpiSpaceStatus();
 });
 
-defineSettingsWrite('createKpiSpace', async ({ payload, context }) => {
-  const key = normalizeProjectKey(String((payload as { key?: string })?.key ?? ''));
-  if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
-  const existing = await findProjectByKey(key);
-  // The invoking admin (from context) leads a newly-created project. The
-  // provisioning writes run as that user, so Jira requires Administer Jira for
-  // each one (spec 10).
-  const leadAccountId = (context as { accountId?: string })?.accountId;
-  if (!existing && !leadAccountId) {
-    throw new Error('Could not determine the current user to lead the new KPI project.');
+/** The KPI work type, creating (or adopting) the app's `KPI` type when none is chosen yet. */
+async function requireKpiWorkType(): Promise<NonNullable<KpiSiteConfig['workType']>> {
+  const { workType } = await readKpiSiteConfig();
+  if (workType) return workType;
+  const created = await ensureKpiWorkType({ mode: 'create' });
+  await writeKpiSiteConfig({ workType: created });
+  return created;
+}
+
+/**
+ * Create (or use) the central KPI space: the work type in its scheme, the
+ * fields in its field scheme and on its screens, saved as the central space.
+ * A new install also gets KPI nesting set up (best effort, as before).
+ */
+async function setUpCentralSpace(input: SetUpCentralSpaceInput, context: unknown): Promise<string[]> {
+  let project: { id: string; key: string; name: string };
+  if (input.mode === 'existing') {
+    const found = await findProject(input.projectId);
+    if (!found) throw new Error(`There's no space with id "${input.projectId}".`);
+    project = found;
+  } else {
+    const key = normalizeProjectKey(input.key);
+    if (!isValidProjectKey(key)) throw new Error(`Invalid project key: "${key}"`);
+    const existing = await findProjectByKey(key);
+    // The invoking admin (from context) leads a newly-created project. The
+    // provisioning writes run as that user, so Jira requires Administer Jira for
+    // each one (spec 10).
+    const leadAccountId = (context as { accountId?: string })?.accountId;
+    if (!existing && !leadAccountId) {
+      throw new Error('Could not determine the current user to lead the new KPI project.');
+    }
+    project = existing ?? { key, ...(await createKpiProject(key, leadAccountId as string)) };
   }
-  const project = existing ?? (await createKpiProject(key, leadAccountId as string));
-  // Provision + associate the KPI issue type (also repairs a 'misconfigured' space).
-  await ensureKpiIssueTypeOnProject(project.id);
-  await writeKpiSpaceConfig({ key, projectId: project.id, name: project.name });
+  await requireKpiWorkType();
+  await writeKpiSiteConfig({ centralSpace: { projectId: project.id, key: project.key, name: project.name } });
+  const warnings = await makeSpaceUsableForKpis(project.id, await readKpiSiteConfig());
   // Best-effort: also set up KPI nesting so a fresh install works in one click.
   // If it fails (e.g. issue linking is disabled) the space is still usable and
   // the KPI hierarchy card in Settings shows why.
   if (!(await readKpiHierarchyConfig())) {
     await provisionDefaultHierarchy().catch((e: unknown) => {
-      console.warn('[createKpiSpace] could not set up the KPI hierarchy link type:', (e as Error)?.message ?? e);
+      console.warn('[setUpCentralSpace] could not set up the KPI hierarchy link type:', (e as Error)?.message ?? e);
     });
   }
+  return warnings;
+}
+
+defineSettingsWrite('createKpiSpace', async ({ payload, context }) => {
+  const key = String((payload as { key?: string })?.key ?? '');
+  await setUpCentralSpace({ mode: 'create', key: normalizeProjectKey(key) }, context);
   return kpiSpaceStatus();
+});
+
+// ── KPI building blocks (spec 11 · 04) ───────────────────────────────────────
+// Settings → KPI building blocks, Central KPI space, Using KPIs in other spaces.
+// Each write returns the new `KpiSetupStatus` (with `warnings` for optional
+// steps that didn't finish).
+
+function parseInput<T>(schema: ZodType<T, ZodTypeDef, unknown>, payload: unknown): T {
+  const parsed = schema.safeParse(payload);
+  if (!parsed.success) throw new Error(`Invalid request: ${parsed.error.issues.map((i) => i.message).join('; ')}`);
+  return parsed.data;
+}
+
+async function setupStatusWith(warnings: string[]): Promise<KpiSetupStatus> {
+  const status = await kpiSetupStatus();
+  return warnings.length > 0 ? { ...status, warnings } : status;
+}
+
+/** After the work type or fields change, bring the central space up to date (warnings, not errors). */
+async function syncCentralSpace(): Promise<string[]> {
+  const config = await readKpiSiteConfig();
+  if (!config.centralSpace) return [];
+  try {
+    return await makeSpaceUsableForKpis(config.centralSpace.projectId, config);
+  } catch (e) {
+    return [`The central space wasn't updated: ${(e as Error)?.message ?? e}`];
+  }
+}
+
+define('getKpiSetup', async ({ context }) => {
+  requireSettingsPage(context);
+  return kpiSetupStatus();
+});
+
+define('getKpiWorkTypeChoices', async ({ context }) => {
+  requireSettingsPage(context);
+  return listKpiWorkTypeChoices();
+});
+
+define('getKpiFieldChoices', async ({ context }) => {
+  requireSettingsPage(context);
+  return listKpiFieldChoices();
+});
+
+define('getKpiFieldOptions', async ({ payload, context }) => {
+  requireSettingsPage(context);
+  const fieldId = String((payload as { fieldId?: string } | undefined)?.fieldId ?? '');
+  if (!fieldId) throw new Error('No field to list the options of.');
+  return listKpiFieldOptions(fieldId);
+});
+
+define('getKpiSpaceChoices', async ({ context }) => {
+  requireSettingsPage(context);
+  const { workType } = await readKpiSiteConfig();
+  return listKpiSpaceChoices(workType?.id ?? null);
+});
+
+define('getKpiSpaceSetup', async ({ payload, context }) => {
+  requireSettingsPage(context);
+  const projectId = String((payload as { projectId?: string } | undefined)?.projectId ?? '');
+  if (!projectId) throw new Error('No space to check.');
+  return kpiSpaceSetupStatus(projectId, await readKpiSiteConfig());
+});
+
+defineSettingsWrite('setUpKpiWorkType', async ({ payload }) => {
+  const workType = await ensureKpiWorkType(parseInput(SetUpKpiWorkTypeInput, payload));
+  await writeKpiSiteConfig({ workType });
+  return setupStatusWith(await syncCentralSpace());
+});
+
+defineSettingsWrite('setUpKpiFields', async ({ payload }) => {
+  const fields = await ensureKpiFields(parseInput(SetUpKpiFieldsInput, payload));
+  await writeKpiSiteConfig({ fields });
+  return setupStatusWith(await syncCentralSpace());
+});
+
+defineSettingsWrite('setUpCentralSpace', async ({ payload, context }) =>
+  setupStatusWith(await setUpCentralSpace(parseInput(SetUpCentralSpaceInput, payload), context)),
+);
+
+defineSettingsWrite('setUpKpiSpaceStep', async ({ payload }) => {
+  const { projectId, step } = parseInput(SetUpKpiSpaceStepInput, payload);
+  const config = await readKpiSiteConfig();
+  await applyKpiSpaceStep(projectId, step, config);
+  return kpiSpaceSetupStatus(projectId, config);
+});
+
+/**
+ * "Set up everything": every block not chosen yet, with the app's defaults, in
+ * order: work type → fields → central space (created with `key`, default KPI)
+ * → its field scheme and screens → KPI nesting. Chosen blocks are kept.
+ */
+defineSettingsWrite('setUpEverything', async ({ payload, context }) => {
+  const { config } = await loadKpiSiteConfig();
+  if (!config.workType) await writeKpiSiteConfig({ workType: await ensureKpiWorkType({ mode: 'create' }) });
+  if (!config.fields) {
+    await writeKpiSiteConfig({ fields: await ensureKpiFields({ unit: { mode: 'create' }, direction: { mode: 'create' } }) });
+  }
+  let warnings: string[];
+  if (config.centralSpace) {
+    warnings = await syncCentralSpace();
+    if (!(await readKpiHierarchyConfig())) {
+      await provisionDefaultHierarchy().catch((e: unknown) => {
+        warnings.push(`KPI nesting wasn't set up: ${(e as Error)?.message ?? e}`);
+      });
+    }
+  } else {
+    const key = String((payload as { key?: string } | undefined)?.key ?? 'KPI');
+    warnings = await setUpCentralSpace({ mode: 'create', key }, context);
+  }
+  return setupStatusWith(warnings);
 });
 
 // ── KPI hierarchy link (resolve/kpiLinks) ────────────────────────────────────
@@ -892,7 +1051,8 @@ define('createKpi', async ({ payload }) => {
       throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — the link type KPIs nest with was deleted; choose another in Settings.`);
     }
   }
-  return createKpiIssue(space.projectId, input, hierarchy);
+  const { workType } = await readKpiSiteConfig();
+  return createKpiIssue(space.projectId, input, hierarchy, workType);
 });
 
 // Edit a KPI: rename it, change its unit/direction, and/or move it (with its

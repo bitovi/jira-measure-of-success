@@ -6,7 +6,8 @@ import {
   type MigrationBatchResult,
   type MigrationFailure,
 } from '../models/migration';
-import { applyBatchResult, migrationReadiness, resetMigrationForRetry } from './migrations';
+import type { MigrationDto } from '../contracts';
+import { applyBatchResult, migrationReadiness, migrationRowState, nextMigrationToRun, resetMigrationForRetry } from './migrations';
 
 const T1 = '2026-11-24T10:00:00.000Z';
 const T2 = '2026-11-24T10:00:05.000Z';
@@ -168,5 +169,46 @@ describe('migrationReadiness', () => {
 
   it('stays blocked by a failed dependency', () => {
     expect(migrationReadiness(registry, { a: withState('failed') }).b).toEqual({ ready: false, blockedBy: ['a'] });
+  });
+});
+
+describe('migrationRowState / nextMigrationToRun (Settings → Upgrade data)', () => {
+  const dto = (id: string, over: Partial<MigrationDto> = {}, record: Partial<MigrationRecord> = {}): MigrationDto => ({
+    id,
+    title: id,
+    description: '',
+    writeAs: 'app',
+    dependsOn: [],
+    record: { ...newMigrationRecord(id), ...record },
+    ready: true,
+    blockedBy: [],
+    status: { applicable: true, pending: 3 },
+    ...over,
+  });
+
+  it.each([
+    ['pending', dto('a'), 'pending'],
+    ['part-way', dto('a', {}, { state: 'running' }), 'running'],
+    ['done', dto('a', { status: null }, { state: 'done' }), 'done'],
+    ['failed', dto('a', {}, { state: 'failed' }), 'failed'],
+    ['waiting for a dependency', dto('a', { ready: false, blockedBy: ['b'] }), 'blocked'],
+    ['not applicable yet', dto('a', { status: { applicable: false, reason: 'no fields', pending: null } }), 'notApplicable'],
+    ['counted without status (status() failed)', dto('a', { status: null, statusError: 'x' }), 'pending'],
+  ] as const)('%s', (_name, m, expected) => {
+    expect(migrationRowState(m)).toBe(expected);
+  });
+
+  it('runs the first runnable one in order, skipping done, failed, blocked and not applicable', () => {
+    const list = [
+      dto('done', { status: null }, { state: 'done' }),
+      dto('failed', {}, { state: 'failed' }),
+      dto('blocked', { ready: false, blockedBy: ['failed'] }),
+      dto('na', { status: { applicable: false, pending: null } }),
+      dto('paused', {}, { state: 'running' }),
+      dto('next'),
+    ];
+    expect(nextMigrationToRun(list)?.id).toBe('paused');
+    expect(nextMigrationToRun(list, new Set(['paused']))?.id).toBe('next');
+    expect(nextMigrationToRun(list.slice(0, 4))).toBeNull();
   });
 });

@@ -487,3 +487,100 @@ export interface MigrationDto {
 export interface MigrationsData {
   migrations: MigrationDto[];
 }
+
+// ── KPI configuration (spec 11 · 04) ────────────────────────────────────
+/** A building block's state: not chosen, in use, or chosen but gone from Jira (a deleted field or type). */
+export type KpiBlockState = 'unset' | 'ready' | 'broken';
+
+export interface KpiWorkTypeStatus {
+  state: KpiBlockState;
+  id: string | null;
+  /** the type's current name (the saved one when it was deleted) */
+  name: string | null;
+  iconUrl: string | null;
+}
+
+export interface KpiFieldInfo {
+  id: string;
+  /** null when the field no longer exists */
+  name: string | null;
+}
+
+export interface KpiDirectionFieldInfo extends KpiFieldInfo {
+  kind: 'text' | 'select';
+  /** a select's option labels for increase / decrease (null = the option is gone) */
+  increase?: string | null;
+  decrease?: string | null;
+}
+
+export interface KpiFieldsStatus {
+  state: KpiBlockState;
+  unit: KpiFieldInfo | null;
+  direction: KpiDirectionFieldInfo | null;
+  /** why it's broken */
+  problem?: string;
+}
+
+export interface KpiCentralSpaceStatus {
+  /** `misconfigured`: the space exists but doesn't offer the KPI work type */
+  state: KpiBlockState | 'misconfigured';
+  projectId: string | null;
+  key: string | null;
+  name: string | null;
+  problem?: string;
+}
+
+/** `getKpiSetup`: the KPI building blocks and the central space, checked against the site. */
+export interface KpiSetupStatus {
+  /** false until Settings saves a configuration; until then it's derived from the older records */
+  saved: boolean;
+  workType: KpiWorkTypeStatus;
+  fields: KpiFieldsStatus;
+  centralSpace: KpiCentralSpaceStatus;
+  /** set by a Settings change that finished with optional steps left undone (e.g. screens) */
+  warnings?: string[];
+}
+
+/** A work type the admin can pick as the KPI type (`getKpiWorkTypeChoices`). */
+export interface KpiWorkTypeChoice {
+  id: string;
+  name: string;
+  iconUrl: string | null;
+}
+
+/** A field the admin can pick for unit or direction (`getKpiFieldChoices`). */
+export interface KpiFieldChoice {
+  id: string;
+  name: string;
+  kind: 'text' | 'select';
+}
+
+/** An option of a single-select field (`getKpiFieldOptions`). */
+export interface KpiFieldOption {
+  id: string;
+  value: string;
+}
+
+/** A company-managed space (`getKpiSpaceChoices`). */
+export interface KpiSpaceChoice {
+  id: string;
+  key: string;
+  name: string;
+  /** offers the KPI work type already */
+  hasKpiWorkType: boolean;
+}
+
+/**
+ * `getKpiSpaceSetup` / `setUpKpiSpaceStep`: which of the guide's steps a space
+ * has done. null = can't tell yet (the block it needs isn't chosen).
+ */
+export interface KpiSpaceSetupStatus {
+  projectId: string;
+  key: string;
+  name: string;
+  workType: boolean | null;
+  fields: boolean | null;
+  screens: boolean | null;
+  /** why a step can't be checked or done (e.g. a team-managed space) */
+  problem?: string;
+}

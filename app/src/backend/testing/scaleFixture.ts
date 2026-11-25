@@ -144,10 +144,47 @@ export interface ScaleFixture {
   linkTypes: IssueLinkTypeInfo[];
   userView: MockUserView;
   /** projects by key, for KPI-space provisioning (`issueTypeNames` = types in its scheme) */
-  projects: Map<string, { id: string; name: string; issueTypeNames: string[] }>;
+  projects: Map<string, FixtureProject>;
   /** the site's issue types (global in Jira) */
-  issueTypes: Array<{ id: string; name: string; hierarchyLevel?: number }>;
+  issueTypes: Array<{ id: string; name: string; hierarchyLevel?: number; iconUrl?: string; avatarId?: number }>;
+  /** custom fields beyond the built-in three (spec 11 · 04); a select's options live in its global context */
+  customFields: FixtureCustomField[];
+  /** field schemes: project id → scheme id, and scheme id → field id → the work type ids it's restricted to ([] = every type) */
+  fieldSchemeOf: Map<string, string>;
+  fieldSchemes: Map<string, Map<string, string[]>>;
+  /** project id → its work type screen scheme (`mappings`: issue type id or `default` → screen scheme id) */
+  screenSchemeOf: Map<string, { id: string; mappings: Record<string, string> }>;
+  /** screen scheme id → screens by kind (`default`, `edit`, …) */
+  screenSchemes: Map<string, Record<string, number>>;
+  /** screen id → its tabs, each with the field ids on it */
+  screens: Map<string, Array<{ id: number; name: string; fields: string[] }>>;
+  /** avatars uploaded for issue types (`owner` = the type id) */
+  avatars: Array<{ id: string; owner: string; contentType: string; size: number }>;
 }
+
+export interface FixtureProject {
+  id: string;
+  name: string;
+  issueTypeNames: string[];
+  /** company-managed (`classic`, the default) or team-managed (`next-gen`) */
+  style?: 'classic' | 'next-gen';
+}
+
+export interface FixtureCustomField {
+  id: string;
+  name: string;
+  /** Jira's custom field type key */
+  custom: string;
+  options?: Array<{ id: string; value: string }>;
+}
+
+export const TEXT_FIELD_TYPE = 'com.atlassian.jira.plugin.system.customfieldtypes:textfield';
+export const SELECT_FIELD_TYPE = 'com.atlassian.jira.plugin.system.customfieldtypes:select';
+/** A company-managed work space sharing the KPI space's field scheme and screens. */
+export const TEAM_PROJECT = { key: 'TEAM', id: '10100', name: 'Team space' };
+/** The shared "Default Field Scheme" and its screens, as on bitovi-training (01 B1). */
+export const DEFAULT_FIELD_SCHEME_ID = '5';
+export const DEFAULT_SCREEN_SCHEME_ID = '1';
 
 const DAY = 86_400_000;
 const BASE = Date.UTC(2026, 0, 1);
@@ -265,7 +302,12 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
   ]);
   const linkTypes = SITE_LINK_TYPES.map((t) => ({ ...t }));
   const userView: MockUserView = { accountId: MOCK_USER_ACCOUNT_ID, isAdmin: true, access: {}, hidden: new Set() };
-  const projects = new Map([[KPI_PROJECT.key, { id: KPI_PROJECT.id, name: KPI_PROJECT.name, issueTypeNames: ['KPI'] }]]);
+  const projects = new Map<string, FixtureProject>([
+    [KPI_PROJECT.key, { id: KPI_PROJECT.id, name: KPI_PROJECT.name, issueTypeNames: ['KPI'] }],
+    [TEAM_PROJECT.key, { id: TEAM_PROJECT.id, name: TEAM_PROJECT.name, issueTypeNames: ['Epic', 'Story'] }],
+    ['TMP', { id: '10200', name: 'Team-managed space', issueTypeNames: ['Story'], style: 'next-gen' }],
+  ]);
+  const sharedScreens = { id: '1', mappings: { default: DEFAULT_SCREEN_SCHEME_ID } };
   const issueTypes = (Object.keys(ICON_ID) as Array<FixtureIssue['type']>).map((name) => ({
     id: String(ICON_ID[name]),
     name,
@@ -283,6 +325,22 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
     userView,
     projects,
     issueTypes,
+    customFields: [],
+    fieldSchemeOf: new Map([
+      [KPI_PROJECT.id, DEFAULT_FIELD_SCHEME_ID],
+      [TEAM_PROJECT.id, DEFAULT_FIELD_SCHEME_ID],
+    ]),
+    fieldSchemes: new Map([[DEFAULT_FIELD_SCHEME_ID, new Map([['summary', []], [READING_FIELD_ID, []]])]]),
+    screenSchemeOf: new Map([
+      [KPI_PROJECT.id, sharedScreens],
+      [TEAM_PROJECT.id, sharedScreens],
+    ]),
+    screenSchemes: new Map([[DEFAULT_SCREEN_SCHEME_ID, { default: 1, edit: 2 }]]),
+    screens: new Map([
+      ['1', [{ id: 10000, name: 'Field Tab', fields: ['summary'] }]],
+      ['2', [{ id: 10001, name: 'Field Tab', fields: ['summary'] }, { id: 10002, name: 'More', fields: [] }]],
+    ]),
+    avatars: [],
   };
 }
 
@@ -517,7 +575,7 @@ export interface MockJira {
   /** `as` defaults to `'app'` (no user filtering), matching the pre-identity behavior */
   requestJira(
     route: unknown,
-    init?: { method?: string; body?: unknown },
+    init?: { method?: string; body?: unknown; headers?: Record<string, string> },
     as?: MockPrincipal,
   ): Promise<MockResponse>;
   /** requests that hit no mock handler (should stay empty) */
@@ -558,6 +616,12 @@ const ADMIN_ONLY_WRITES: Array<[string, RegExp]> = [
   ['POST', /^\/rest\/api\/3\/issuetype$/],
   ['PUT', /^\/rest\/api\/3\/issuetypescheme\/[^/]+\/issuetype$/],
   ['POST', /^\/rest\/api\/3\/issueLinkType$/],
+  ['PUT', /^\/rest\/api\/3\/issuetype\/[^/]+$/],
+  ['POST', /^\/rest\/api\/3\/universal_avatar\//],
+  ['POST', /^\/rest\/api\/3\/field$/],
+  ['POST', /^\/rest\/api\/3\/field\/[^/]+\/context\/[^/]+\/option$/],
+  ['PUT', /^\/rest\/api\/3\/config\/fieldschemes\/fields$/],
+  ['POST', /^\/rest\/api\/3\/screens\/[^/]+\/tabs\/[^/]+\/fields$/],
 ];
 
 export function createMockJira(fixture: ScaleFixture): MockJira {
@@ -569,6 +633,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     [...fixture.issues.values()].find((i) => i.formerKeys?.includes(idOrKey));
   const keyOf = (id: string) => fixture.issues.get(id)?.key;
   let nextIssueId = 900_000;
+  let nextOptionId = 10_650;
   let clock = Date.UTC(2026, 6, 1);
 
   const accessTo = (projectKey: string): MockProjectAccess => fixture.userView.access[projectKey] ?? FULL_ACCESS;
@@ -580,7 +645,13 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
   const notFound = () => respond(404, { errorMessages: ['Issue does not exist or you do not have permission to see it.'] });
   const forbidden = (what: string) => respond(403, { errorMessages: [`You do not have permission to ${what}.`] });
 
-  const handle = (method: string, raw: string, body: unknown, as: MockPrincipal): MockResponse => {
+  const handle = (
+    method: string,
+    raw: string,
+    body: unknown,
+    as: MockPrincipal,
+    headers: Record<string, string> = {},
+  ): MockResponse => {
     const [path, query = ''] = raw.split('?');
     const params = new URLSearchParams(query);
     if (method !== 'GET') writes.push(`${method} ${path}`);
@@ -614,6 +685,13 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
         { id: 'summary', name: 'Summary' },
         { id: RANK_FIELD_ID, name: 'Rank', schema: { custom: 'com.pyxis.greenhopper.jira:gh-lexo-rank' } },
         { id: READING_FIELD_ID, key: 'app-key__kpi-reading', name: 'KPI Reading' },
+        ...fixture.customFields.map((f) => ({
+          id: f.id,
+          key: f.id,
+          name: f.name,
+          custom: true,
+          schema: { type: f.custom === SELECT_FIELD_TYPE ? 'option' : 'string', custom: f.custom },
+        })),
       ]);
     }
 
@@ -809,15 +887,32 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     // ── KPI-space provisioning (Settings) ──
     const project = /^\/rest\/api\/3\/project\/([^/]+)$/.exec(path);
-    if (project && method === 'GET') {
-      const p = fixture.projects.get(decodeURIComponent(project[1]));
-      if (!p) return respond(404, { errorMessages: ['No project could be found.'] });
-      return respond(200, { id: p.id, name: p.name, issueTypes: p.issueTypeNames.map((name) => ({ name })) });
+    const projectJson = (key: string, p: FixtureProject) => ({
+      id: p.id,
+      key,
+      name: p.name,
+      style: p.style ?? 'classic',
+      issueTypes: p.issueTypeNames.map((name) => ({ id: fixture.issueTypes.find((t) => t.name === name)?.id, name })),
+    });
+    if (project && project[1] !== 'search' && method === 'GET') {
+      const ref = decodeURIComponent(project[1]);
+      const entry = [...fixture.projects.entries()].find(([key, p]) => key === ref || p.id === ref);
+      if (!entry) return respond(404, { errorMessages: ['No project could be found.'] });
+      return respond(200, projectJson(...entry));
+    }
+    if (method === 'GET' && path === '/rest/api/3/project/search') {
+      const all = [...fixture.projects.entries()].map(([key, p]) => projectJson(key, p));
+      const startAt = Number(params.get('startAt') ?? 0);
+      const max = Number(params.get('maxResults') ?? 50);
+      return respond(200, { values: all.slice(startAt, startAt + max), isLast: startAt + max >= all.length });
     }
     if (method === 'POST' && path === '/rest/api/3/project') {
       const req = JSON.parse(String(body)) as { key: string; name: string };
       const id = String(20_000 + fixture.projects.size);
       fixture.projects.set(req.key, { id, name: req.name, issueTypeNames: [] });
+      // Like a project made without a template: the shared field scheme, its own copy of the default screens.
+      fixture.fieldSchemeOf.set(id, DEFAULT_FIELD_SCHEME_ID);
+      fixture.screenSchemeOf.set(id, { id: `itss-${id}`, mappings: { default: DEFAULT_SCREEN_SCHEME_ID } });
       return respond(201, { id, key: req.key });
     }
     if (method === 'GET' && path === '/rest/api/3/issuetype') {
@@ -831,8 +926,9 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     }
     if (method === 'GET' && path === '/rest/api/3/issuetypescheme/project') {
       const projectId = params.get('projectId');
-      // One scheme per project in the mock; its id is the project id.
-      return respond(200, { values: projectId ? [{ issueTypeScheme: { id: projectId } }] : [] });
+      // One scheme per project in the mock; its id is the project id. Team-managed spaces have none.
+      const teamManaged = [...fixture.projects.values()].some((p) => p.id === projectId && p.style === 'next-gen');
+      return respond(200, { values: projectId && !teamManaged ? [{ issueTypeScheme: { id: projectId } }] : [] });
     }
     const scheme = /^\/rest\/api\/3\/issuetypescheme\/(\d+)\/issuetype$/.exec(path);
     if (scheme && method === 'PUT') {
@@ -844,6 +940,125 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
         if (t && !p.issueTypeNames.includes(t.name)) p.issueTypeNames.push(t.name);
       }
       return respond(204);
+    }
+
+    const typeById = /^\/rest\/api\/3\/issuetype\/([^/]+)$/.exec(path);
+    if (typeById && method === 'PUT') {
+      const type = fixture.issueTypes.find((t) => t.id === typeById[1]);
+      if (!type) return respond(404, { errorMessages: ['Issue type not found.'] });
+      const req = JSON.parse(String(body)) as { avatarId?: number };
+      if (req.avatarId !== undefined) {
+        type.avatarId = req.avatarId;
+        type.iconUrl = `${ICON_BASE}/${req.avatarId}?size=medium`;
+      }
+      return respond(200, type);
+    }
+    const avatarFor = /^\/rest\/api\/3\/universal_avatar\/type\/issuetype\/owner\/([^/]+)$/.exec(path);
+    if (avatarFor && method === 'POST') {
+      const contentType = headers['Content-Type'] ?? '';
+      if (contentType !== 'image/png') return respond(400, { errorMessages: ['Not a supported image format.'] });
+      const id = String(40_000 + fixture.avatars.length);
+      fixture.avatars.push({ id, owner: avatarFor[1], contentType, size: (body as ArrayBuffer | undefined)?.byteLength ?? 0 });
+      return respond(201, { id });
+    }
+
+    // ── Fields, field schemes and screens (spec 11 · 04) ──
+    if (method === 'POST' && path === '/rest/api/3/field') {
+      const req = JSON.parse(String(body)) as { name: string; type: string };
+      const id = `customfield_${11_000 + fixture.customFields.length}`;
+      fixture.customFields.push({ id, name: req.name, custom: req.type, ...(req.type === SELECT_FIELD_TYPE ? { options: [] } : {}) });
+      return respond(201, { id, name: req.name });
+    }
+    const fieldContext = /^\/rest\/api\/3\/field\/([^/]+)\/context$/.exec(path);
+    if (fieldContext && method === 'GET') {
+      const i = fixture.customFields.findIndex((f) => f.id === fieldContext[1]);
+      if (i < 0) return respond(404, { errorMessages: ['The custom field was not found.'] });
+      return respond(200, { values: [{ id: String(20_000 + i), isGlobalContext: true, isAnyIssueType: true }], isLast: true });
+    }
+    const fieldOptions = /^\/rest\/api\/3\/field\/([^/]+)\/context\/([^/]+)\/option$/.exec(path);
+    if (fieldOptions) {
+      const i = fixture.customFields.findIndex((f) => f.id === fieldOptions[1]);
+      const field = fixture.customFields[i];
+      if (!field || fieldOptions[2] !== String(20_000 + i)) return respond(404, { errorMessages: ['Context not found.'] });
+      if (!field.options) return respond(400, { errorMessages: ['This field has no options.'] });
+      if (method === 'GET') return respond(200, { values: field.options, isLast: true });
+      if (method === 'POST') {
+        const req = JSON.parse(String(body)) as { options: Array<{ value: string }> };
+        const added = req.options.map((o) => ({ id: String(nextOptionId++), value: o.value }));
+        field.options.push(...added);
+        return respond(200, { options: added });
+      }
+    }
+    if (method === 'GET' && path === '/rest/api/3/config/fieldschemes/projects') {
+      const values = params
+        .getAll('projectId')
+        .filter((id) => fixture.fieldSchemeOf.has(id))
+        .map((id) => ({ projectId: Number(id), schemeId: Number(fixture.fieldSchemeOf.get(id)) }));
+      return respond(200, { values, isLast: true });
+    }
+    const schemeFields = /^\/rest\/api\/3\/config\/fieldschemes\/([^/]+)\/fields$/.exec(path);
+    if (schemeFields && method === 'GET') {
+      const scheme = fixture.fieldSchemes.get(schemeFields[1]);
+      if (!scheme) return respond(404, { errorMessages: ['Field scheme not found.'] });
+      if (Number(params.get('maxResults') ?? 50) > 50) return respond(400, { errorMessages: ['maxResults must be ≤ 50.'] });
+      const wanted = params.getAll('fieldId');
+      const values = [...scheme.entries()]
+        .filter(([fieldId]) => wanted.length === 0 || wanted.includes(fieldId))
+        .map(([fieldId, types]) => ({ fieldId, ...(types.length > 0 ? { restrictedToWorkTypes: types } : {}) }));
+      return respond(200, { values, isLast: true });
+    }
+    if (method === 'PUT' && path === '/rest/api/3/config/fieldschemes/fields') {
+      const req = JSON.parse(String(body)) as Record<string, Array<{ schemeIds: number[]; restrictedToWorkTypes?: number[] }>>;
+      const results: Array<{ fieldId: string; schemeId: number; success: boolean; workTypeIds: number[] }> = [];
+      for (const [fieldId, items] of Object.entries(req)) {
+        for (const item of items) {
+          for (const schemeId of item.schemeIds) {
+            const scheme = fixture.fieldSchemes.get(String(schemeId));
+            scheme?.set(fieldId, (item.restrictedToWorkTypes ?? []).map(String));
+            results.push({ fieldId, schemeId, success: !!scheme, workTypeIds: item.restrictedToWorkTypes ?? [] });
+          }
+        }
+      }
+      return respond(200, { results });
+    }
+    if (method === 'GET' && path === '/rest/api/3/issuetypescreenscheme/project') {
+      const projectId = params.get('projectId') ?? '';
+      const itss = fixture.screenSchemeOf.get(projectId);
+      return respond(200, { values: itss ? [{ issueTypeScreenScheme: { id: itss.id }, projectIds: [projectId] }] : [], isLast: true });
+    }
+    if (method === 'GET' && path === '/rest/api/3/issuetypescreenscheme/mapping') {
+      const itssId = params.get('issueTypeScreenSchemeId');
+      const itss = [...fixture.screenSchemeOf.values()].find((x) => x.id === itssId);
+      const values = Object.entries(itss?.mappings ?? {}).map(([issueTypeId, screenSchemeId]) => ({
+        issueTypeScreenSchemeId: itssId,
+        issueTypeId,
+        screenSchemeId,
+      }));
+      return respond(200, { values, isLast: true });
+    }
+    if (method === 'GET' && path === '/rest/api/3/screenscheme') {
+      const id = params.get('id') ?? '';
+      const screens = fixture.screenSchemes.get(id);
+      return respond(200, { values: screens ? [{ id: Number(id), screens }] : [], isLast: true });
+    }
+    const screenTabs = /^\/rest\/api\/3\/screens\/([^/]+)\/tabs$/.exec(path);
+    if (screenTabs && method === 'GET') {
+      const tabs = fixture.screens.get(screenTabs[1]);
+      if (!tabs) return respond(404, { errorMessages: ['Screen not found.'] });
+      return respond(200, tabs.map((t) => ({ id: t.id, name: t.name })));
+    }
+    const tabFields = /^\/rest\/api\/3\/screens\/([^/]+)\/tabs\/([^/]+)\/fields$/.exec(path);
+    if (tabFields) {
+      const tab = fixture.screens.get(tabFields[1])?.find((t) => String(t.id) === tabFields[2]);
+      if (!tab) return respond(404, { errorMessages: ['Tab not found.'] });
+      if (method === 'GET') return respond(200, tab.fields.map((id) => ({ id, name: id })));
+      if (method === 'POST') {
+        const { fieldId } = JSON.parse(String(body)) as { fieldId: string };
+        const onScreen = fixture.screens.get(tabFields[1])!.some((t) => t.fields.includes(fieldId));
+        if (onScreen) return respond(400, { errorMessages: [`Field ${fieldId} already exists on the screen.`] });
+        tab.fields.push(fieldId);
+        return respond(200, { id: fieldId, name: fieldId });
+      }
     }
 
     if (method === 'GET' && path.startsWith('/rest/api/2/universal_avatar/')) {
@@ -863,7 +1078,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
         await new Promise((resolve) => setTimeout(resolve, fixture.options.latencyMs));
       }
       const raw = typeof route === 'string' ? route : String((route as { value: string }).value);
-      return handle((init?.method ?? 'GET').toUpperCase(), raw, init?.body, as);
+      return handle((init?.method ?? 'GET').toUpperCase(), raw, init?.body, as, init?.headers);
     },
   };
   return mock;
@@ -879,7 +1094,7 @@ export function mockForgeApi(
   onRequest?: (route: unknown, as: MockPrincipal) => void,
 ): { asUser: () => { requestJira: MockJira['requestJira'] }; asApp: () => { requestJira: MockJira['requestJira'] } } {
   const requester = (as: MockPrincipal) => ({
-    requestJira: (route: unknown, init?: { method?: string; body?: unknown }) => {
+    requestJira: (route: unknown, init?: { method?: string; body?: unknown; headers?: Record<string, string> }) => {
       onRequest?.(route, as);
       return getJira().requestJira(route, init, as);
     },
