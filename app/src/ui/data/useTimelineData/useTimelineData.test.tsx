@@ -68,7 +68,11 @@ function bridge(handlers: Record<string, (payload: unknown) => Promise<unknown>>
 
 async function loaded() {
   const hook = renderHook(() => useTimelineData());
-  await waitFor(() => expect(hook.result.current.targetsPending).toBe(false));
+  // `targetsPending` is also false before the skeleton arrives, so wait for data too.
+  await waitFor(() => {
+    expect(hook.result.current.data).not.toBeNull();
+    expect(hook.result.current.targetsPending).toBe(false);
+  });
   return hook;
 }
 

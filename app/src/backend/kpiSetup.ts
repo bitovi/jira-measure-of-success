@@ -285,6 +285,29 @@ export async function ensureKpiFieldsInSpace(
   fields: KpiFieldsConfig,
   { dryRun = false }: { dryRun?: boolean } = {},
 ): Promise<boolean> {
+  const { schemeId, present } = await readKpiFieldsInScheme(projectId, fields);
+  const changes: Record<string, Array<{ schemeIds: number[]; restrictedToWorkTypes: number[] }>> = {};
+  for (const fieldId of fieldIdsOf(fields)) {
+    const entry = present.find((v) => v.fieldId === fieldId);
+    const restricted = (entry?.restrictedToWorkTypes ?? []).map(String);
+    // In the scheme for every type (no restriction), or already for the KPI type: nothing to do.
+    if (entry && (restricted.length === 0 || restricted.includes(workType.id))) continue;
+    // The list replaces the field's types in this scheme, so keep the ones it has.
+    changes[fieldId] = [{ schemeIds: [Number(schemeId)], restrictedToWorkTypes: [...restricted, workType.id].map(Number) }];
+  }
+  if (Object.keys(changes).length === 0) return false;
+  if (dryRun) return true;
+  await putFieldSchemeAssociations(changes);
+  return true;
+}
+
+type SchemeEntry = { fieldId: string; restrictedToWorkTypes?: string[] };
+
+/** The space's field scheme and its entries (if any) for the unit and direction fields. */
+async function readKpiFieldsInScheme(
+  projectId: string,
+  fields: KpiFieldsConfig,
+): Promise<{ schemeId: string; present: SchemeEntry[] }> {
   const schemeRes = await asApp().requestJira(route`/rest/api/3/config/fieldschemes/projects?projectId=${projectId}`);
   if (!schemeRes.ok) throw new Error(await jiraError(schemeRes, "read the space's field scheme"));
   const schemeId = ((await schemeRes.json()) as { values?: Array<{ projectId?: number | string; schemeId?: number | string }> })
@@ -297,18 +320,12 @@ export async function ensureKpiFieldsInSpace(
     route`/rest/api/3/config/fieldschemes/${String(schemeId)}/fields?fieldId=${unitId}&fieldId=${directionId}&maxResults=50`,
   );
   if (!listRes.ok) throw new Error(await jiraError(listRes, "read the space's field scheme"));
-  const present = ((await listRes.json()) as { values?: Array<{ fieldId: string; restrictedToWorkTypes?: string[] }> }).values ?? [];
-  const changes: Record<string, Array<{ schemeIds: number[]; restrictedToWorkTypes: number[] }>> = {};
-  for (const fieldId of fieldIdsOf(fields)) {
-    const entry = present.find((v) => v.fieldId === fieldId);
-    const restricted = (entry?.restrictedToWorkTypes ?? []).map(String);
-    // In the scheme for every type (no restriction), or already for the KPI type: nothing to do.
-    if (entry && (restricted.length === 0 || restricted.includes(workType.id))) continue;
-    // The list replaces the field's types in this scheme, so keep the ones it has.
-    changes[fieldId] = [{ schemeIds: [Number(schemeId)], restrictedToWorkTypes: [...restricted, workType.id].map(Number) }];
-  }
-  if (Object.keys(changes).length === 0) return false;
-  if (dryRun) return true;
+  return { schemeId: String(schemeId), present: ((await listRes.json()) as { values?: SchemeEntry[] }).values ?? [] };
+}
+
+async function putFieldSchemeAssociations(
+  changes: Record<string, Array<{ schemeIds: number[]; restrictedToWorkTypes: number[] }>>,
+): Promise<void> {
   const res = await asUser().requestJira(route`/rest/api/3/config/fieldschemes/fields`, {
     method: 'PUT',
     headers: json,
@@ -320,7 +337,6 @@ export async function ensureKpiFieldsInSpace(
   if (failed && failed.length > 0) {
     throw new Error(`Jira didn't add the KPI fields to the field scheme: ${failed.map((f) => f.error ?? f.fieldId).join('; ')}`);
   }
-  return true;
 }
 
 /** The screens a space uses for a work type: its work type screen scheme → screen scheme → screens. */
@@ -356,6 +372,10 @@ export async function ensureKpiFieldsOnScreens(
   { dryRun = false }: { dryRun?: boolean } = {},
 ): Promise<boolean> {
   let changed = false;
+  // Adding a field to a screen resets its field scheme entry to every work type
+  // (seen live on bitovi-training, 2026-11-24), so note the restrictions first
+  // and put them back afterwards.
+  const before = dryRun ? null : await readKpiFieldsInScheme(projectId, fields);
   for (const screenId of await kpiScreenIds(projectId, workType.id)) {
     const tabsRes = await asApp().requestJira(route`/rest/api/3/screens/${screenId}/tabs`);
     if (!tabsRes.ok) throw new Error(await jiraError(tabsRes, `read the tabs of screen ${screenId}`));
@@ -379,6 +399,16 @@ export async function ensureKpiFieldsOnScreens(
       });
       if (!res.ok) throw new Error(await jiraError(res, `add ${fieldId} to screen ${screenId}`));
     }
+  }
+  if (changed && before) {
+    const restore: Record<string, Array<{ schemeIds: number[]; restrictedToWorkTypes: number[] }>> = {};
+    for (const fieldId of fieldIdsOf(fields)) {
+      const entry = before.present.find((v) => v.fieldId === fieldId);
+      // An unrestricted field stays unrestricted; one that wasn't in the scheme is for KPIs only.
+      const types = entry ? (entry.restrictedToWorkTypes ?? []) : [workType.id];
+      if (types.length > 0) restore[fieldId] = [{ schemeIds: [Number(before.schemeId)], restrictedToWorkTypes: types.map(Number) }];
+    }
+    if (Object.keys(restore).length > 0) await putFieldSchemeAssociations(restore);
   }
   return changed;
 }

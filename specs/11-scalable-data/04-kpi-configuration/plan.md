@@ -287,6 +287,17 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
     API. (01 B7: PNG, GIF or JPEG only; SVG is rejected. Ship the bullseye as a PNG.)
     - **Decided (2026-11-24, implementer, autopilot; revisit at review):** only types the app creates get the PNG bullseye; existing types are left alone.
 
+## Live check (2026-11-24, dev v10.4.0)
+
+- Settings showed the Upgrade data card first, the existing KPI type and the KPI project already chosen.
+  **Upgrade** ran 03's migration to `done` (see 03).
+- **Create fields** created *KPI Unit* (`customfield_10910`) and *KPI Direction* (`customfield_10911`,
+  options `10652` Increase / `10653` Decrease), added them to the KPI space's screens, and to the shared
+  *Default Field Scheme*. **Bug found and fixed:** adding the fields to the screens reset their field
+  scheme entries to every work type (01 B9). The screens step now restores the restriction; the mock Jira
+  reproduces Jira's reset. On dev the restriction was put back by hand; an Initiative in ECOM briefly got
+  a test value in KPI Unit while checking this (cleared; its History shows it).
+
 ## Implementation notes
 
 Done 2026-11-24 on `feat/11-scalable-data`, Steps 3–6. Step 7 (live check on dev) is pending.

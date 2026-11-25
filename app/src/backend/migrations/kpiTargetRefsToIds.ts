@@ -71,6 +71,26 @@ function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 }
 
+/**
+ * The body to write: the property exactly as stored (legacy values such as
+ * `targetType: 'delta'`, unknown keys), with only the reference fields from the
+ * plan merged in. Parsing normalizes, so writing `plan.stored` itself would
+ * change more than the references (migrations only copy).
+ */
+export function mergeRefsIntoRaw(raw: unknown, planned: StoredAssignments): Record<string, unknown> {
+  const base = raw as { assignments: Array<Record<string, unknown>> } & Record<string, unknown>;
+  return {
+    ...base,
+    assignments: base.assignments.map((a, i) => {
+      const p = planned.assignments[i];
+      return p.kpiIssueId === undefined ? { ...a, kpiId: p.kpiId } : { ...a, kpiIssueId: p.kpiIssueId, kpiId: p.kpiId };
+    }),
+    kpiIssueIds: planned.kpiIssueIds,
+    kpiIds: planned.kpiIds,
+    refsVersion: planned.refsVersion,
+  };
+}
+
 /** The keys an unmigrated property still references by key alone. */
 function keyOnlyRefs(stored: StoredAssignments): string[] {
   return stored.assignments.flatMap((a) => {
@@ -131,7 +151,7 @@ export const kpiTargetRefsToIds: Migration = {
       const res = await ctx.writer.requestJira(route`/rest/api/3/issue/${item.issueId}/properties/${PROPERTY}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(plan.stored),
+        body: JSON.stringify(mergeRefsIntoRaw(item.raw, plan.stored)),
       });
       if (!res.ok) throw await failure(res, `save the targets on ${item.issueKey}`);
       return plan.outcome;

@@ -1057,6 +1057,9 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
         const onScreen = fixture.screens.get(tabFields[1])!.some((t) => t.fields.includes(fieldId));
         if (onScreen) return respond(400, { errorMessages: [`Field ${fieldId} already exists on the screen.`] });
         tab.fields.push(fieldId);
+        // Like Jira (seen live, spec 11 · 01 B9): putting a field on a screen
+        // resets its field scheme entries to every work type.
+        for (const scheme of fixture.fieldSchemes.values()) if (scheme.has(fieldId)) scheme.set(fieldId, []);
         return respond(200, { id: fieldId, name: fieldId });
       }
     }

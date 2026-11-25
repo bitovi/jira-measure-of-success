@@ -289,6 +289,15 @@ Registered on 02's framework.
    script for that, or should the live check wait until 04's card exists?
    - **Decided (2026-11-24, implementer, autopilot; revisit at review): wait for 04's card.** Step 6 runs as part of 04 Step 7 (R7).
 
+## Live check (2026-11-24, dev v10.4.0, run from 04's Upgrade data card)
+
+- `kpi-target-refs-to-ids` migrated all **14** work items in one click and ended `done`.
+- **Bug found and fixed:** the legacy reader report changed for ECOM-2 (`targetType: delta` → `percent`).
+  The migration wrote the **parsed** property, and parsing normalizes the legacy `delta` to `percent`
+  (and would drop unknown keys). It now merges only the reference fields into the **raw** stored JSON
+  (`mergeRefsIntoRaw`), with a test. ECOM-2 was restored by hand; the report then matched the baseline.
+- dev's Timeline shows the 14 KPIs and all 17 targets with values (18 stored, one has no value).
+
 ## Implementation notes
 
 Done 2026-11-24 on `feat/11-scalable-data`, Steps 1–5. Step 6 (live check) runs with 04 Step 7 (Q4).

@@ -261,7 +261,8 @@ describe('fields (Step 4)', () => {
       },
     });
     expect(asOf('POST /rest/api/3/field')).toEqual(['user', 'user']);
-    expect(asOf('PUT /rest/api/3/config/fieldschemes/fields')).toEqual(['user']);
+    // Added for the KPI type, then restored after the screens step (which resets it, 01 B9).
+    expect(asOf('PUT /rest/api/3/config/fieldschemes/fields')).toEqual(['user', 'user']);
     // The shared scheme gets the fields for the KPI type only; what it had is untouched.
     expect(schemeFields().get(unit.id)).toEqual([KPI_TYPE]);
     expect(schemeFields().get(direction.id)).toEqual([KPI_TYPE]);

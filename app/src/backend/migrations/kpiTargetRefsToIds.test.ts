@@ -249,4 +249,16 @@ describe('kpi-target-refs-to-ids', () => {
     await call('retryMigration', { id: ID });
     expect((await runToEnd()).state).toBe('done');
   });
+
+  it('copies only: legacy values and unknown keys in the stored property are written back unchanged', async () => {
+    const issue = jira.fixture.issues.get('200002')!;
+    const prop = structuredClone(issue.properties['kpi-assignments']) as { assignments: Array<Record<string, unknown>> } & Record<string, unknown>;
+    prop.assignments[0] = { ...prop.assignments[0], targetType: 'delta', extraField: 'keep me' };
+    prop.legacyTopLevel = 1;
+    issue.properties['kpi-assignments'] = prop;
+    await runToEnd();
+    const after = issue.properties['kpi-assignments'] as { assignments: Array<Record<string, unknown>> } & Record<string, unknown>;
+    expect(after.assignments[0]).toMatchObject({ targetType: 'delta', extraField: 'keep me', kpiIssueId: edge.moved.id, kpiId: edge.moved.newKey });
+    expect(after).toMatchObject({ legacyTopLevel: 1, refsVersion: 2, kpiIssueIds: [edge.moved.id] });
+  });
 });

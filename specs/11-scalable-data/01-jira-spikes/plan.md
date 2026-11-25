@@ -247,6 +247,13 @@ Throwaway objects: fields `customfield_10907` *SPIKE KPI Unit* (short text) and 
   space has KPI Reading** (each install's) for every work type; recording a reading works anywhere the
   user can edit the KPI. (R5)
 
+- **B9 (found in 04's live check, 2026-11-24) — adding a field to a screen resets its field scheme
+  entry to every work type.** KPI Unit was in the *Default Field Scheme* restricted to the KPI type
+  (`restrictedToWorkTypes: ['10436']`); after `POST /screens/10880/tabs/10883/fields { fieldId }` the
+  entry had no restriction, so every work type in ~50 spaces could hold the field (a write to an
+  Initiative succeeded). Restricting it again works, but takes up to a minute to apply to writes. 04's
+  screens step now records the restriction before and restores it after.
+
 ### C. Finding KPIs across spaces
 
 - **C1 — yes.** `issuetype = 10436` returns KPIs from `KPI` (14), `SPIKE` and `SPIKEB`.
