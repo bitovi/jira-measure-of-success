@@ -1,0 +1,51 @@
+# Legacy reader report — bitovi-training.atlassian.net, central space KPI
+
+## KPIs (14)
+KPI-1	Revenue	unit=USD	direction=increase
+KPI-5	Costs	unit=USD	direction=decrease
+KPI-6	Num Orders	unit=count	direction=increase
+KPI-8	Average Order Amount	unit=USD	direction=increase
+KPI-9	Revenue per Agent	unit=USD	direction=increase
+KPI-10	Unit-less	unit=	direction=increase
+KPI-11	Test KPI	unit=	direction=increase
+KPI-12	A very long long name of a kpi	unit=and an equally long unit to cause problems	direction=increase
+KPI-13	Test Creation	unit=	direction=increase
+KPI-14	Agent Office Scalability	unit=test unit	direction=decrease
+KPI-15	Another one	unit=	direction=increase
+KPI-16	One more	unit=	direction=increase
+KPI-17	even more	unit=	direction=increase
+KPI-18	Revenue	unit=∅	direction=∅
+
+## Work items with targets (14)
+CLAIMS-1	kpiIds=KPI-9
+  KPI-9	absolute:1050	start=∅	due=issueDueDate+2m
+CLAIMS-2	kpiIds=KPI-9
+  KPI-9	absolute:1040	start=∅	due=issueDueDate+1m
+CLAIMS-3	kpiIds=KPI-11,KPI-9
+  KPI-11	percent:1	start=∅	due=issueDueDate+1m
+  KPI-9	absolute:1045	start=∅	due=issueDueDate+1m
+ECOM-2	kpiIds=KPI-1
+  KPI-1	delta:2	start=∅	due=issueDueDate+1m
+ECOM-30	kpiIds=KPI-1
+  KPI-1	absolute:225	start=∅	due=2026-08-18
+IMP-37	kpiIds=KPI-5
+  KPI-5	absolute:1000	start=∅	due=2027-12-31
+ORDER-23	kpiIds=KPI-11
+  KPI-11	percent:50	start=∅	due=issueDueDate+1m
+ORDER-26	kpiIds=KPI-11
+  KPI-11	percent:20	start=∅	due=issueDueDate+1m
+POS-3	kpiIds=KPI-6,KPI-8
+  KPI-6	absolute:5	start=∅	due=2026-07-31
+  KPI-8	absolute:25	start=∅	due=2026-08-31
+STORE-12	kpiIds=KPI-6,KPI-8
+  KPI-6	percent:3	start=∅	due=2026-11-28
+  KPI-8	absolute:15	start=∅	due=2026-06-04
+STORE-17	kpiIds=KPI-11,KPI-13
+  KPI-11	percent:12	start=∅	due=issueDueDate+1m
+  KPI-13	percent:2	start=∅	due=issueDueDate+1m
+STORE-18	kpiIds=KPI-11
+  KPI-11	percent:40	start=∅	due=issueDueDate+1m
+SUNNYSUSHI-36	kpiIds=KPI-8
+  KPI-8	absolute:30	start=∅	due=2026-06-22
+SUNNYSUSHI-44	kpiIds=KPI-8
+  KPI-8	absolute:null	start=∅	due=issueDueDate+0m

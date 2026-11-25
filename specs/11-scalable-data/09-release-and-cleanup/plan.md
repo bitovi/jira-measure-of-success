@@ -109,6 +109,11 @@ our own sites runs this release.
 
 1. **Where the legacy script lives.** `app/scripts/` (kept until cleanup), or this spec folder (not
    shipped)? It needs an API token, so it never runs in CI.
+   - **Decided (2026-11-24, implementer, autopilot): `app/scripts/legacy-report.ts`**, run with
+     `node --experimental-strip-types scripts/legacy-report.ts [KEY]` from `app/` (Node 22). It reads
+     `JIRA_EMAIL` / `JIRA_API_TOKEN`, falling back to `.env`'s `FORGE_*`. Baseline saved as
+     [legacy-report.before.txt](./legacy-report.before.txt) before any stage changed dev data; two
+     runs in a row were identical.
 2. **Customer site upgrade.** Do we run the upgrade runbook with the customer's admin (screen share), or
    send them the runbook?
 3. ~~**Production on our sites.**~~ **Answered (2026-11-20):** the only production site with KPI data is
