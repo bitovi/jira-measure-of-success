@@ -1,6 +1,6 @@
 # 05 — Unit and direction in Jira fields
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** · Depends on: 02, 04.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done** · Depends on: 02, 04.
 
 ## Problem
 
@@ -219,6 +219,16 @@ Settings first").
 4. **Migrating as the admin**: History names the admin for every migrated KPI. Fine, or migrate as the
    app (02 Q2)?
    - **Decided (2026-11-24, implementer, autopilot; revisit at review):** as the admin, as drafted (02 Q2).
+
+## Live check (2026-11-24, dev v10.5.0)
+
+- Upgrade data → *Move unit and direction into fields*: **13 upgraded, 1 already up to date** (KPI-18
+  has no `kpi-meta`), `done`. Every KPI's KPI Unit / KPI Direction match its `kpi-meta`, now marked
+  `fields: true`; History shows one change by the admin.
+- JQL: `"KPI Direction" = Decrease` → KPI-5, KPI-14; `cf[10910] ~ "USD"` → KPI-1, 5, 8, 9.
+- **Sync trigger:** a unit edit made outside the app (KPI-10 → `pts`, then cleared) rewrote `kpi-meta`
+  within 20 s each time.
+- The legacy reader report is unchanged; dev's Timeline shows the same units as before.
 
 ## Implementation notes
 
