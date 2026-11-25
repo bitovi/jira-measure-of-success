@@ -15,7 +15,9 @@ import {
   dateFieldSelection,
   encodeReadingValue,
   kpiParentLinkBody,
-  parentFromIssueLinks,
+  kpiParentLinks,
+  KPI_SPACE_REQUIRED,
+  KPI_WORK_TYPE_NOT_SET_UP,
   readOwnDates,
   readStoredAssignments,
   shouldStampRefs,
@@ -36,6 +38,7 @@ import {
   type KpiFieldsConfig,
   type KpiHierarchyLink,
   type KpiSpaceAccess,
+  type KpiSpaceRef,
   type ReadingChange,
   type TimingNode,
 } from '../domain/index';
@@ -66,6 +69,8 @@ interface IssueParentInfo {
   parentId: string | null;
   issueKey: string;
   issueTypeName: string;
+  /** Jira `issuetype.id` (what "is a KPI" compares, spec 11 · 06); null when absent */
+  issueTypeId: string | null;
   /** Jira `issuetype.hierarchyLevel`; null when Jira didn't return one */
   hierarchyLevel: number | null;
   ownStart: string | null;
@@ -83,8 +88,9 @@ const DEFAULT_DATE_SELECTION = dateFieldSelection(null);
 /** Raw issue fields as returned by Jira, including the selected date fields. */
 type RawMetaFields = {
   parent?: { id: string };
-  issuetype?: { name: string; hierarchyLevel?: number };
+  issuetype?: { id?: string; name: string; hierarchyLevel?: number };
   status?: { statusCategory?: { key?: string } };
+  project?: { id?: string; key?: string; name?: string };
   [field: string]: unknown;
 };
 
@@ -100,6 +106,7 @@ function toIssueMeta(key: string, fields: RawMetaFields | undefined, selection: 
     parentId: fields?.parent?.id ?? null,
     issueKey: key,
     issueTypeName,
+    issueTypeId: fields?.issuetype?.id ? String(fields.issuetype.id) : null,
     hierarchyLevel,
     ownStart,
     ownDueDate: ownDue,
@@ -121,15 +128,22 @@ export async function fetchIssueMeta(
   return toIssueMeta(data.key, data.fields, selection);
 }
 
+/** A space as Jira returns an issue's `project` field; null without an id and key. */
+export function spaceRefOf(project: { id?: string | number; key?: string; name?: string } | undefined): KpiSpaceRef | null {
+  if (!project?.key || project.id === undefined) return null;
+  return { id: String(project.id), key: project.key, name: project.name ?? project.key };
+}
+
 /**
- * `fetchIssueMeta` plus the issue's own targets: the `kpi-assignments` property
- * comes back inside the same GET (`properties=`), so no separate property request.
+ * `fetchIssueMeta` plus the issue's own targets and its space: the
+ * `kpi-assignments` property comes back inside the same GET (`properties=`),
+ * so no separate property request.
  */
 export async function fetchIssueWithAssignments(
   issueId: string,
   selection: DateFieldSelection = DEFAULT_DATE_SELECTION,
-): Promise<IssueParentInfo & { assignments: Assignment[] }> {
-  const fieldList = metaFieldList(selection);
+): Promise<IssueParentInfo & { assignments: Assignment[]; project: KpiSpaceRef | null }> {
+  const fieldList = `${metaFieldList(selection)},project`;
   const res = await asUser().requestJira(
     route`/rest/api/3/issue/${issueId}?fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}`,
   );
@@ -138,6 +152,7 @@ export async function fetchIssueWithAssignments(
   return {
     ...toIssueMeta(data.key, data.fields, selection),
     assignments: parseAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
+    project: spaceRefOf(data.fields?.project),
   };
 }
 
@@ -446,7 +461,7 @@ export class JiraForbiddenError extends Error {}
  * accepts the REST edit regardless (verified live, spec 10 Step 0).
  *
  * `kpiIssueId` is the numeric id or key of a KPI the caller has already checked
- * is in the KPI space (see the `recordValue` resolver).
+ * is a KPI (of the KPI work type, see the `recordValue` resolver).
  */
 export async function writeReading(kpiIssueId: string, date: string, value: number | null): Promise<void> {
   const fieldId = await getReadingFieldId();
@@ -466,25 +481,35 @@ export async function writeReading(kpiIssueId: string, date: string, value: numb
 }
 
 /**
- * Look up an issue AS THE USER: its numeric id, key and project key. null when
- * the user can't see it (Jira answers 404 for "doesn't exist" and "no
- * permission" alike). Used to check a KPI is visible and in the KPI space before
- * writing anything that points at it.
+ * Look up an issue AS THE USER: its numeric id, key, space and work type. null
+ * when the user can't see it (Jira answers 404 for "doesn't exist" and "no
+ * permission" alike). Used to check an issue is a visible KPI before writing
+ * anything that points at it.
  */
 export async function fetchKpiIssueRef(
   idOrKey: string,
-): Promise<{ id: string; key: string; projectKey: string | null } | null> {
-  const res = await asUser().requestJira(route`/rest/api/3/issue/${idOrKey}?fields=project`);
+): Promise<{ id: string; key: string; projectKey: string | null; project: KpiSpaceRef | null; typeId: string | null } | null> {
+  const res = await asUser().requestJira(route`/rest/api/3/issue/${idOrKey}?fields=project,issuetype`);
   if (res.status === 404 || res.status === 403) return null;
   if (!res.ok) throw new Error(await jiraError(res, `look up ${idOrKey}`));
-  const body = (await res.json()) as { id: string; key: string; fields?: { project?: { key?: string } } };
-  return { id: String(body.id), key: body.key, projectKey: body.fields?.project?.key ?? null };
+  const body = (await res.json()) as {
+    id: string;
+    key: string;
+    fields?: { project?: { id?: string; key?: string; name?: string }; issuetype?: { id?: string } };
+  };
+  return {
+    id: String(body.id),
+    key: body.key,
+    projectKey: body.fields?.project?.key ?? null,
+    project: spaceRefOf(body.fields?.project),
+    typeId: body.fields?.issuetype?.id ? String(body.fields.issuetype.id) : null,
+  };
 }
 
 /**
  * Fetch the reading-field changelog for KPI issues via the bulk endpoint
  * (`POST /rest/api/3/changelog/bulkfetch`, filtered to the reading field). Up to
- * 1000 issues/request — one call covers a whole KPI space. Returns the raw
+ * 1000 issues/request — one call covers every KPI loaded. Returns the raw
  * changes for `readingsFromChangelog` to reduce into series.
  */
 export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<string, ReadingChange[]>> {
@@ -676,11 +701,20 @@ export async function fetchChildrenForIds(parentIds: string[]): Promise<Map<stri
   return out;
 }
 
-export interface KpiSpaceIssue {
+export interface KpiIssue {
   id: string;
   key: string;
   name: string;
+  /** the KPI's space (its own `project` field) */
+  space: KpiSpaceRef | null;
+  /** the parent KPI: the lowest-id hierarchy link to a loaded KPI (spec 11 · 06); null = top-level */
   parentId: string | null;
+  /**
+   * Every hierarchy link to a parent KPI (loaded, or of the KPI work type),
+   * lowest link id first. More than one breaks the one-parent rule and is
+   * flagged (KPI View).
+   */
+  parentLinks: Array<{ id: string; key: string | null }>;
   /** Native LexoRank value for sibling ordering (null if the field is absent). */
   rank: string | null;
   /**
@@ -689,6 +723,29 @@ export interface KpiSpaceIssue {
    */
   meta: KpiMetaProperty | null;
 }
+
+/** What a KPI read needs from the site configuration (spec 11 · 04/05). */
+export interface KpiReadConfig {
+  /** the KPI work type's id: "is a KPI" (spec 11 · 06) */
+  workTypeId: string;
+  hierarchy: KpiHierarchyLink | null;
+  kpiFields: KpiFieldsConfig | null;
+}
+
+/** Narrow a KPI search (all optional; ANDed). */
+export interface KpiQuery {
+  /** only KPIs in these spaces (project keys) */
+  projects?: string[];
+  /** only these KPIs (issue ids) */
+  ids?: string[];
+  /** summary starts-with search (`summary ~ "text*"`) */
+  text?: string;
+  /** stop after this many KPIs (default: the 50-page cap, 5,000) */
+  limit?: number;
+}
+
+/** The most KPIs one search returns: 50 pages of 100 (overview Q6, R16: paging the KPI tree comes later). */
+export const KPI_SEARCH_CAP = 5000;
 
 /** Best-effort: null if the Rank field can't be found (siblings keep creation order). */
 async function getRankFieldId(): Promise<string | null> {
@@ -699,88 +756,121 @@ async function getRankFieldId(): Promise<string | null> {
   }
 }
 
+const jqlString = (text: string): string => `"${text.replace(/["\\]/g, (c) => `\\${c}`)}"`;
+
+/** `issuetype = {id}` and the query's narrowing clauses, created ASC. */
+export function kpiSearchJql(workTypeId: string, query: KpiQuery = {}): string {
+  const clauses = [`issuetype = ${workTypeId}`];
+  const projects = (query.projects ?? []).filter((k) => /^[A-Z][A-Z0-9_]*$/.test(k));
+  if (query.projects) clauses.push(projects.length > 0 ? `project in (${projects.map(jqlString).join(',')})` : 'id in (0)');
+  const ids = (query.ids ?? []).filter(isKpiIssueId);
+  if (query.ids) clauses.push(`id in (${ids.length > 0 ? ids.join(',') : '0'})`);
+  const text = query.text?.trim();
+  if (text) clauses.push(`summary ~ ${jqlString(`${text.replace(/\*+$/, '')}*`)}`);
+  return `${clauses.join(' AND ')} ORDER BY created ASC`;
+}
+
+type RawKpiIssue = {
+  id: string;
+  key: string;
+  fields?: {
+    summary?: string;
+    issuelinks?: IssueLinkRef[];
+    project?: { id?: string; key?: string; name?: string };
+    [field: string]: unknown;
+  };
+  properties?: Record<string, unknown>;
+};
+
+/** The fields a KPI read asks Jira for. */
+function kpiFieldList(rankFieldId: string | null, kpiFields: KpiFieldsConfig | null): string {
+  return ['summary', 'issuelinks', 'project', ...(rankFieldId ? [rankFieldId] : []), ...kpiMetaFieldIds(kpiFields)].join(',');
+}
+
+/** A raw KPI issue → KpiIssue, its parent resolved among `loadedIds`. */
+function toKpiIssue(
+  raw: RawKpiIssue,
+  cfg: KpiReadConfig,
+  rankFieldId: string | null,
+  loadedIds: ReadonlySet<string>,
+): KpiIssue {
+  const links = kpiParentLinks(raw.fields?.issuelinks, cfg.hierarchy, { loadedIds, workTypeId: cfg.workTypeId });
+  return {
+    id: String(raw.id),
+    key: raw.key,
+    name: raw.fields?.summary ?? raw.key,
+    space: spaceRefOf(raw.fields?.project),
+    parentId: links.find((l) => loadedIds.has(l.parentId))?.parentId ?? null,
+    parentLinks: links.map((l) => ({ id: l.parentId, key: l.parentKey })),
+    rank: rankFieldId ? ((raw.fields?.[rankFieldId] as string | undefined) ?? null) : null,
+    meta: resolveKpiMeta(cfg.kpiFields, { legacy: raw.properties?.[KPI_META_PROPERTY_KEY], fields: raw.fields }),
+  };
+}
+
 /**
- * Enumerate every KPI issue in the KPI space (JQL `project = <key>`), reading the
- * summary (KPI name), issue links (for parent nesting), native rank (for
- * sibling ordering) and the unit/direction (the KPI fields when `kpiFields` is
- * set, else the `kpi-meta` property; both included in the search so no per-KPI
- * GET is needed). Paginated to cover large spaces.
+ * Find KPIs: issues of the KPI work type (`issuetype = {workTypeId}`, spec
+ * 11 · 06), in every company-managed space that uses the type, narrowed by
+ * `query`. Reads the summary (KPI name), space, issue links (for parent
+ * nesting), native rank (sibling order) and the unit/direction (the KPI fields
+ * when chosen, else the `kpi-meta` property; both in the search, so no per-KPI
+ * GET). Pages up to `query.limit` (default the 5,000-KPI cap).
  *
  * The KPI tree is expressed with issue links of the configured hierarchy type
- * (`hierarchy`, see resolve/kpiLinks) rather than the native `parent` field (a
- * standard issue can't be the native parent of another standard issue) — so
- * each issue's parent is derived from its `issuelinks` via the pure
- * `parentFromIssueLinks`, restricted to links whose parent is also a KPI-space
- * issue. With no hierarchy configured every KPI is a root. The nested tree +
- * readings are assembled by `getTimelineData`.
+ * (see resolve/kpiLinks): each KPI's parent is the lowest-id hierarchy link to
+ * another KPI this search returned. A parent that isn't returned (outside the
+ * query, or one the user can't browse) leaves the KPI top-level. With no
+ * hierarchy configured every KPI is a root.
  */
-export async function fetchKpiSpaceIssues(
-  projectKey: string,
-  hierarchy: KpiHierarchyLink | null,
-  kpiFields: KpiFieldsConfig | null = null,
-): Promise<KpiSpaceIssue[]> {
+export async function fetchKpis(query: KpiQuery, cfg: KpiReadConfig): Promise<KpiIssue[]> {
   const rankFieldId = await getRankFieldId();
-  const fieldList = ['summary', 'issuelinks', ...(rankFieldId ? [rankFieldId] : []), ...kpiMetaFieldIds(kpiFields)].join(',');
-  type RawIssue = {
-    id: string;
-    key: string;
-    name: string;
-    links: IssueLinkRef[];
-    rank: string | null;
-    meta: KpiMetaProperty | null;
-  };
-  const raw: RawIssue[] = [];
+  const fieldList = kpiFieldList(rankFieldId, cfg.kpiFields);
+  const jql = kpiSearchJql(cfg.workTypeId, query);
+  const limit = Math.min(query.limit ?? KPI_SEARCH_CAP, KPI_SEARCH_CAP);
+  const raw: RawKpiIssue[] = [];
   let nextPageToken: string | undefined;
-  for (let page = 0; page < 50; page += 1) {
+  for (let page = 0; page < 50 && raw.length < limit; page += 1) {
+    const maxResults = Math.min(100, limit - raw.length);
     // As the USER: Jira applies Browse Projects + issue security, so KPIs the
     // user may not see never reach them (spec 10).
     const res = await asUser()
       .requestJira(
         nextPageToken
-          ? route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
-          : route`/rest/api/3/search/jql?jql=project=${projectKey}+ORDER+BY+created+ASC&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=100`,
+          ? route`/rest/api/3/search/jql?jql=${jql}&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=${maxResults}&nextPageToken=${nextPageToken}`
+          : route`/rest/api/3/search/jql?jql=${jql}&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=${maxResults}`,
       );
     // Fail loudly rather than return a partial list: callers treat a KPI that's
     // absent here as non-existent (catalog, timeline tree).
-    if (!res.ok) throw new Error(await jiraError(res, `list the KPIs in project ${projectKey}`));
-    const data = (await res.json()) as {
-      isLast?: boolean;
-      nextPageToken?: string;
-      issues?: Array<{
-        id: string;
-        key: string;
-        fields?: { summary?: string; issuelinks?: IssueLinkRef[]; [field: string]: unknown };
-        properties?: Record<string, unknown>;
-      }>;
-    };
+    if (!res.ok) throw new Error(await jiraError(res, 'list the KPIs'));
+    const data = (await res.json()) as { isLast?: boolean; nextPageToken?: string; issues?: RawKpiIssue[] };
     const batch = data.issues ?? [];
-    for (const i of batch) {
-      raw.push({
-        id: String(i.id),
-        key: i.key,
-        name: i.fields?.summary ?? i.key,
-        links: i.fields?.issuelinks ?? [],
-        rank: rankFieldId ? ((i.fields?.[rankFieldId] as string | undefined) ?? null) : null,
-        meta: resolveKpiMeta(kpiFields, { legacy: i.properties?.[KPI_META_PROPERTY_KEY], fields: i.fields }),
-      });
-    }
+    raw.push(...batch);
     if (data.isLast || !data.nextPageToken || batch.length === 0) break;
     nextPageToken = data.nextPageToken;
   }
 
-  // Resolve parents only after every id is known, so hierarchy links pointing
-  // outside the KPI space are ignored (a reused type like "Blocks" is generic).
-  const idSet = new Set(raw.map((r) => r.id));
-  return breakParentCycles(
-    raw.map((r) => ({
-      id: r.id,
-      key: r.key,
-      name: r.name,
-      parentId: parentFromIssueLinks(r.links, idSet, hierarchy),
-      rank: r.rank,
-      meta: r.meta,
-    })),
-  );
+  // Resolve parents only after every id is known: a hierarchy link counts only
+  // when its parent is a KPI this search returned.
+  const kept = raw.slice(0, limit);
+  const idSet = new Set(kept.map((r) => String(r.id)));
+  return breakParentCycles(kept.map((r) => toKpiIssue(r, cfg, rankFieldId, idSet)));
+}
+
+/**
+ * One KPI by id or key, AS THE USER, in one GET (no search, so no index lag):
+ * what `fetchKpis` returns for it, its parent left unresolved (`parentId`
+ * null; `parentLinks` lists its parent KPIs by work type). null when the user
+ * can't see it or it isn't of the KPI work type.
+ */
+export async function fetchKpi(idOrKey: string, cfg: KpiReadConfig): Promise<KpiIssue | null> {
+  const rankFieldId = await getRankFieldId();
+  const fieldList = `${kpiFieldList(rankFieldId, cfg.kpiFields)},issuetype`;
+  const res = await asUser()
+    .requestJira(route`/rest/api/3/issue/${idOrKey}?fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}`);
+  if (res.status === 404 || res.status === 403) return null;
+  if (!res.ok) throw new Error(await jiraError(res, `look up ${idOrKey}`));
+  const raw = (await res.json()) as RawKpiIssue & { fields?: { issuetype?: { id?: string } } };
+  if (String(raw.fields?.issuetype?.id ?? '') !== cfg.workTypeId) return null;
+  return toKpiIssue(raw, cfg, rankFieldId, new Set());
 }
 
 /** One contributing issue's KPI targets, plus the fields needed to place them. */
@@ -812,6 +902,9 @@ export interface TargetContributions {
  */
 const ASSIGNMENT_INDEX_JQL = 'issue.property[kpi-assignments].kpiIssueIds IS NOT EMPTY';
 
+/** Exactly the issues targeting one KPI (03's exact lookup, 01 D3: no tokenising). */
+const targetsOfKpiJql = (kpiId: string): string => `issue.property[kpi-assignments].kpiIssueIds = "${kpiId}"`;
+
 /**
  * Discover every issue that has authored a KPI target — in ONE JQL query against
  * the denormalized `kpiIssueIds` search index, and let the caller group the
@@ -828,12 +921,16 @@ const ASSIGNMENT_INDEX_JQL = 'issue.property[kpi-assignments].kpiIssueIds IS NOT
  * targets aren't discovered (spec 11, Compatibility). Only id references are
  * returned: a deleted KPI's key-only reference has nothing to show under.
  *
+ * Given `kpiId`, only the issues targeting that KPI (`kpiIssueIds = "{id}"`,
+ * a KPI's own panel, spec 11 · 06), and only their targets on it.
+ *
  * Live-only: exercised via `forge tunnel` / `npm run test:e2e`; the mock harness
  * bakes targets into fixtures instead. Non-throwing — a failed search yields no
  * targets rather than crashing the timeline.
  */
-export async function fetchTargetContributions(): Promise<TargetContributions> {
+export async function fetchTargetContributions(kpiId?: string): Promise<TargetContributions> {
   const fieldList = ['summary', 'issuetype', 'parent', 'duedate'].join(',');
+  const jql = kpiId ? targetsOfKpiJql(kpiId) : ASSIGNMENT_INDEX_JQL;
   interface Raw {
     id: string;
     key: string;
@@ -851,8 +948,8 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
     const res = await asUser()
       .requestJira(
         nextPageToken
-          ? route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
-          : route`/rest/api/3/search/jql?jql=${ASSIGNMENT_INDEX_JQL}&fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}&maxResults=100`,
+          ? route`/rest/api/3/search/jql?jql=${jql}&fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}&maxResults=100&nextPageToken=${nextPageToken}`
+          : route`/rest/api/3/search/jql?jql=${jql}&fields=${fieldList}&properties=${ASSIGNMENT_PROPERTY_KEY}&maxResults=100`,
       );
     if (!res.ok) break;
     const data = (await res.json()) as {
@@ -881,7 +978,9 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
         title: i.fields?.summary ?? i.key,
         ownDue: i.fields?.duedate ?? null,
         parentId: i.fields?.parent?.id != null ? String(i.fields.parent.id) : null,
-        assignments: parseAssignments(i.properties?.[ASSIGNMENT_PROPERTY_KEY]).filter((a) => isKpiIssueId(a.kpiId)),
+        assignments: parseAssignments(i.properties?.[ASSIGNMENT_PROPERTY_KEY]).filter((a) =>
+          kpiId ? a.kpiId === kpiId : isKpiIssueId(a.kpiId),
+        ),
       });
     }
     if (data.isLast || !data.nextPageToken || batch.length === 0) break;
@@ -1077,13 +1176,16 @@ async function fetchMyPermissions(path: JiraRoute): Promise<MyPermissions> {
 const has = (body: MyPermissions, key: string): boolean => body.permissions?.[key]?.havePermission === true;
 
 /**
- * What the current user may do in the KPI project — one `asUser` call. Throws
+ * What the current user may do in ONE space holding KPIs (a project key or id)
+ * — one `asUser` call (spec 10; per space since spec 11 · 06). Throws
  * `PermissionLookupError` when Jira can't answer; callers then rely on Jira's
  * own enforcement instead of guessing "no access".
  */
-export async function fetchKpiSpaceAccess(projectKey: string): Promise<KpiSpaceAccess> {
+export async function fetchKpiAccess(project: string): Promise<KpiSpaceAccess> {
   const body = await fetchMyPermissions(
-    route`/rest/api/3/mypermissions?projectKey=${projectKey}&permissions=BROWSE_PROJECTS,CREATE_ISSUES,EDIT_ISSUES,LINK_ISSUES`,
+    /^\d+$/.test(project)
+      ? route`/rest/api/3/mypermissions?projectId=${project}&permissions=BROWSE_PROJECTS,CREATE_ISSUES,EDIT_ISSUES,LINK_ISSUES`
+      : route`/rest/api/3/mypermissions?projectKey=${project}&permissions=BROWSE_PROJECTS,CREATE_ISSUES,EDIT_ISSUES,LINK_ISSUES`,
   );
   return {
     browse: has(body, 'BROWSE_PROJECTS'),
@@ -1258,22 +1360,26 @@ export async function ensureKpiIssueTypeOnProject(
 }
 
 /**
- * Create a KPI as an issue in the KPI space. Nesting under `parentKpiId` (an issue id) uses an
- * issue LINK of the configured `hierarchy` type, because Jira forbids a
- * standard issue from being the native `parent` of another standard issue.
- * Nesting without a configured hierarchy throws before anything is created.
- * Unit/direction go in the create request itself (spec 11 · 05): the KPI fields
- * when they're chosen (`kpiFields`), plus the `kpi-meta` property, marked
- * `fields: true` then, for the customer's report. With `kpiFields: null`, only
- * `kpi-meta` (unmarked), as before. The summary carries the KPI name.
+ * Create a KPI: an issue of the KPI work type (by id) in the space `projectId`
+ * (spec 11 · 06: required; no default space). Nesting under `parentKpiId` (an
+ * issue id, in any space) uses an issue LINK of the configured `hierarchy`
+ * type, because Jira forbids a standard issue from being the native `parent`
+ * of another standard issue. Nesting without a configured hierarchy throws
+ * before anything is created. Unit/direction go in the create request itself
+ * (spec 11 · 05): the KPI fields when they're chosen (`kpiFields`), plus the
+ * `kpi-meta` property, marked `fields: true` then, for the customer's report.
+ * With `kpiFields: null`, only `kpi-meta` (unmarked), as before. The summary
+ * carries the KPI name.
  */
 export async function createKpiIssue(
   projectId: string,
-  input: CreateKpiInput,
+  input: Omit<CreateKpiInput, 'projectId'>,
   hierarchy: KpiHierarchyLink | null,
-  workType: { id: string } | null = null,
+  workType: { id: string } | null,
   kpiFields: KpiFieldsConfig | null = null,
 ): Promise<CreatedKpi> {
+  if (!projectId) throw new Error(`${KPI_SPACE_REQUIRED}.`);
+  if (!workType) throw new Error(`${KPI_WORK_TYPE_NOT_SET_UP} — choose one in Settings first.`);
   if (input.parentKpiId && !hierarchy) {
     throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
   }
@@ -1285,12 +1391,12 @@ export async function createKpiIssue(
   const write = kpiMetaCreate(kpiFields, meta);
   const fields: Record<string, unknown> = {
     project: { id: projectId },
-    // The configured KPI work type (spec 11 · 04); an install that hasn't chosen one uses the type named KPI.
-    issuetype: workType ? { id: workType.id } : { name: KPI_ISSUE_TYPE },
+    // The configured KPI work type (spec 11 · 04/06); an install that hasn't saved one derives the type named KPI.
+    issuetype: { id: workType.id },
     summary: name,
     ...write.fields,
   };
-  // As the USER: Jira requires Create Issues in the KPI project (spec 10).
+  // As the USER: Jira requires Create Issues in the KPI's space (spec 10).
   const res = await asUser().requestJira(route`/rest/api/3/issue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1362,6 +1468,10 @@ export interface KpiIssueForEdit {
   id: string;
   key: string;
   projectKey: string | null;
+  /** the KPI's space */
+  project: KpiSpaceRef | null;
+  /** its work type id ("is a KPI", spec 11 · 06) */
+  typeId: string | null;
   name: string;
   /** unit/direction as the app reads them (resolveKpiMeta) */
   meta: KpiMetaProperty | null;
@@ -1379,7 +1489,7 @@ export async function fetchKpiIssueForEdit(
   idOrKey: string,
   kpiFields: KpiFieldsConfig | null = null,
 ): Promise<KpiIssueForEdit | null> {
-  const fieldList = ['project', 'summary', 'issuelinks', ...kpiMetaFieldIds(kpiFields)].join(',');
+  const fieldList = ['project', 'issuetype', 'summary', 'issuelinks', ...kpiMetaFieldIds(kpiFields)].join(',');
   const res = await asUser()
     .requestJira(route`/rest/api/3/issue/${idOrKey}?fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}`);
   if (res.status === 404 || res.status === 403) return null;
@@ -1387,7 +1497,13 @@ export async function fetchKpiIssueForEdit(
   const body = (await res.json()) as {
     id: string;
     key: string;
-    fields?: { project?: { key?: string }; summary?: string; issuelinks?: IssueLinkRef[]; [field: string]: unknown };
+    fields?: {
+      project?: { id?: string; key?: string; name?: string };
+      issuetype?: { id?: string };
+      summary?: string;
+      issuelinks?: IssueLinkRef[];
+      [field: string]: unknown;
+    };
     properties?: Record<string, unknown>;
   };
   const storedMeta = body.properties?.[KPI_META_PROPERTY_KEY];
@@ -1395,6 +1511,8 @@ export async function fetchKpiIssueForEdit(
     id: String(body.id),
     key: body.key,
     projectKey: body.fields?.project?.key ?? null,
+    project: spaceRefOf(body.fields?.project),
+    typeId: body.fields?.issuetype?.id ? String(body.fields.issuetype.id) : null,
     name: body.fields?.summary ?? body.key,
     meta: resolveKpiMeta(kpiFields, { legacy: storedMeta, fields: body.fields }),
     storedMeta,
@@ -1499,17 +1617,15 @@ async function deleteIssue(issueKey: string): Promise<void> {
  * - `deleted`: the app can't find them either (404 asApp) — gone from Jira. A
  *   key-only reference is deleted without a request: after the migration, those
  *   are the only key-only references left;
- * - `noAccess`: they exist, but the user may not see them (404 asUser, or no
- *   Browse on the KPI space at all).
- * Anything else is just too new for the search index (or outside the KPI space)
- * and is in neither list. `keys` has the current key of every one the app found,
+ * - `noAccess`: they exist, but the user may not see them (404 asUser).
+ * Anything else is just too new for the search index (or beyond the catalog's
+ * cap) and is in neither list. `keys` has the current key of every one the app found,
  * for its label. The app lookup is needed because `asUser` alone answers 404 for
  * both cases; a transient error counts as "exists" so a hiccup never offers to
  * remove a target on a live KPI.
  */
 export async function classifyUnlistedKpis(
   kpiIds: string[],
-  canBrowseSpace: boolean,
 ): Promise<{ deleted: string[]; noAccess: string[]; keys: Record<string, string> }> {
   const unique = [...new Set(kpiIds)];
   const keys: Record<string, string> = {};
@@ -1522,7 +1638,6 @@ export async function classifyUnlistedKpis(
         const key = ((await appRes.json()) as { key?: string }).key;
         if (key) keys[id] = key;
       }
-      if (!canBrowseSpace) return 'noAccess';
       const userRes = await asUser().requestJira(route`/rest/api/3/issue/${id}?fields=summary`);
       return userRes.status === 404 || userRes.status === 403 ? 'noAccess' : null;
     }),

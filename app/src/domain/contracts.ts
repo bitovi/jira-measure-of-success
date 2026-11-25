@@ -93,17 +93,24 @@ export interface PanelRowDto {
   resolving?: boolean;
   /**
    * true when the target points at a KPI that's no longer in the catalog (the
-   * KPI issue was deleted or moved out of the KPI space). The row keeps the
+   * KPI issue was deleted). The row keeps the
    * stored bet so it can be removed, but has no values, status or record action.
    */
   kpiMissing?: boolean;
   /**
    * true when the target points at a KPI the user doesn't have permission to see
-   * (no Browse on the KPI project, or an issue security level) — spec 10. Like
+   * (no Browse on the KPI's space, or an issue security level) — spec 10. Like
    * `kpiMissing` it shows only the stored bet: no values, status or record
    * action; it can still be removed (the target lives on this work issue).
    */
   kpiNoAccess?: boolean;
+}
+
+/** A Jira space (project) holding KPIs, as the KPI's own `project` field returns it (spec 11 · 06). */
+export interface KpiSpaceRef {
+  id: string;
+  key: string;
+  name: string;
 }
 
 export interface CatalogEntryDto {
@@ -111,6 +118,8 @@ export interface CatalogEntryDto {
   id: string;
   /** the KPI's issue key (display only) */
   key: string;
+  /** the KPI's space (always set by the backend; absent on hand-built data) */
+  space?: KpiSpaceRef;
   name: string;
   unit: string;
   direction: KpiDirection | null;
@@ -130,16 +139,18 @@ export interface PanelData {
   /** true when that due date was rolled up from descendants ("Rolled up due date") */
   issueDueRolledUp: boolean;
   /**
-   * Set ONLY when THIS issue is itself a KPI (lives in the KPI space, Feature
-   * 04). When present the panel renders the single-KPI chart (KpiView) instead
-   * of the associate/target-editor form. Carries this KPI's own series.
+   * Set ONLY when THIS issue is itself a KPI (an issue of the KPI work type,
+   * Feature 04 / spec 11 · 06). When present the panel renders the single-KPI
+   * chart (KpiView) instead of the associate/target-editor form. Carries this
+   * KPI's own series.
    */
   kpiView?: KpiViewDto | null;
   /** true while Phase 2 (readings + rolled-up dates) is outstanding — spec 07 */
   resolving?: boolean;
   /**
-   * The user's permissions in the KPI space (spec 10). Absent when no KPI space
-   * is set up (or from older callers) — the UI then behaves as if allowed.
+   * With `kpiView` only: the user's permissions in THIS KPI's space (spec 10,
+   * spec 11 · 06), fetched with the load. Absent when Jira couldn't answer — the
+   * UI then behaves as if allowed and Jira's refusal explains a denied action.
    */
   access?: KpiSpaceAccess;
 }
@@ -173,8 +184,6 @@ export interface PanelBasis {
   noAccessKpiIds?: string[];
   /** keys of targeted KPIs the catalog doesn't list but Jira found (KPI id → key), for their labels */
   kpiKeys?: Record<string, string>;
-  /** the user's KPI-space permissions (spec 10); absent when no space is set up */
-  access?: KpiSpaceAccess;
 }
 
 /**
@@ -195,7 +204,7 @@ export interface PanelValuesData {
   issueDue: ResolvedEndpoint;
   /** the parent's key and effective due — only loaded when a target anchors to it */
   parent: { issueKey: string; due: ResolvedEndpoint } | null;
-  /** reading series per KPI id (every KPI in the space) */
+  /** reading series per KPI id (every KPI in the catalog) */
   readings: Record<string, TimelineReadingDto[]>;
 }
 
@@ -211,6 +220,12 @@ export interface KpiViewDto {
    * relative target's value depend on the readings.
    */
   contributions?: KpiTargetContribution[];
+  /**
+   * Set when Jira has this KPI under more than one parent KPI (spec 11 · 06,
+   * one-parent rule): how many, and the key of the one the Timeline shows it
+   * under (the lowest link id).
+   */
+  parentLinks?: { count: number; shownKey: string };
 }
 
 /**
@@ -288,14 +303,21 @@ export interface TimelineNodeDto {
   children: TimelineNodeDto[];
   /** true while relative/rolled-up targets are still resolving (shimmer, FR-20/25) */
   resolving?: boolean;
+  /** the KPI's space (always set by the backend; absent on hand-built data) */
+  space?: KpiSpaceRef;
 }
 
 export interface TimelineData {
   /** ISO date treated as "today" for status classification + the axis marker */
   today: string;
   roots: TimelineNodeDto[];
-  /** the user's KPI-space permissions (spec 10); absent when no space is set up */
-  access?: KpiSpaceAccess;
+  /**
+   * The central KPI space (spec 11 · 04), when one is set up. Until 08's space
+   * chooser, Add KPI creates there by default (`defaultKpiCreateSpace`).
+   */
+  centralSpace?: KpiSpaceRef | null;
+  /** true when no KPI work type is configured yet (Settings → KPI building blocks) */
+  noWorkType?: boolean;
 }
 
 /**
@@ -324,9 +346,10 @@ export interface KpiSpaceStatus {
 }
 
 /**
- * What the current user may do in the KPI space — their Jira project
- * permissions on the KPI project (spec 10). The server enforces these; the UI
- * uses them to disable controls with a reason.
+ * What the current user may do in ONE space holding KPIs — their Jira project
+ * permissions there (spec 10; per space since spec 11 · 06). The server
+ * enforces these; the UI looks them up when an action is used
+ * (`getKpiAccess`) and disables controls with a reason.
  */
 export interface KpiSpaceAccess {
   /** BROWSE_PROJECTS: see KPIs and their readings */
@@ -340,6 +363,20 @@ export interface KpiSpaceAccess {
 }
 
 export const FULL_KPI_SPACE_ACCESS: KpiSpaceAccess = { browse: true, create: true, edit: true, link: true };
+
+/** The `getKpiAccess` payload: the space (project key) whose access an action needs. */
+export interface GetKpiAccessInput {
+  projectKey: string;
+}
+
+/**
+ * `getKpiAccess` result. `access` is null when Jira couldn't answer the
+ * lookup: the action then goes ahead and Jira's own refusal explains it.
+ */
+export interface KpiAccessResult {
+  projectKey: string;
+  access: KpiSpaceAccess | null;
+}
 
 // ── KPI hierarchy link (resolve/kpiLinks) ───────────────────────────────
 // KPIs nest via an issue link type. Link types are global to the site; an admin
@@ -369,8 +406,10 @@ export type SaveKpiHierarchyInput = KpiHierarchyLink;
 
 // `RecordValueInput` (the recordValue payload) is a Zod schema: see models/kpiReading.
 
-/** Input for creating a KPI (an issue in the KPI space). Nest by parentKpiId. */
+/** Input for creating a KPI (an issue of the KPI work type). Nest by parentKpiId. */
 export interface CreateKpiInput {
+  /** the space (project id) to create the KPI in; required (spec 11 · 06) */
+  projectId: string;
   name: string;
   unit: string;
   direction: KpiDirection | null;
@@ -393,6 +432,8 @@ export interface CreatedKpi {
   direction: KpiDirection | null;
   /** the parent KPI's issue id; null = a root KPI */
   parentKpiId: string | null;
+  /** the space it was created in */
+  space?: KpiSpaceRef;
 }
 
 /**

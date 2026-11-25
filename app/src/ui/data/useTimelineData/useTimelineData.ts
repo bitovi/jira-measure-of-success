@@ -13,26 +13,25 @@ import type {
   UpdateKpiInput,
   UpdateKpiResult,
 } from '@domain/index.js';
-import { KPI_HIERARCHY_NOT_SET_UP } from '@domain/index.js';
+import { KPI_HIERARCHY_NOT_SET_UP, KPI_WORK_TYPE_NOT_SET_UP } from '@domain/index.js';
+import { bridgeFetchKpiAccess, type FetchKpiAccess } from '@ui/data/useKpiAccess/index.js';
 import { deriveTimelineView } from './timelineView.js';
 
 /**
  * A mutation failure, as the save modals show it. Mutations reject, and the
- * modal turns the rejection into this with `toActionError`. `space-not-set-up` and
- * `hierarchy-not-set-up` are the specific backend guards (`KPI space is not set
- * up …` / `KPI hierarchy is not set up …`) that the UI renders with an "Open
- * Settings" affordance; everything else is `generic`.
+ * modal turns the rejection into this with `toActionError`. `type-not-set-up` and
+ * `hierarchy-not-set-up` are the specific backend guards (`No KPI work type is
+ * configured yet …` / `KPI hierarchy is not set up …`) that the UI renders with
+ * an "Open Settings" affordance; everything else is `generic`.
  */
 export type TimelineActionError =
-  | { kind: 'space-not-set-up'; message: string }
+  | { kind: 'type-not-set-up'; message: string }
   | { kind: 'hierarchy-not-set-up'; message: string }
   | { kind: 'generic'; message: string };
 
-const SPACE_NOT_SET_UP = 'KPI space is not set up';
-
 export function toActionError(e: unknown): TimelineActionError {
   const message = e instanceof Error ? e.message : String(e);
-  if (message.includes(SPACE_NOT_SET_UP)) return { kind: 'space-not-set-up', message };
+  if (message.includes(KPI_WORK_TYPE_NOT_SET_UP)) return { kind: 'type-not-set-up', message };
   if (message.includes(KPI_HIERARCHY_NOT_SET_UP)) return { kind: 'hierarchy-not-set-up', message };
   return { kind: 'generic', message };
 }
@@ -58,7 +57,7 @@ export interface TimelineController {
    */
   record(kpiId: string, date: string, value: number | null): Promise<void>;
   /**
-   * Create a KPI (root or nested under parentKpiId). Resolves once it's saved
+   * Create a KPI (root or nested under parentKpiId) in `projectId`. Resolves once it's saved
    * and on the timeline; rejects with the failure (see `toActionError`).
    */
   createKpi(input: CreateKpiInput): Promise<void>;
@@ -73,6 +72,11 @@ export interface TimelineController {
   searchIssues(query: string): Promise<IssuePickerItem[]>;
   /** Add a target for a KPI, held on the chosen contributing issue. Resolves/rejects like `createKpi`. */
   addTarget(input: AddTargetInput): Promise<void>;
+  /**
+   * One space's KPI permissions, for an action about to be used (spec 11 · 06;
+   * null = Jira couldn't answer). Absent (stories): access stays unknown.
+   */
+  getKpiAccess?: FetchKpiAccess;
 }
 
 export type UseTimeline = () => TimelineController;
@@ -210,5 +214,6 @@ export const useTimelineData: UseTimeline = () => {
     updateKpi,
     searchIssues,
     addTarget,
+    getKpiAccess: bridgeFetchKpiAccess,
   };
 };

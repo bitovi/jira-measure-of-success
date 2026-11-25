@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { call } from '@ui/bridge.js';
 import type { Assignment, PanelData, PanelListData, PanelParts, PanelValuesData, RecordValueInput } from '@domain/index.js';
+import { bridgeFetchKpiAccess, type FetchKpiAccess } from '@ui/data/useKpiAccess/index.js';
 import { derivePanelView } from './panelView.js';
 
 /**
@@ -42,6 +43,11 @@ export interface PanelController {
    * failure, which the record modal shows.
    */
   record(kpiId: string, date: string, value: number | null): Promise<void>;
+  /**
+   * One space's KPI permissions, for a target card's "Record a value" (spec
+   * 11 · 06; null = Jira couldn't answer). Absent (stories): access stays unknown.
+   */
+  getKpiAccess?: FetchKpiAccess;
 }
 
 export type UsePanel = (issueId: string) => PanelController;
@@ -200,5 +206,6 @@ export const usePanelData: UsePanel = (issueId) => {
     save: (assignment) => void mutate('saveAssignment', { issueId, assignment }),
     remove: (kpiId) => void mutate('removeAssignment', { issueId, kpiId }),
     record,
+    getKpiAccess: bridgeFetchKpiAccess,
   };
 };

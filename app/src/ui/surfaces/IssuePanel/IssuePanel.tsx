@@ -6,7 +6,9 @@ import { usePanelData, type UsePanel } from '@ui/data/usePanelData/index.js';
 import { getSiteUrl, openIssue, openKpiTimeline } from '@ui/bridge.js';
 import { RecordModal } from '@ui/plot/modals.js';
 import { KpiView } from '@ui/surfaces/KpiView/index.js';
-import { kpiPermissionMessage, kpiSpaceNoAccessMessage } from '@domain/index.js';
+import { AccessRefusal } from '@ui/components/AccessRefusal/index.js';
+import { useKpiAccess } from '@ui/data/useKpiAccess/index.js';
+import { kpiActionBlockedReason, NO_KPIS_MESSAGE, projectKeyOfIssueKey } from '@domain/index.js';
 import type { Assignment, CatalogEntryDto, PanelRowDto } from '@domain/index.js';
 import { TargetCard } from './components/TargetCard/index.js';
 import { TargetEditor } from './components/TargetEditor/index.js';
@@ -57,8 +59,23 @@ export function IssuePanel({
   onOpenIssue?: (issueKey: string) => void | Promise<void>;
   loadSiteUrl?: () => Promise<string>;
 }) {
-  const { data, pending, error, busy, actionError, dismissActionError, valuesError, retryValues, save, remove, record } =
-    usePanel(issueId);
+  const {
+    data,
+    pending,
+    error,
+    busy,
+    actionError,
+    dismissActionError,
+    valuesError,
+    retryValues,
+    save,
+    remove,
+    record,
+    getKpiAccess,
+  } = usePanel(issueId);
+  // Spec 11 · 06: a target's KPI space access is looked up when "Record a value"
+  // is first used, and remembered per space for the page session.
+  const kpiAccess = useKpiAccess(getKpiAccess);
   const [siteUrl, setSiteUrl] = useState('');
   useEffect(() => {
     let cancelled = false;
@@ -90,18 +107,21 @@ export function IssuePanel({
 
   const actionBanner = actionError && <ActionErrorBanner message={actionError} onDismiss={dismissActionError} />;
 
-  // This issue IS a KPI (it lives in the KPI space, Feature 04): render ONLY the
+  // This issue IS a KPI (of the KPI work type, Feature 04): render ONLY the
   // single-KPI chart — no group list, no "Set a KPI target" form. Authoring
-  // nested KPIs happens on the Timeline's add-child, not here.
+  // nested KPIs happens on the Timeline's add-child, not here. Its space's
+  // access comes with the load.
   if (data.kpiView) {
+    const { node } = data.kpiView;
     return (
       <>
         {actionBanner && <div className="px-4 pt-4">{actionBanner}</div>}
         <KpiView
-          node={data.kpiView.node}
+          node={node}
           today={data.kpiView.today}
           onRecord={record}
-          recordBlocked={data.access && !data.access.edit ? kpiPermissionMessage('record') : null}
+          recordBlocked={kpiActionBlockedReason('record', data.access, node.space?.name, node.issueKey)}
+          parentLinks={data.kpiView.parentLinks ?? null}
         />
       </>
     );
@@ -110,10 +130,26 @@ export function IssuePanel({
   const tracked = data.rows.filter((r) => r.relationship !== 'onParentNotTracked');
   const isEmpty = tracked.length === 0;
   const noCatalog = data.catalog.length === 0;
-  // Spec 10: no Browse on the KPI space — explain that instead of "define a KPI".
-  const noBrowse = data.access?.browse === false;
-  const recordBlocked = data.access && !data.access.edit ? kpiPermissionMessage('record') : null;
   const currentValueOf = (kpiId: string) => data.catalog.find((c) => c.id === kpiId)?.currentValue ?? null;
+  /** A target's KPI space: from the catalog, else its key's prefix. */
+  const spaceOfRow = (row: PanelRowDto) => {
+    const space = data.catalog.find((c) => c.id === row.kpiId)?.space;
+    const key = space?.key ?? projectKeyOfIssueKey(row.kpiKey);
+    return { key, label: space?.name ?? key };
+  };
+  const recordBlockedFor = (row: PanelRowDto) => {
+    const space = spaceOfRow(row);
+    return kpiActionBlockedReason('record', kpiAccess.accessOf(space.key), space.label, row.kpiKey);
+  };
+  const recordOn = (row: PanelRowDto) => {
+    const space = spaceOfRow(row);
+    kpiAccess.guard(
+      `record:${row.kpiId}`,
+      space.key,
+      (a) => kpiActionBlockedReason('record', a, space.label, row.kpiKey),
+      () => setRecordFor(row),
+    );
+  };
   const today = localToday();
 
   return (
@@ -121,6 +157,12 @@ export function IssuePanel({
       {busy && <div className="mb-3 text-xs text-text-subtle">saving…</div>}
 
       {actionBanner}
+
+      {kpiAccess.refusal && (
+        <div className="mb-3">
+          <AccessRefusal message={kpiAccess.refusal} onDismiss={kpiAccess.dismissRefusal} />
+        </div>
+      )}
 
       {valuesError && <ValuesErrorBanner message={valuesError} onRetry={retryValues} />}
 
@@ -149,8 +191,9 @@ export function IssuePanel({
                   busy={busy}
                   onSave={(draft) => save(buildAssignment(row.kpiId, draft, row.start))}
                   onRemove={() => remove(row.kpiId)}
-                  onRecord={() => setRecordFor(row)}
-                  recordBlocked={recordBlocked}
+                  onRecord={() => recordOn(row)}
+                  recordBlocked={recordBlockedFor(row)}
+                  recordBusy={kpiAccess.pendingAction === `record:${row.kpiId}`}
                   kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiKey}` : `/browse/${row.kpiKey}`}
                   onOpenKpi={() => void onOpenIssue(row.kpiKey)}
                 />
@@ -160,18 +203,16 @@ export function IssuePanel({
         </section>
       ))}
 
-      {noBrowse ? (
-        <p role="status" className="rounded border border-dashed border-border p-3 text-sm text-text-subtle">
-          {kpiSpaceNoAccessMessage()}
-        </p>
-      ) : noCatalog ? (
-        <p className="rounded border border-dashed border-border p-3 text-sm text-text-subtle">
-          KPIs are not defined yet. You must first{' '}
-          <Button appearance="default" spacing="compact" onClick={() => void openKpiTimeline()}>
-            define a KPI
+      {noCatalog ? (
+        <div
+          role="status"
+          className="flex flex-col items-start gap-2 rounded border border-dashed border-border p-3 text-sm text-text-subtle"
+        >
+          <span>{NO_KPIS_MESSAGE}</span>
+          <Button appearance="default" spacing="compact" iconBefore={AddIcon} onClick={() => void openKpiTimeline()}>
+            Add KPI
           </Button>
-          .
-        </p>
+        </div>
       ) : (
         <AssociateForm
           catalog={data.catalog}

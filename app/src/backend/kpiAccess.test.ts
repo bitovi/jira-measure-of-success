@@ -4,7 +4,7 @@ import type { Trace } from './requestLog';
 import type { PanelListData, PanelValuesData, TimelineData, TimelineNodeDto } from '../domain/index';
 
 /**
- * Spec 10 — the KPI space follows the user's Jira permissions. Runs the REAL
+ * Spec 10 — KPIs follow the user's Jira permissions, per space (spec 11 · 06). Runs the REAL
  * resolver against the in-memory Jira, whose user view filters and
  * permission-checks `asUser` requests the way Jira does, and checks which
  * principal made each call through the resolver's own request trace.
@@ -79,17 +79,17 @@ function captureBulkfetch(jira: MockJira): string[][] {
   return bodies;
 }
 
-describe('reads follow the user’s KPI-space permissions', () => {
-  it('timeline: full access by default, KPI search and readings as the user', async () => {
+describe('reads follow the user’s permissions in each KPI space', () => {
+  it('timeline: KPI search and readings as the user, and no permission lookup on load (spec 11 · 06)', async () => {
     const { data, asOf } = await invoke<TimelineData>('getTimelineSkeleton', {});
-    expect(data!.access).toEqual({ browse: true, create: true, edit: true, link: true });
+    expect(data).not.toHaveProperty('access');
     expect(flatten(data!.roots)).toHaveLength(SMALL.kpis);
-    expect(asOf('GET /rest/api/3/search/jql [project]')).toEqual(['user']);
+    expect(asOf('GET /rest/api/3/search/jql [issuetype]')).toEqual(['user']);
     expect(asOf('POST /rest/api/3/changelog/bulkfetch')).toEqual(['user']);
-    expect(asOf('GET /rest/api/3/mypermissions')).toEqual(['user']);
+    expect(asOf('GET /rest/api/3/mypermissions')).toEqual([]);
   });
 
-  it('timeline without Browse: no KPIs, no readings fetched, access says why', async () => {
+  it('timeline without Browse: no KPIs, no readings fetched, nothing refused', async () => {
     let bodies: string[][] = [];
     const { data, error } = await invoke<TimelineData>('getTimelineSkeleton', {}, (jira) => {
       jira.fixture.userView.access[KPI_PROJECT.key] = NO_ACCESS;
@@ -97,7 +97,6 @@ describe('reads follow the user’s KPI-space permissions', () => {
     });
     expect(error).toBeUndefined();
     expect(data!.roots).toEqual([]);
-    expect(data!.access).toEqual(NO_ACCESS);
     expect(bodies).toEqual([]);
   });
 
@@ -113,14 +112,15 @@ describe('reads follow the user’s KPI-space permissions', () => {
     expect(bodies.flat()).not.toContain(KPI_1_ID);
   });
 
-  it('panel without Browse: empty catalog, the target shows as no-permission, access says why', async () => {
-    const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
+  it('panel without Browse: empty catalog, the target shows as no-permission, no permission lookup', async () => {
+    const { data, asOf } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.access[KPI_PROJECT.key] = NO_ACCESS;
     });
     expect(data!.basis!.catalog).toEqual([]);
-    expect(data!.basis!.access).toEqual(NO_ACCESS);
+    expect(data!.basis).not.toHaveProperty('access');
     expect(data!.basis!.noAccessKpiIds).toEqual([KPI_1_ID]);
     expect(data!.basis!.deletedKpiIds).toBeUndefined();
+    expect(asOf('GET /rest/api/3/mypermissions')).toEqual([]);
   });
 
   it('panel: a target on a KPI hidden by issue security is no-permission, not deleted', async () => {
@@ -137,8 +137,8 @@ describe('reads follow the user’s KPI-space permissions', () => {
   it('panel: a KPI that exists but is not indexed yet is in neither list (unchanged)', async () => {
     const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
       const { issues } = jira.fixture;
-      // Exists in Jira, but the KPI-space search doesn't return it yet.
-      issues.set('1999', { ...issues.get(KPI_1_ID)!, id: '1999', key: 'KPI-99' });
+      // Exists in Jira, but the KPI search doesn't return it yet.
+      issues.set('1999', { ...issues.get(KPI_1_ID)!, id: '1999', key: 'KPI-99', unindexed: true });
       const epic = issues.get(EPIC)!;
       const prop = epic.properties['kpi-assignments'] as { assignments: Array<{ kpiId: string; kpiIssueId?: string }> };
       prop.assignments.push({ ...prop.assignments[0], kpiIssueId: '1999', kpiId: 'KPI-99' });
@@ -156,7 +156,7 @@ describe('reads follow the user’s KPI-space permissions', () => {
     expect(data!.basis!.noAccessKpiIds).toBeUndefined();
   });
 
-  it('panel values without Browse: no readings, nothing fetched for the KPI space', async () => {
+  it('panel values without Browse: no readings, nothing fetched for hidden KPIs', async () => {
     let bodies: string[][] = [];
     const { data } = await invoke<PanelValuesData>('getPanelValues', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.access[KPI_PROJECT.key] = NO_ACCESS;
@@ -166,46 +166,53 @@ describe('reads follow the user’s KPI-space permissions', () => {
     expect(bodies).toEqual([]);
   });
 
-  it('panel with Browse only: catalog listed, access reports read-only', async () => {
+  it('panel with Browse only: catalog listed', async () => {
     const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
     });
     expect(data!.basis!.catalog).toHaveLength(SMALL.kpis);
-    expect(data!.basis!.access).toEqual(READ_ONLY);
   });
 
-  // A failed lookup says nothing about the user's permissions: the search already
-  // ran as the user (Jira filtered it), so its result stands and access is unknown.
-  const failLookup = (jira: MockJira) => {
-    jira.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
-  };
-
-  it('timeline when the permission lookup fails: KPIs still shown, access left unknown', async () => {
-    const { data, error } = await invoke<TimelineData>('getTimelineSkeleton', {}, failLookup);
-    expect(error).toBeUndefined();
-    expect(flatten(data!.roots)).toHaveLength(SMALL.kpis);
-    expect(data!.access).toBeUndefined();
-  });
-
-  it('panel when the permission lookup fails: catalog listed, access left unknown', async () => {
-    const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, failLookup);
-    expect(data!.basis!.catalog).toHaveLength(SMALL.kpis);
-    expect(data!.basis!.access).toBeUndefined();
-    expect(data!.basis!.noAccessKpiIds).toBeUndefined();
-  });
-
-  it('timeline when the lookup and the search both fail: an error, not a no-permission state', async () => {
+  it('timeline when the search fails: an error, not a no-permission state', async () => {
     const { data, error } = await invoke<TimelineData>('getTimelineSkeleton', {}, (jira) => {
-      jira.intercept = (_method, path) =>
-        path === '/rest/api/3/mypermissions' || path === '/rest/api/3/search/jql' ? { status: 503 } : undefined;
+      jira.intercept = (_method, path) => (path === '/rest/api/3/search/jql' ? { status: 503 } : undefined);
     });
     expect(data).toBeUndefined();
     expect(error?.message).toMatch(/^Jira 503 while trying to list the KPIs/);
   });
 });
 
-describe('writes follow the user’s KPI-space permissions', () => {
-  const kpiInput = (over: Record<string, unknown> = {}) => ({ name: 'New KPI', unit: '$', direction: null, ...over });
+describe('getKpiAccess: one space’s permissions, asked when an action needs them', () => {
+  it('returns the user’s access in that space, as the user', async () => {
+    const { data, asOf } = await invoke('getKpiAccess', { projectKey: 'KPI' }, (j) => {
+      j.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
+    });
+    expect(data).toEqual({ projectKey: 'KPI', access: READ_ONLY });
+    expect(asOf('GET /rest/api/3/mypermissions')).toEqual(['user']);
+  });
+
+  it('access null when Jira can’t answer (the action then goes ahead)', async () => {
+    const { data, error } = await invoke('getKpiAccess', { projectKey: 'KPI' }, (jira) => {
+      jira.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
+    });
+    expect(error).toBeUndefined();
+    expect(data).toEqual({ projectKey: 'KPI', access: null });
+  });
+
+  it('refuses a payload that names no space', async () => {
+    const { error } = await invoke('getKpiAccess', { projectKey: '' });
+    expect(error?.message).toMatch(/^Invalid space key/);
+  });
+});
+
+describe('writes follow the user’s permissions in the KPI’s space', () => {
+  const kpiInput = (over: Record<string, unknown> = {}) => ({
+    projectId: KPI_PROJECT.id,
+    name: 'New KPI',
+    unit: '$',
+    direction: null,
+    ...over,
+  });
   const targetInput = (kpiId: string) => ({
     kpiId,
     issueId: EPIC,
@@ -229,7 +236,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
       j.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
     });
     expect(error?.message).toBe(
-      'Adding a KPI needs Create Issues permission on the KPIs (KPI) project. Ask a Jira admin.',
+      'Adding a KPI needs Create Issues permission on the KPIs (KPI) space. Ask a Jira admin.',
     );
     expect(jira.writes).toEqual([]);
   });
@@ -247,7 +254,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
       j.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
     });
     expect(error?.message).toBe(
-      "Couldn't check your permissions on the KPI space, so the KPI wasn't created. Try again.",
+      "Couldn't check your permissions on the KPIs (KPI) space, so the KPI wasn't created. Try again.",
     );
     expect(jira.writes).toEqual([]);
   });
@@ -284,7 +291,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
         j.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
       },
     );
-    expect(error?.message).toBe('Editing KPI-2 needs Edit Issues permission on the KPIs (KPI) project. Ask a Jira admin.');
+    expect(error?.message).toBe('Editing KPI-2 needs Edit Issues permission on the KPIs (KPI) space. Ask a Jira admin.');
     expect(jira.writes).toEqual([]);
   });
 
@@ -304,7 +311,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
     const { error, jira } = await invoke('updateKpi', { kpiId: '1001', name: 'Orders', parentKpiId: '1005' }, (j) => {
       j.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
     });
-    expect(error?.message).toBe("Couldn't check your permissions on the KPI space, so the KPI wasn't saved. Try again.");
+    expect(error?.message).toBe("Couldn't check your permissions on the KPIs (KPI) space, so the KPI wasn't saved. Try again.");
     expect(jira.writes).toEqual([]);
   });
 
@@ -344,7 +351,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
       before = j.fixture.readingChanges.get(KPI_1_ID)!.length;
     });
     expect(error?.message).toBe(
-      'Recording a value on KPI-1 needs Edit Issues permission on the KPIs (KPI) project. Ask a Jira admin.',
+      'Recording a value on KPI-1 needs Edit Issues permission on the KPIs (KPI) space. Ask a Jira admin.',
     );
     expect(jira.fixture.readingChanges.get(KPI_1_ID)).toHaveLength(before);
   });
@@ -359,7 +366,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
 
   it('recordValue on a work issue (not a KPI): refused, nothing written', async () => {
     const { error, jira } = await invoke('recordValue', { kpiId: 'APP-1', date: '2026-06-01', value: 42 });
-    expect(error?.message).toBe("APP-1 isn't a KPI: values can only be recorded on KPIs in the KPI space.");
+    expect(error?.message).toBe("APP-1 isn't a KPI, so values can't be recorded on it.");
     expect(jira.writes).toEqual([]);
   });
 
@@ -373,7 +380,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
 
   it('addTarget pointing at a work issue instead of a KPI: refused', async () => {
     const { error, jira } = await invoke('addTarget', targetInput('WEB-2'));
-    expect(error?.message).toBe("WEB-2 isn't a KPI: targets can only point at KPIs in the KPI space.");
+    expect(error?.message).toBe("WEB-2 isn't a KPI, so it can't be targeted.");
     expect(jira.writes).toEqual([]);
   });
 

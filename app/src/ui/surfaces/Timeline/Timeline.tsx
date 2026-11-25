@@ -17,7 +17,9 @@ import {
   type TimelineActionError,
 } from '@ui/data/useTimelineData/index.js';
 import { openKpiSettings, openIssue, openIssueNewTab, getSiteUrl } from '@ui/bridge.js';
+import { AccessRefusal } from '@ui/components/AccessRefusal/index.js';
 import { DisabledReason } from '@ui/components/DisabledReason/index.js';
+import { useKpiAccess } from '@ui/data/useKpiAccess/index.js';
 import {
   buildAxis,
   axisDatesOf,
@@ -53,14 +55,17 @@ import {
 } from '@ui/plot/index.js';
 import {
   collectContributingProjects,
+  defaultKpiCreateSpace,
   filterTimelineByProjects,
-  kpiPermissionMessage,
-  kpiSpaceNoAccessMessage,
+  kpiActionBlockedReason,
   kpiEditChanges,
   kpiSubtreeIds,
+  NO_KPIS_MESSAGE,
   parentKpiIdOf,
+  projectKeyOfIssueKey,
   projectSeries,
   type KpiSpaceAccess,
+  type KpiSpaceRef,
   type AddTargetInput,
   type CreateKpiInput,
   type IssuePickerItem,
@@ -141,23 +146,27 @@ interface FlatRow {
   hasChildren: boolean;
 }
 
+/** A KPI's space: its key (what access is looked up by) and a label for messages. */
+function spaceOf(node: TimelineNodeDto): { key: string; label: string } {
+  const key = node.space?.key ?? projectKeyOfIssueKey(node.issueKey);
+  return { key, label: node.space?.name ?? key };
+}
+
 /**
- * Why each KPI-space action is unavailable to this user (spec 10), or null when
- * allowed. No `access` (no KPI space yet, or an older backend) allows everything.
+ * Why each KPI action is unavailable to this user in that KPI's space (spec 10,
+ * per space since spec 11 · 06), or null when allowed. Access that isn't known
+ * yet (not looked up, or Jira couldn't answer) allows everything.
  */
-function blockedReasons(access: KpiSpaceAccess | undefined): {
-  browse: string | null;
-  add: string | null;
-  record: string | null;
-  edit: string | null;
-  nest: string | null;
-} {
+function blockedReasons(
+  access: KpiSpaceAccess | null,
+  space: { label: string },
+  kpiKey?: string,
+): { record: string | null; edit: string | null; add: string | null; nest: string | null } {
   return {
-    browse: access && !access.browse ? kpiSpaceNoAccessMessage() : null,
-    add: access && !access.create ? kpiPermissionMessage('add') : null,
-    record: access && !access.edit ? kpiPermissionMessage('record') : null,
-    edit: access && !access.edit ? kpiPermissionMessage('edit') : null,
-    nest: access && !access.link ? kpiPermissionMessage('nest') : null,
+    record: kpiActionBlockedReason('record', access, space.label, kpiKey),
+    edit: kpiActionBlockedReason('edit', access, space.label, kpiKey),
+    add: kpiActionBlockedReason('add', access, space.label),
+    nest: kpiActionBlockedReason('nest', access, space.label),
   };
 }
 
@@ -186,7 +195,11 @@ export function Timeline({
     updateKpi,
     searchIssues,
     addTarget,
+    getKpiAccess,
   } = useData();
+  // Spec 11 · 06: a KPI's space access is looked up when one of its actions is
+  // first used, and remembered per space for the page session.
+  const kpiAccess = useKpiAccess(getKpiAccess);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selectedProjects, setSelectedProjects] = useState<Set<string> | null>(() =>
     readSelectedProjectsFromUrl(),
@@ -374,6 +387,43 @@ export function Timeline({
     setAddingTarget(null);
   };
 
+  // Until 08's space chooser, Add KPI creates in the central space, or the one space every KPI is in.
+  const createSpace = useMemo(
+    () => (data ? defaultKpiCreateSpace(data.roots, data.centralSpace) : null),
+    [data],
+  );
+  const createSpaceRef: KpiSpaceRef | null = createSpace && 'space' in createSpace ? createSpace.space : null;
+  const createKpiIn = async (input: Omit<CreateKpiInput, 'projectId'>) => {
+    if (!createSpace || 'error' in createSpace) throw new Error(createSpace?.error ?? 'Choose a space for the new KPI.');
+    await createKpi({ ...input, projectId: createSpace.space.id });
+  };
+  const createReasons = (access: KpiSpaceAccess | null) =>
+    blockedReasons(access, { label: createSpaceRef?.name ?? '' });
+
+  /** Run a KPI row action once its space's access allows it (spec 11 · 06). */
+  const guardRecord = (node: TimelineNodeDto, actionId: string, proceed: () => void) => {
+    const space = spaceOf(node);
+    kpiAccess.guard(actionId, space.key, (a) => blockedReasons(a, space, node.issueKey).record, proceed);
+  };
+  const guardEdit = (node: TimelineNodeDto) => {
+    const space = spaceOf(node);
+    kpiAccess.guard(`edit:${node.id}`, space.key, (a) => blockedReasons(a, space, node.issueKey).edit, () =>
+      setEditingKpi(node),
+    );
+  };
+  const guardAddChild = (node: TimelineNodeDto) => {
+    // The child is created in the create space; nesting needs Link Issues there too (Q2).
+    kpiAccess.guard(
+      `child:${node.id}`,
+      createSpaceRef?.key ?? null,
+      (a) => {
+        const r = createReasons(a);
+        return r.add ?? r.nest;
+      },
+      () => setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } }),
+    );
+  };
+
   if (error)
     return (
       <div className={PAGE_CLASS}>
@@ -398,7 +448,14 @@ export function Timeline({
     );
   }
 
-  const blocked = blockedReasons(data.access);
+  const busyAction = kpiAccess.pendingAction;
+  /** What's known to be refused for a row (its space's access once looked up). */
+  const rowBlocked = (node: TimelineNodeDto) => {
+    const space = spaceOf(node);
+    return blockedReasons(kpiAccess.accessOf(space.key), space, node.issueKey);
+  };
+  const createBlocked = createReasons(kpiAccess.accessOf(createSpaceRef?.key));
+  const editingBlocked = editingKpi ? rowBlocked(editingKpi) : null;
 
   return (
     <div className={PAGE_CLASS}>
@@ -418,18 +475,17 @@ export function Timeline({
             selected={selectedProjects}
             onChange={setSelectedProjects}
           />
-          <DisabledReason reason={blocked.add}>
-            <Button
-              appearance="primary"
-              iconBefore={AddIcon}
-              isDisabled={blocked.add !== null}
-              onClick={() => setCreating({ presetParent: null })}
-            >
-              Add KPI
-            </Button>
-          </DisabledReason>
+          <Button appearance="primary" iconBefore={AddIcon} onClick={() => setCreating({ presetParent: null })}>
+            Add KPI
+          </Button>
         </div>
       </div>
+
+      {kpiAccess.refusal && (
+        <div className="mt-4 flex-none">
+          <AccessRefusal message={kpiAccess.refusal} onDismiss={kpiAccess.dismissRefusal} />
+        </div>
+      )}
 
       {targetsError && (
         <div className="flex-none">
@@ -468,13 +524,23 @@ export function Timeline({
               </div>
               {flat.length === 0 ? (
                 <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
-                  {blocked.browse ? (
-                    blocked.browse
+                  {data.noWorkType ? (
+                    <div className="flex flex-col items-start gap-2">
+                      <span>
+                        <strong className="text-text">{SETUP_ERRORS['type-not-set-up'].title}.</strong>{' '}
+                        {SETUP_ERRORS['type-not-set-up'].body}
+                      </span>
+                      <Button appearance="primary" spacing="compact" onClick={() => void onOpenSettings()}>
+                        Open Settings
+                      </Button>
+                    </div>
                   ) : data.roots.length === 0 ? (
-                    <>
-                      No KPIs yet — use <strong className="text-text">Add KPI</strong> to create
-                      your first one.
-                    </>
+                    <div className="flex flex-col items-start gap-2">
+                      <span>{NO_KPIS_MESSAGE}</span>
+                      <Button spacing="compact" iconBefore={AddIcon} onClick={() => setCreating({ presetParent: null })}>
+                        Add KPI
+                      </Button>
+                    </div>
                   ) : (
                     <>
                       No KPIs match the selected project filter — try{' '}
@@ -486,26 +552,28 @@ export function Timeline({
                   )}
                 </div>
               ) : (
-                flat.map(({ node, hasChildren }) => (
-                  <TimelineRowLabel
-                    key={node.id}
-                    node={node}
-                    hasChildren={hasChildren}
-                    collapsed={collapsed.has(node.id)}
-                    onToggleCollapse={() => toggleCollapse(node.id)}
-                    onRecord={() => setAdding({ node, date: data.today })}
-                    recordBlocked={blocked.record}
-                    addChildBlocked={blocked.add ?? blocked.nest}
-                    onAddTarget={() => setAddingTarget({ node, date: data.today })}
-                    onAddChild={() =>
-                      setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } })
-                    }
-                    onEdit={() => setEditingKpi(node)}
-                    editBlocked={blocked.edit}
-                    onOpenIssue={onOpenIssue}
-                    siteUrl={siteUrl}
-                  />
-                ))
+                flat.map(({ node, hasChildren }) => {
+                  const blocked = rowBlocked(node);
+                  return (
+                    <TimelineRowLabel
+                      key={node.id}
+                      node={node}
+                      hasChildren={hasChildren}
+                      collapsed={collapsed.has(node.id)}
+                      onToggleCollapse={() => toggleCollapse(node.id)}
+                      onRecord={() => guardRecord(node, `record:${node.id}`, () => setAdding({ node, date: data.today }))}
+                      recordBlocked={blocked.record}
+                      addChildBlocked={createBlocked.add ?? createBlocked.nest}
+                      onAddTarget={() => setAddingTarget({ node, date: data.today })}
+                      onAddChild={() => guardAddChild(node)}
+                      onEdit={() => guardEdit(node)}
+                      editBlocked={blocked.edit}
+                      busy={busyAction?.endsWith(`:${node.id}`) ? busyAction.split(':')[0] : null}
+                      onOpenIssue={onOpenIssue}
+                      siteUrl={siteUrl}
+                    />
+                  );
+                })
               )}
             </div>
 
@@ -535,10 +603,11 @@ export function Timeline({
                   node={node}
                   axis={axis}
                   today={data.today}
-                  recordBlocked={blocked.record}
-                  onAddValue={(date) => setAdding({ node, date })}
+                  recordBlocked={rowBlocked(node).record}
+                  busy={busyAction === `track:${node.id}`}
+                  onAddValue={(date) => guardRecord(node, `track:${node.id}`, () => setAdding({ node, date }))}
                   onAddTarget={(date) => setAddingTarget({ node, date })}
-                  onEditReading={(reading) => setEditing({ node, reading })}
+                  onEditReading={(reading) => guardRecord(node, `track:${node.id}`, () => setEditing({ node, reading }))}
                   onOpenIssueNewTab={onOpenIssueNewTab}
                   siteUrl={siteUrl}
                 />
@@ -572,12 +641,10 @@ export function Timeline({
         </div>
       </KeyHighlightProvider>
 
-      {!blocked.browse && (
+      {data.roots.length > 0 && (
         <p className="mt-3 flex-none text-xs text-text-subtle">
-          <span className="font-semibold">Tip:</span>{' '}
-          {blocked.record
-            ? 'click a future date to add a target · click a target to open its issue.'
-            : 'click a past date to record a value · click a future date to add a target · click a value to edit it · click a target to open its issue.'}
+          <span className="font-semibold">Tip:</span> click a past date to record a value · click a future date to
+          add a target · click a value to edit it · click a target to open its issue.
         </p>
       )}
 
@@ -610,11 +677,11 @@ export function Timeline({
           <CreateKpiModal
             presetParent={creating.presetParent}
             kpiOptions={kpiOptions}
-            nestBlocked={blocked.nest}
+            nestBlocked={createBlocked.nest}
             onCancel={() => setCreating(null)}
             onOpenSettings={onOpenSettings}
             onSave={async (input) => {
-              await createKpi(input);
+              await createKpiIn(input);
               setCreating(null);
             }}
           />
@@ -627,7 +694,7 @@ export function Timeline({
             presetParent={null}
             editing={{ node: editingKpi, parent: editKpiParents.parent }}
             kpiOptions={editKpiParents.options}
-            nestBlocked={blocked.nest}
+            nestBlocked={editingBlocked?.nest ?? null}
             onCancel={() => setEditingKpi(null)}
             onOpenSettings={onOpenSettings}
             onSave={async (input) => {
@@ -758,6 +825,7 @@ function TimelineRowLabel({
   onAddChild,
   onEdit,
   editBlocked = null,
+  busy = null,
   onOpenIssue,
   siteUrl,
 }: {
@@ -775,14 +843,17 @@ function TimelineRowLabel({
   onEdit: () => void;
   /** why editing the KPI is disabled (spec 10), or null */
   editBlocked?: string | null;
+  /** the action (`edit` / `child` / `record`) waiting on its space's access, or null */
+  busy?: string | null;
   onOpenIssue: (issueKey: string) => void | Promise<void>;
   siteUrl: string;
 }) {
   // Hover-revealed actions in a 2×2 grid: the KPI itself (edit, add child) on the
   // name line, its data (record, target) on the unit line. Overlaid (not in flow)
   // so long names/units get the full width at rest; on hover/focus they cover the tail.
-  const actionsClass =
-    'absolute inset-y-0 right-0 flex items-center gap-2 bg-surface pl-2 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100';
+  const actionsClass = `absolute inset-y-0 right-0 flex items-center gap-2 bg-surface pl-2 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${
+    busy ? 'opacity-100' : 'opacity-0'
+  }`;
   return (
     <div
       className="group flex flex-col justify-center gap-1 border-b border-r border-border bg-surface px-3 py-1.5 last:border-b-0"
@@ -829,6 +900,7 @@ function TimelineRowLabel({
             glyphClass="text-[13px]"
             onClick={onEdit}
             disabledReason={editBlocked}
+            busy={busy === 'edit'}
           />
           <RowAction
             tooltip="Create child KPI"
@@ -837,6 +909,7 @@ function TimelineRowLabel({
             glyphClass="text-[13px]"
             onClick={onAddChild}
             disabledReason={addChildBlocked}
+            busy={busy === 'child'}
           />
         </div>
       </div>
@@ -864,6 +937,7 @@ function TimelineRowLabel({
             glyphClass="text-[13px]"
             onClick={onRecord}
             disabledReason={recordBlocked}
+            busy={busy === 'record'}
           />
           <RowAction tooltip="Add a target" label="Add a target" glyph="◇" glyphClass="text-[11px]" onClick={onAddTarget} />
         </div>
@@ -880,6 +954,7 @@ function RowAction({
   glyphClass,
   onClick,
   disabledReason = null,
+  busy = false,
 }: {
   tooltip: string;
   label: string;
@@ -888,22 +963,25 @@ function RowAction({
   onClick: () => void;
   /** when set, the action is disabled and its tooltip says why (spec 10) */
   disabledReason?: string | null;
+  /** true while the KPI's space access is looked up for this action (spec 11 · 06) */
+  busy?: boolean;
 }) {
   const disabled = disabledReason !== null;
   return (
     // aria-disabled (not `disabled`) keeps the button focusable and hoverable so the reason can show.
-    <Tooltip content={disabledReason ?? tooltip}>
+    <Tooltip content={busy ? 'Checking your permissions…' : (disabledReason ?? tooltip)}>
       {(tooltipProps) => (
         <button
           {...tooltipProps}
           className={`grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle ${
-            disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-surface-sunken hover:text-brand'
+            busy ? 'cursor-progress' : disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-surface-sunken hover:text-brand'
           }`}
-          onClick={disabled ? undefined : onClick}
+          onClick={disabled || busy ? undefined : onClick}
           aria-label={label}
           aria-disabled={disabled || undefined}
+          aria-busy={busy || undefined}
         >
-          <span className={`${glyphClass} leading-none`}>{glyph}</span>
+          <span className={`${glyphClass} leading-none ${busy ? 'animate-pulse' : ''}`}>{glyph}</span>
         </button>
       )}
     </Tooltip>
@@ -915,6 +993,7 @@ function TimelineRowTrack({
   axis,
   today,
   recordBlocked = null,
+  busy = false,
   onAddValue,
   onAddTarget,
   onEditReading,
@@ -926,6 +1005,8 @@ function TimelineRowTrack({
   today: string;
   /** why the user can't record values (spec 10); past dates and dots are then inert */
   recordBlocked?: string | null;
+  /** true while a click waits on the KPI's space access (spec 11 · 06) */
+  busy?: boolean;
   onAddValue: (date: string) => void;
   onAddTarget: (date: string) => void;
   onEditReading: (reading: TimelineReadingDto) => void;
@@ -979,8 +1060,9 @@ function TimelineRowTrack({
     // wrapper instead would add 1px per row, drifting the plot gridlines out of
     // step with the label column.
     <div
-      aria-busy={resolving || undefined}
-      className="group relative cursor-pointer border-b border-border last:border-b-0"
+      aria-busy={resolving || busy || undefined}
+      data-access-pending={busy || undefined}
+      className={`group relative border-b border-border last:border-b-0 ${busy ? 'cursor-progress' : 'cursor-pointer'}`}
       style={{ width: axis.plotWidth + PAD_R, height: ROW_H }}
       onClick={onTrackClick}
       onMouseMove={onTrackMove}
@@ -1089,9 +1171,9 @@ function UndatedLane({
 
 /** Errors a Jira admin fixes in Settings: shown with an "Open Settings" button instead of the raw message. */
 const SETUP_ERRORS = {
-  'space-not-set-up': {
-    title: 'KPI space isn’t set up',
-    body: 'Create or select the project that stores your KPIs in Settings, then try again.',
+  'type-not-set-up': {
+    title: 'No KPI work type configured yet',
+    body: 'Choose the work type KPIs use in Settings (KPI building blocks), then try again.',
   },
   'hierarchy-not-set-up': {
     title: 'KPI nesting isn’t set up',
@@ -1215,8 +1297,8 @@ function CreateKpiModal({
   /** why nesting is disabled (no Link Issues, spec 10): the parent picker is disabled with this reason */
   nestBlocked?: string | null;
   onCancel: () => void;
-  /** Resolves once the KPI is saved; rejects with the failure (shown in the modal). */
-  onSave: (input: CreateKpiInput & { parentKpiId: string | null }) => Promise<void>;
+  /** Resolves once the KPI is saved; rejects with the failure (shown in the modal). The caller picks the space. */
+  onSave: (input: Omit<CreateKpiInput, 'projectId'> & { parentKpiId: string | null }) => Promise<void>;
   onOpenSettings: () => void | Promise<void>;
 }) {
   const { saving, error, clearError, run } = useModalSave();

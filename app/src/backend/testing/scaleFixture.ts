@@ -92,6 +92,15 @@ export interface FixtureIssue {
   rank?: string;
   /** keys the issue had before it moved; Jira still resolves them (01 D1) */
   formerKeys?: string[];
+  /** created moments ago: readable by id/key, but not in search results yet (index lag) */
+  unindexed?: boolean;
+  /** link ids by parent id, overriding `kpiLinkId` / `extraKpiLinkId` (to test the lowest-id rule) */
+  kpiParentLinkIds?: Record<string, string>;
+  /**
+   * The work type's id when it isn't the site-wide type of that name: a
+   * team-managed space's own "KPI" type (spec 11 · 06; never matches `issuetype = {KPI id}`).
+   */
+  typeId?: string;
   properties: Record<string, unknown>;
   /** values of `fixture.customFields`, as Jira returns them (text: string; select: `{ self, id, value }`) */
   fieldValues?: Record<string, unknown>;
@@ -149,7 +158,15 @@ export interface ScaleFixture {
   /** projects by key, for KPI-space provisioning (`issueTypeNames` = types in its scheme) */
   projects: Map<string, FixtureProject>;
   /** the site's issue types (global in Jira) */
-  issueTypes: Array<{ id: string; name: string; hierarchyLevel?: number; iconUrl?: string; avatarId?: number }>;
+  issueTypes: Array<{
+    id: string;
+    name: string;
+    hierarchyLevel?: number;
+    iconUrl?: string;
+    avatarId?: number;
+    /** a team-managed space's own type */
+    scope?: { type: 'PROJECT'; project: { id: string } };
+  }>;
   /** custom fields beyond the built-in three (spec 11 · 04); a select's options live in its global context */
   customFields: FixtureCustomField[];
   /** field schemes: project id → scheme id, and scheme id → field id → the work type ids it's restricted to ([] = every type) */
@@ -435,6 +452,132 @@ export function addRefEdgeCases(fixture: ScaleFixture): RefEdgeCases {
   return { moved, hiddenKpiId, mixedIssueId, deletedOnlyIssueId };
 }
 
+// ── KPIs in many spaces (spec 11 · 06) ───────────────────────────────────────
+
+export const PORTFOLIO_PROJECT = { key: 'PORT', id: '10400', name: 'Portfolio' };
+export const GROWTH_PROJECT = { key: 'GROW', id: '10401', name: 'Growth' };
+export const TEAM_MANAGED_PROJECT = { key: 'TMP', id: '10200' };
+/** The team-managed space's own "KPI" work type (private to it, its own id). */
+export const TEAM_MANAGED_KPI_TYPE_ID = '10399';
+
+export interface KpiSpaces {
+  /** PORT-1 (a root) and PORT-2 (under PORT-1) */
+  portRootId: string;
+  portChildId: string;
+  /** GROW-1, under the central space's KPI-1 */
+  growUnderCentralId: string;
+  /**
+   * GROW-2: linked under PORT-1 AND (by an older, lower-id link listed second)
+   * under KPI-1, so it shows under KPI-1 and is flagged (one-parent rule)
+   */
+  growTwoParentsId: string;
+  /** GROW-3, under PORT-2 only (top-level for a user who can't browse PORT) */
+  growUnderPortChildId: string;
+  /** a team-managed space's own "KPI" issue (TMP-1): never a KPI */
+  teamManagedKpiId: string;
+  /** a Story in the central space: not a KPI */
+  centralStoryId: string;
+  /** the work item targeting GROW-1 and PORT-2 */
+  crossSpaceTargetIssueId: string;
+}
+
+/**
+ * The multi-space site of spec 11 · 06 on top of a built fixture: two more
+ * company-managed spaces with KPIs (Portfolio, Growth) next to the central
+ * KPI space, all sharing the field scheme; KPIs nested across spaces; a KPI
+ * with two parent links; a team-managed space with its own "KPI" type; a
+ * Story in the central space; readings; and a work item targeting KPIs in two
+ * spaces (migrated id references). Call before `chooseKpiFields` so the new
+ * KPIs take the chosen shape too. Users without Browse (or Edit) in a space
+ * are set per test through `userView.access`.
+ */
+export function addKpiSpaces(fixture: ScaleFixture): KpiSpaces {
+  for (const p of [PORTFOLIO_PROJECT, GROWTH_PROJECT]) {
+    fixture.projects.set(p.key, { id: p.id, name: p.name, issueTypeNames: ['KPI', 'Story'] });
+    fixture.fieldSchemeOf.set(p.id, DEFAULT_FIELD_SCHEME_ID);
+    fixture.screenSchemeOf.set(p.id, { id: `itss-${p.id}`, mappings: { default: DEFAULT_SCREEN_SCHEME_ID } });
+  }
+  fixture.projects.get(KPI_PROJECT.key)!.issueTypeNames.push('Story');
+  fixture.projects.get(TEAM_MANAGED_PROJECT.key)!.issueTypeNames.push('KPI');
+  // Listed first, as Jira may: deriving the work type by name must skip it.
+  fixture.issueTypes.unshift({
+    id: TEAM_MANAGED_KPI_TYPE_ID,
+    name: 'KPI',
+    hierarchyLevel: 0,
+    scope: { type: 'PROJECT', project: { id: TEAM_MANAGED_PROJECT.id } },
+  });
+
+  const kpi = (
+    id: string,
+    key: string,
+    summary: string,
+    kpiParentId: string | null,
+    rank: string,
+    unit: string,
+    over: Partial<FixtureIssue> = {},
+  ) => {
+    fixture.issues.set(id, {
+      id,
+      key,
+      type: 'KPI',
+      summary,
+      parentId: null,
+      due: null,
+      start: null,
+      kpiParentId,
+      rank,
+      properties: { 'kpi-meta': { unit, direction: 'increase' } },
+      ...over,
+    });
+    fixture.readingChanges.set(id, [
+      { created: BASE, to: encodeReadingValue(isoDay(-90), 10) },
+      { created: BASE + DAY, to: encodeReadingValue(isoDay(-30), 12) },
+    ]);
+  };
+  const centralRoot = fixture.kpiIds[0];
+  kpi('5000', 'PORT-1', 'Portfolio value', null, '0|i90000:', 'USD');
+  kpi('5001', 'PORT-2', 'Portfolio margin', '5000', '0|i90001:', '%');
+  kpi('5100', 'GROW-1', 'Growth signups', centralRoot, '0|i90002:', 'users');
+  kpi('5101', 'GROW-2', 'Growth retention', '5000', '0|i90003:', '%', {
+    extraKpiParentIds: [centralRoot],
+    kpiParentLinkIds: { [centralRoot]: '100' },
+  });
+  kpi('5102', 'GROW-3', 'Growth referrals', '5001', '0|i90004:', 'count');
+  kpi('5200', 'TMP-1', 'Team-managed KPI', null, '0|i90005:', 'count', { typeId: TEAM_MANAGED_KPI_TYPE_ID });
+  fixture.issues.set('5300', {
+    id: '5300',
+    key: 'KPI-500',
+    type: 'Story',
+    summary: 'Not a KPI',
+    parentId: null,
+    due: null,
+    start: null,
+    properties: {},
+  });
+
+  const crossSpaceTargetIssueId = fixture.contributorIds[2];
+  const target = fixture.issues.get(crossSpaceTargetIssueId)!;
+  const existing = (target.properties['kpi-assignments'] as StoredAssignments).assignments;
+  target.properties['kpi-assignments'] = storedTargets(
+    [
+      ...existing,
+      fixtureTarget('GROW-1', { kpiIssueId: '5100', target: 20 }),
+      fixtureTarget('PORT-2', { kpiIssueId: '5001', target: 15 }),
+    ],
+    true,
+  );
+  return {
+    portRootId: '5000',
+    portChildId: '5001',
+    growUnderCentralId: '5100',
+    growTwoParentsId: '5101',
+    growUnderPortChildId: '5102',
+    teamManagedKpiId: '5200',
+    centralStoryId: '5300',
+    crossSpaceTargetIssueId,
+  };
+}
+
 // ── KPI fields (spec 11 · 05) ────────────────────────────────────────────────
 
 /** The unit/direction fields as on bitovi-training (dev). */
@@ -513,8 +656,8 @@ export function chooseKpiFields(
   scheme.set(KPI_DIRECTION_FIELD_ID, [KPI_WORK_TYPE_ID]);
   fixture.kvs.set('kpi:config:site', { workType: { id: KPI_WORK_TYPE_ID, name: 'KPI' }, fields: cfg, schemes: {} });
 
-  fixture.kpiIds.forEach((id, index) => {
-    const issue = fixture.issues.get(id)!;
+  const kpis = [...fixture.issues.values()].filter((i) => i.type === 'KPI' && !i.typeId);
+  kpis.forEach((issue, index) => {
     const meta = issue.properties['kpi-meta'] as { unit: string; direction: KpiDirection | null } | undefined;
     if (!meta) return;
     const migrated = shape === 'migrated' || (shape === 'mixed' && index % 2 === 0);
@@ -585,23 +728,38 @@ export const kpiLinkId = (childIssueId: string): string => String(50_000_000 + N
 /** The link id of one of a child's `extraKpiParentIds`. */
 export const extraKpiLinkId = (childIssueId: string, parentId: string): string => `${kpiLinkId(childIssueId)}-${parentId}`;
 
+/** The id of the link from `issue` up to `parentId` (`primary` = its `kpiParentId` link). */
+const parentLinkId = (issue: FixtureIssue, parentId: string, primary: boolean): string =>
+  issue.kpiParentLinkIds?.[parentId] ?? (primary ? kpiLinkId(issue.id) : extraKpiLinkId(issue.id, parentId));
+
+/** The work type id an issue is of (a team-managed type has its own). */
+const typeIdOf = (issue: FixtureIssue): string => issue.typeId ?? String(ICON_ID[issue.type]);
+
+/** How `issueJson` sees the rest of the site: keys, projects, and which issues the caller may see. */
+interface IssueJsonSite {
+  issue: (id: string) => FixtureIssue | undefined;
+  project: (issue: FixtureIssue) => { id: string; key: string; name: string };
+  visible: (issue: FixtureIssue) => boolean;
+}
+
 function issueJson(
   issue: FixtureIssue,
   fields: string[],
   properties: string[],
   link: FixtureLinkShape,
-  keyOf: (id: string) => string | undefined = () => undefined,
+  site: IssueJsonSite,
   customFieldIds: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   const parentEnd = link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue';
   const parentLinks = [
-    ...(issue.kpiParentId ? [{ id: kpiLinkId(issue.id), parentId: issue.kpiParentId }] : []),
-    ...(issue.extraKpiParentIds ?? []).map((parentId) => ({ id: extraKpiLinkId(issue.id, parentId), parentId })),
+    ...(issue.kpiParentId ? [{ id: parentLinkId(issue, issue.kpiParentId, true), parentId: issue.kpiParentId }] : []),
+    ...(issue.extraKpiParentIds ?? []).map((parentId) => ({ id: parentLinkId(issue, parentId, false), parentId })),
   ];
   const all: Record<string, unknown> = {
     summary: issue.summary,
-    project: { key: projectKeyOf(issue) },
+    project: site.project(issue),
     issuetype: {
+      id: typeIdOf(issue),
       name: issue.type,
       hierarchyLevel: HIERARCHY_LEVEL[issue.type],
       iconUrl: `${ICON_BASE}/${ICON_ID[issue.type]}?size=medium`,
@@ -610,11 +768,22 @@ function issueJson(
     customfield_10015: issue.start,
     status: { statusCategory: { key: 'indeterminate' } },
     parent: issue.parentId ? { id: issue.parentId } : undefined,
-    issuelinks: parentLinks.map((l) => ({
-      id: l.id,
-      type: link.type,
-      [parentEnd]: { id: l.parentId, key: keyOf(l.parentId) },
-    })),
+    // Like Jira (01 C2), a link to an issue the caller can't see is left out.
+    issuelinks: parentLinks.flatMap((l) => {
+      const parent = site.issue(l.parentId);
+      if (parent && !site.visible(parent)) return [];
+      return [
+        {
+          id: l.id,
+          type: link.type,
+          [parentEnd]: {
+            id: l.parentId,
+            key: parent?.key,
+            ...(parent ? { fields: { issuetype: { id: typeIdOf(parent), name: parent.type } } } : {}),
+          },
+        },
+      ];
+    }),
     [RANK_FIELD_ID]: issue.rank ?? null,
   };
   const picked: Record<string, unknown> = {};
@@ -661,12 +830,45 @@ function runJql(fixture: ScaleFixture, jql: string): FixtureIssue[] | null {
   if (m) return childrenOf(m[1]);
   m = /^project\s*=\s*(\w+)/i.exec(q);
   if (m && m[1] === KPI_PROJECT.key) return fixture.kpiIds.map(get).filter((i): i is FixtureIssue => !!i);
-  // Spec 11 · 05: every issue of a work type (by id or name), site-wide.
-  m = /^issuetype\s*=\s*"?([^"]+?)"?$/i.exec(q);
+  // Spec 11 · 05/06: every issue of a work type (by id or name), site-wide, ANDed
+  // with `project in (…)`, `id in (…)` and `summary ~ "text*"` (06's KPI search).
+  m = /^issuetype\s*=\s*"?([^"\s]+)"?((?:\s+AND\s+.+)?)$/i.exec(q);
   if (m) {
     const type = fixture.issueTypes.find((t) => t.id === m![1] || t.name === m![1]);
-    const matched = type ? [...fixture.issues.values()].filter((i) => i.type === type.name) : [];
+    const tests: Array<(i: FixtureIssue) => boolean> = [];
+    for (const clause of m[2].split(/\s+AND\s+/i).map((c) => c.trim()).filter(Boolean)) {
+      let c = /^project\s+in\s*\(([^)]*)\)$/i.exec(clause);
+      if (c) {
+        const keys = new Set(inList(c[1]).map((k) => k.replace(/"/g, '')));
+        tests.push((i) => keys.has(i.key.split('-')[0]));
+        continue;
+      }
+      c = /^id\s+in\s*\(([^)]*)\)$/i.exec(clause);
+      if (c) {
+        const ids = new Set(inList(c[1]));
+        tests.push((i) => ids.has(i.id));
+        continue;
+      }
+      c = /^summary\s*~\s*"(.*)\*"$/i.exec(clause);
+      if (c) {
+        const prefix = c[1].replace(/\\(.)/g, '$1').toLowerCase();
+        tests.push((i) => i.summary.toLowerCase().split(/\s+/).some((w) => w.startsWith(prefix)) || i.summary.toLowerCase().startsWith(prefix));
+        continue;
+      }
+      return null;
+    }
+    const matched = type
+      ? [...fixture.issues.values()].filter((i) => !i.unindexed && typeIdOf(i) === type.id && tests.every((t) => t(i)))
+      : [];
     return orderBy && /^id\s+ASC$/i.test(orderBy.trim()) ? matched.sort((a, b) => Number(a.id) - Number(b.id)) : matched;
+  }
+  // 03's exact "who targets KPI X" lookup (no tokenising, 01 D3).
+  m = /^issue\.property\[kpi-assignments\]\.kpiIssueIds\s*=\s*"(\d+)"$/i.exec(q);
+  if (m) {
+    const id = m[1];
+    return [...fixture.issues.values()].filter((i) =>
+      ((i.properties['kpi-assignments'] as { kpiIssueIds?: string[] } | undefined)?.kpiIssueIds ?? []).includes(id),
+    );
   }
   // `kpi-assignments` index clauses, ANDed: matched against the stored property (no index lag).
   const clauses = q.split(/\s+AND\s+/i);
@@ -704,14 +906,9 @@ export interface MockJira {
 
 export { respond as mockResponse };
 
-/** Jira project key an issue belongs to (KPI-space issues live in KPI_PROJECT). */
+/** Jira project key an issue belongs to: its key's prefix (a moved issue's key is its new one). */
 function projectKeyOf(issue: FixtureIssue): string {
-  return issue.type === 'KPI' ? KPI_PROJECT.key : issue.key.split('-')[0];
-}
-
-/** The project id the field scheme lookup uses (work projects have none: they get no custom fields). */
-function projectIdOf(issue: FixtureIssue): string {
-  return issue.type === 'KPI' ? KPI_PROJECT.id : `work-${projectKeyOf(issue)}`;
+  return issue.key.split('-')[0];
 }
 
 /** Jira project-permission key → MockProjectAccess flag. */
@@ -743,7 +940,17 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     fixture.issues.get(idOrKey) ??
     [...fixture.issues.values()].find((i) => i.key === idOrKey) ??
     [...fixture.issues.values()].find((i) => i.formerKeys?.includes(idOrKey));
-  const keyOf = (id: string) => fixture.issues.get(id)?.key;
+  /** An issue's project as Jira returns it (work projects aren't in `fixture.projects`). */
+  const projectOf = (issue: FixtureIssue): { id: string; key: string; name: string } => {
+    const key = projectKeyOf(issue);
+    const p = fixture.projects.get(key);
+    return p ? { id: p.id, key, name: p.name } : { id: `work-${key}`, key, name: key };
+  };
+  const siteFor = (as: MockPrincipal): IssueJsonSite => ({
+    issue: (id) => fixture.issues.get(id),
+    project: projectOf,
+    visible: (issue) => visible(issue, as),
+  });
   const customFieldIds = () => new Set(fixture.customFields.map((f) => f.id));
   /**
    * The custom field values a create/edit sets, as Jira stores them, or the
@@ -751,7 +958,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
    * type can't be set (01 A4), and a select takes an existing option.
    */
   const customFieldWrites = (
-    type: FixtureIssue['type'],
+    typeId: string,
     projectId: string,
     reqFields: Record<string, unknown> | undefined,
   ): { values: Record<string, unknown> } | { error: MockResponse } => {
@@ -760,7 +967,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const field = fixture.customFields.find((f) => f.id === id);
       if (!field) continue;
       const types = fixture.fieldSchemes.get(fixture.fieldSchemeOf.get(projectId) ?? '')?.get(id);
-      if (!types || (types.length > 0 && !types.includes(String(ICON_ID[type])))) {
+      if (!types || (types.length > 0 && !types.includes(typeId))) {
         return {
           error: respond(400, {
             errorMessages: [],
@@ -824,7 +1031,11 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const issueRef = params.get('issueId') ?? params.get('issueKey');
       const issue = issueRef ? findIssue(issueRef) : undefined;
       if (issueRef && (!issue || !visible(issue, as))) return notFound();
-      const projectKey = issue ? projectKeyOf(issue) : params.get('projectKey');
+      const byId = params.get('projectId');
+      const projectKey = issue
+        ? projectKeyOf(issue)
+        : (params.get('projectKey') ?? [...fixture.projects.entries()].find(([, p]) => p.id === byId)?.[0] ?? null);
+      if (byId && !projectKey) return respond(404, { errorMessages: ['No project could be found.'] });
       const permissions: Record<string, { key: string; havePermission: boolean }> = {};
       for (const key of keys) {
         let have: boolean;
@@ -869,7 +1080,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const page = seen.slice(offset, offset + maxResults);
       const more = offset + maxResults < seen.length;
       return respond(200, {
-        issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture), keyOf, customFieldIds())),
+        issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture), siteFor(as), customFieldIds())),
         isLast: !more,
         ...(more ? { nextPageToken: String(offset + maxResults) } : {}),
       });
@@ -888,7 +1099,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!issue || !visible(issue, as)) return notFound();
       const fields = (params.get('fields') ?? '').split(',').filter(Boolean);
       const properties = (params.get('properties') ?? '').split(',').filter(Boolean);
-      return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture), keyOf, customFieldIds()));
+      return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture), siteFor(as), customFieldIds()));
     }
 
     const prop = /^\/rest\/api\/3\/issue\/([^/]+)\/properties\/([^/]+)$/.exec(path);
@@ -939,7 +1150,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!req.fields && !req.update) {
         return respond(400, { errorMessages: ["one of 'fields' or 'update' required"], errors: {} });
       }
-      const custom = customFieldWrites(issue.type, projectIdOf(issue), req.fields);
+      const custom = customFieldWrites(typeIdOf(issue), projectOf(issue).id, req.fields);
       if ('error' in custom) return custom.error;
       applyFieldValues(issue, custom.values);
       if (typeof req.fields?.summary === 'string') issue.summary = req.fields.summary;
@@ -960,14 +1171,33 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     if (method === 'POST' && path === '/rest/api/3/issue') {
       const req = JSON.parse(String(body)) as {
-        fields: { summary: string; project?: { id?: string; key?: string }; [field: string]: unknown };
+        fields: {
+          summary: string;
+          project?: { id?: string; key?: string };
+          issuetype?: { id?: string; name?: string };
+          [field: string]: unknown;
+        };
         properties?: Array<{ key: string; value: unknown }>;
       };
-      if (as === 'user' && !accessTo(KPI_PROJECT.key).create) return forbidden('create issues in this project');
-      const custom = customFieldWrites('KPI', KPI_PROJECT.id, req.fields);
+      const ref = req.fields.project?.id ?? req.fields.project?.key ?? KPI_PROJECT.id;
+      const entry = [...fixture.projects.entries()].find(([key, p]) => p.id === ref || key === ref);
+      if (!entry) return respond(400, { errorMessages: [], errors: { project: 'valid project is required' } });
+      const [projectKey, project] = entry;
+      if (as === 'user' && !accessTo(projectKey).browse) {
+        return respond(400, { errorMessages: [], errors: { project: 'valid project is required' } });
+      }
+      if (as === 'user' && !accessTo(projectKey).create) return forbidden('create issues in this project');
+      // Like Jira, the work type must be in the space's scheme.
+      const reqType = req.fields.issuetype;
+      const type = fixture.issueTypes.find((t) => t.id === reqType?.id || (!reqType?.id && t.name === reqType?.name));
+      if (!type || !project.issueTypeNames.includes(type.name) || project.style === 'next-gen') {
+        return respond(400, { errorMessages: [], errors: { issuetype: 'Specify a valid issue type' } });
+      }
+      const custom = customFieldWrites(type.id, project.id, req.fields);
       if ('error' in custom) return custom.error;
       const id = String(nextIssueId++);
-      const key = `${KPI_PROJECT.key}-${fixture.kpiIds.length + 1}`;
+      const inProject = [...fixture.issues.values()].filter((i) => projectKeyOf(i) === projectKey).length;
+      const key = projectKey === KPI_PROJECT.key ? `${KPI_PROJECT.key}-${fixture.kpiIds.length + 1}` : `${projectKey}-${inProject + 1}`;
       fixture.issues.set(id, {
         id,
         key,
@@ -1011,13 +1241,13 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     if (linkById && method === 'DELETE') {
       const linkId = decodeURIComponent(linkById[1]);
       const owns = (i: FixtureIssue) =>
-        (!!i.kpiParentId && kpiLinkId(i.id) === linkId) ||
-        (i.extraKpiParentIds ?? []).some((p) => extraKpiLinkId(i.id, p) === linkId);
+        (!!i.kpiParentId && parentLinkId(i, i.kpiParentId, true) === linkId) ||
+        (i.extraKpiParentIds ?? []).some((p) => parentLinkId(i, p, false) === linkId);
       const child = [...fixture.issues.values()].find(owns);
       if (!child || !visible(child, as)) return respond(404, { errorMessages: ['No issue link with that id.'] });
       if (!may(child, as, 'link')) return forbidden('link issues');
-      if (child.kpiParentId && kpiLinkId(child.id) === linkId) child.kpiParentId = null;
-      else child.extraKpiParentIds = child.extraKpiParentIds!.filter((p) => extraKpiLinkId(child.id, p) !== linkId);
+      if (child.kpiParentId && parentLinkId(child, child.kpiParentId, true) === linkId) child.kpiParentId = null;
+      else child.extraKpiParentIds = child.extraKpiParentIds!.filter((p) => parentLinkId(child, p, false) !== linkId);
       return respond(204);
     }
 
@@ -1050,12 +1280,16 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     // ── KPI-space provisioning (Settings) ──
     const project = /^\/rest\/api\/3\/project\/([^/]+)$/.exec(path);
+    /** A space's type by name: a team-managed space's own type, else the site-wide one. */
+    const typeNamed = (name: string, p: FixtureProject) =>
+      fixture.issueTypes.find((t) => t.name === name && (p.style === 'next-gen' ? t.scope?.project.id === p.id : !t.scope)) ??
+      fixture.issueTypes.find((t) => t.name === name && !t.scope);
     const projectJson = (key: string, p: FixtureProject) => ({
       id: p.id,
       key,
       name: p.name,
       style: p.style ?? 'classic',
-      issueTypes: p.issueTypeNames.map((name) => ({ id: fixture.issueTypes.find((t) => t.name === name)?.id, name })),
+      issueTypes: p.issueTypeNames.map((name) => ({ id: typeNamed(name, p)?.id, name })),
     });
     if (project && project[1] !== 'search' && method === 'GET') {
       const ref = decodeURIComponent(project[1]);

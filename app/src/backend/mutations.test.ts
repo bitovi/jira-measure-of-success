@@ -155,6 +155,7 @@ describe('recordValue', () => {
 describe('createKpi', () => {
   it('returns just the new KPI, nested under its parent', async () => {
     const { data, jira } = await invoke<CreatedKpi>('createKpi', {
+      projectId: '10000',
       name: 'Churn',
       unit: '%',
       direction: 'decrease',
@@ -168,6 +169,7 @@ describe('createKpi', () => {
       unit: '%',
       direction: 'decrease',
       parentKpiId: '1000',
+      space: { id: '10000', key: 'KPI', name: 'KPIs (KPI)' },
     });
     expect(jira.writes).toEqual(['POST /rest/api/3/issue', 'POST /rest/api/3/issueLink']);
     expect(jira.fixture.issues.get(data!.id)!.kpiParentId).toBe('1000');
@@ -176,7 +178,7 @@ describe('createKpi', () => {
   it('rolls the new issue back when the hierarchy link fails, so a retry cannot duplicate it', async () => {
     const { data, error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       (j) => {
         j.intercept = (method, path) => (method === 'POST' && path === '/rest/api/3/issueLink' ? { status: 500 } : undefined);
       },
@@ -198,7 +200,7 @@ describe('updateKpi', () => {
   };
   /** A KPI created moments ago: readable by key/id, but not in the KPI-space search yet. */
   const unindexedKpi = (j: MockJira, id: string, key: string, kpiParentId: string | null) => {
-    j.fixture.issues.set(id, { ...issue(j, '1001'), id, key, summary: key, kpiParentId, properties: {} });
+    j.fixture.issues.set(id, { ...issue(j, '1001'), id, key, summary: key, kpiParentId, properties: {}, unindexed: true });
   };
 
   it('renames and changes unit/direction in one issue edit, returning the KPI as saved', async () => {
@@ -398,11 +400,11 @@ describe('updateKpi', () => {
     expect(jira.writes).toEqual([]);
   });
 
-  it('refuses issues outside the KPI space', async () => {
+  it('refuses issues that are not KPIs (not of the KPI work type)', async () => {
     const notKpi = await invoke('updateKpi', kpi2({ kpiId: 'APP-1', name: 'X' }));
-    expect(notKpi.error?.message).toBe("APP-1 isn't a KPI: only KPIs in the KPI space can be edited.");
+    expect(notKpi.error?.message).toBe("APP-1 isn't a KPI, so it can't be edited here.");
     const underWork = await invoke('updateKpi', kpi2({ parentKpiId: 'APP-1' }));
-    expect(underWork.error?.message).toBe("APP-1 isn't a KPI: KPIs can only be nested under KPIs in the KPI space.");
+    expect(underWork.error?.message).toBe("APP-1 isn't a KPI: KPIs can only be nested under KPIs.");
     expect(notKpi.jira.writes).toEqual([]);
     expect(underWork.jira.writes).toEqual([]);
   });
@@ -430,6 +432,7 @@ describe('getPanelList: targets on KPIs missing from the catalog', () => {
         id: '5050',
         key: 'KPI-50',
         kpiParentId: null,
+        unindexed: true,
       });
       targetsOn(jira, ['1000', 'KPI-1'], ['5050', 'KPI-50'], ['9999', 'KPI-99'], 'KPI-404');
     });
@@ -449,12 +452,12 @@ describe('getPanelList: targets on KPIs missing from the catalog', () => {
     const { data, error } = await invoke<PanelListData>('getPanelList', { issueId: STORY }, (jira) => {
       targetsOn(jira, ['1000', 'KPI-1']);
       jira.intercept = (method, path, _body, raw) =>
-        method === 'GET' && path === '/rest/api/3/search/jql' && decodeURIComponent(raw).includes('jql=project=')
+        method === 'GET' && path === '/rest/api/3/search/jql' && decodeURIComponent(raw).includes('jql=issuetype')
           ? { status: 503, body: { errorMessages: ['Service unavailable'] } }
           : undefined;
     });
     expect(data).toBeUndefined();
-    expect(error?.message).toMatch(/^Jira 503 while trying to list the KPIs in project KPI/);
+    expect(error?.message).toMatch(/^Jira 503 while trying to list the KPIs/);
   });
 });
 
@@ -464,7 +467,7 @@ describe('KPI hierarchy link', () => {
   it('refuses to nest a new KPI (writing nothing) when no hierarchy link type is configured', async () => {
     const { error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       unsetHierarchy,
     );
     expect(error?.message).toMatch(/^KPI hierarchy is not set up/);
@@ -474,7 +477,7 @@ describe('KPI hierarchy link', () => {
   it('still creates root KPIs without a hierarchy link type', async () => {
     const { error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: null },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: null },
       unsetHierarchy,
     );
     expect(error).toBeUndefined();
@@ -601,7 +604,7 @@ describe('KPI hierarchy link: reused types, deleted types, loops', () => {
   it('refuses to nest (writing nothing) when the configured link type was deleted', async () => {
     const { error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       (j) => {
         j.fixture.linkTypes = j.fixture.linkTypes.filter((t) => t.id !== KPI_HIERARCHY_LINK_TYPE.id);
       },
@@ -614,7 +617,7 @@ describe('KPI hierarchy link: reused types, deleted types, loops', () => {
     let body: unknown;
     const { data, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       (j) => {
         useBlocksChildBlocksParent(j);
         j.intercept = (method, path, b) => {

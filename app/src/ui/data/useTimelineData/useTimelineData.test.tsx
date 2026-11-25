@@ -85,7 +85,7 @@ describe('useTimelineData mutations', () => {
 
   it.each([
     ['record', (c: ReturnType<typeof useTimelineData>) => c.record('KPI-1', '2026-07-01', 130), 'recordValue'],
-    ['createKpi', (c: ReturnType<typeof useTimelineData>) => c.createKpi({ name: 'X', unit: '', direction: null, parentKpiId: 'KPI-1' }), 'createKpi'],
+    ['createKpi', (c: ReturnType<typeof useTimelineData>) => c.createKpi({ projectId: '10000', name: 'X', unit: '', direction: null, parentKpiId: 'KPI-1' }), 'createKpi'],
     ['updateKpi', (c: ReturnType<typeof useTimelineData>) => c.updateKpi({ kpiId: 'KPI-1', name: 'X' }), 'updateKpi'],
     ['addTarget', (c: ReturnType<typeof useTimelineData>) => c.addTarget(addInput), 'addTarget'],
   ] as const)('a failed %s rejects and leaves the timeline untouched', async (_name, run, key) => {
@@ -121,7 +121,7 @@ describe('useTimelineData mutations', () => {
     bridge({ createKpi: () => Promise.resolve(created) });
     const { result } = await loaded();
 
-    await act(async () => result.current.createKpi({ name: 'Churn', unit: '%', direction: 'decrease', parentKpiId: 'KPI-1' }));
+    await act(async () => result.current.createKpi({ projectId: '10000', name: 'Churn', unit: '%', direction: 'decrease', parentKpiId: 'KPI-1' }));
     expect(kpi1(result.current.data).children.map((c) => c.kpiId)).toEqual(['KPI-9']);
   });
 

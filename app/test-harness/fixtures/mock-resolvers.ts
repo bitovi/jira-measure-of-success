@@ -13,7 +13,9 @@ import {
   groupByRelationship,
   isKpiIssueId,
   isValidProjectKey,
+  KPI_SPACE_REQUIRED,
   normalizeProjectKey,
+  projectKeyOfIssueKey,
   readingsFromChangelog,
   resolveRelativeTargetDate,
   resolvePanelTarget,
@@ -27,6 +29,7 @@ import {
   type IssueLinkTypeInfo,
   type KpiHierarchyLink,
   type KpiHierarchyStatus,
+  type KpiSpaceRef,
   type KpiSpaceStatus,
   type SaveKpiHierarchyInput,
   type PanelData,
@@ -51,7 +54,9 @@ import {
 } from '@domain/index.js';
 import {
   CATALOG,
+  CENTRAL_SPACE,
   DATE_FIELDS,
+  KPI_SPACES,
   HIERARCHY_LEVELS,
   START_DATE_FIELD_ID,
   ISSUES,
@@ -108,6 +113,12 @@ const readingChangelog = new Map<string, ReadingChange[]>();
   walk(kpiTree);
 })();
 
+/** A KPI's space: its key's prefix (spec 11 · 06). */
+export function spaceOfKey(issueKey: string): KpiSpaceRef {
+  const key = projectKeyOfIssueKey(issueKey);
+  return KPI_SPACES[key] ?? { id: key, key, name: key };
+}
+
 function readingsFor(kpiId: string) {
   return readingsFromChangelog(readingChangelog.get(kpiId) ?? []);
 }
@@ -125,7 +136,16 @@ function catalogDto(): CatalogEntryDto[] {
     for (const n of nodes) {
       const readings = readingsFor(n.kpiId);
       const latest = readings.length ? readings[readings.length - 1].value : null;
-      out.push({ id: n.kpiId, key: n.issueKey, name: n.name, unit: n.unit, direction: n.direction, currentValue: latest, depth });
+      out.push({
+        id: n.kpiId,
+        key: n.issueKey,
+        name: n.name,
+        unit: n.unit,
+        direction: n.direction,
+        currentValue: latest,
+        depth,
+        space: spaceOfKey(n.issueKey),
+      });
       if (n.children) walk(n.children, depth + 1);
     }
   };
@@ -235,21 +255,23 @@ function findKpiByRef(nodes: KpiTreeNode[], ref: string): KpiTreeNode | undefine
 }
 
 export function getPanelData(issueId: string): PanelData {
-  // Feature 04: when the panel is opened ON a KPI issue (its id/key names a KPI
-  // in the KPI space), return the single-KPI chart payload instead of the
+  // Feature 04: when the panel is opened ON a KPI issue (its id/key names a
+  // KPI), return the single-KPI chart payload instead of the
   // associate/target-editor rows. In the harness, open it via
   // `?surface=issue&issueId=KPI-1` (or the KPI's issue id, e.g. `20001`).
+  // Since spec 11 · 06 it carries no catalog (the backend loads only this KPI).
   const kpiNode = findKpiByRef(kpiTree, issueId);
   if (kpiNode) {
     timelineIdSeq = 1;
     return {
       issueKey: kpiNode.issueKey,
       rows: [],
-      catalog: catalogDto(),
+      catalog: [],
       issueDueDate: null,
       issueDueRolledUp: false,
       kpiView: {
-        node: toTimelineNode(kpiNode, 0),
+        // Like the backend, only this KPI: no sub-KPIs.
+        node: { ...toTimelineNode(kpiNode, 0), children: [] },
         today: TODAY,
         contributions: nodeContributions(kpiNode),
       },
@@ -576,12 +598,13 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
     undated,
     readings: readings.map((r) => ({ date: r.date, value: r.value })),
     children: (node.children ?? []).map((c) => toTimelineNode(c, depth + 1)),
+    space: spaceOfKey(node.issueKey),
   };
 }
 
 export function getTimelineData(): TimelineData {
   timelineIdSeq = 1;
-  return { today: TODAY, roots: kpiTree.map((n) => toTimelineNode(n, 0)) };
+  return { today: TODAY, roots: kpiTree.map((n) => toTimelineNode(n, 0)), centralSpace: CENTRAL_SPACE };
 }
 
 /**
@@ -697,32 +720,36 @@ function nextKpiId(): string {
   return String(max + 1);
 }
 
-/** Generate a fresh, plausible KPI issue key (KPI-N) for a newly created KPI. */
-function nextIssueKey(): string {
-  let count = 0;
+/** Generate a fresh, plausible issue key (`{space}-N`) for a KPI created in `space`. */
+function nextIssueKey(space: string): string {
+  let max = 0;
   const walk = (nodes: KpiTreeNode[]) => {
     for (const n of nodes) {
-      count++;
+      if (projectKeyOfIssueKey(n.issueKey) === space) max = Math.max(max, Number(n.issueKey.split('-')[1]) || 0);
       if (n.children) walk(n.children);
     }
   };
   walk(kpiTree);
-  return `KPI-${count + 1}`;
+  return `${space}-${max + 1}`;
 }
 
 /**
- * Create a KPI (an issue in the KPI space). Appends a new tree node at the root
- * or under `parentKpiId`, with an empty reading changelog. Returns just the new
- * KPI, like the backend.
+ * Create a KPI (an issue of the KPI work type) in the space `projectId`
+ * (required, spec 11 · 06). Appends a new tree node at the root or under
+ * `parentKpiId`, with an empty reading changelog. Returns just the new KPI,
+ * like the backend.
  */
 export function createKpi(input: CreateKpiInput): CreatedKpi {
+  if (!input.projectId) throw new Error(`${KPI_SPACE_REQUIRED}.`);
+  const space = Object.values(KPI_SPACES).find((sp) => sp.id === input.projectId);
+  if (!space) throw new Error(`There's no space with id "${input.projectId}".`);
   if (input.parentKpiId && getKpiHierarchy().state !== 'ready') {
     throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
   }
   const kpiId = nextKpiId();
   const node: KpiTreeNode = {
     kpiId,
-    issueKey: nextIssueKey(),
+    issueKey: nextIssueKey(space.key),
     name: input.name.trim() || 'Untitled KPI',
     unit: input.unit.trim(),
     direction: input.direction ?? null,
@@ -742,6 +769,7 @@ export function createKpi(input: CreateKpiInput): CreatedKpi {
     unit: node.unit,
     direction: node.direction,
     parentKpiId: parent ? parent.kpiId : null,
+    space,
   };
 }
 

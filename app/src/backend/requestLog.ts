@@ -104,6 +104,8 @@ function jqlKind(jql: string): string {
   if (/^parent\s+in\b/i.test(q)) return 'parent in';
   if (/^parent\s*=/i.test(q)) return 'parent =';
   if (/^project\s*=/i.test(q)) return 'project';
+  if (/^issuetype\s*=/i.test(q)) return 'issuetype';
+  if (/issue\.property\[kpi-assignments\]\.kpiIssueIds\s*=/i.test(q)) return 'kpi-assignments id';
   if (/issue\.property\[kpi-assignments\]/i.test(q)) return 'kpi-assignments index';
   return 'other';
 }

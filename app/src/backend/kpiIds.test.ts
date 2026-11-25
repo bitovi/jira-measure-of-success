@@ -172,9 +172,10 @@ describe('same output as the key-based code', () => {
   it('the panel shows the same rows on migrated data as the key-based code did on the matching pre-migration data', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-06-15T12:00:00Z'));
-    // Work items with own, parent's and relative targets, a story, and a KPI issue's own panel.
+    // Work items with own, parent's and relative targets, and a story. (A KPI issue's own
+    // panel loads only that KPI since spec 11 · 06; kpisByWorkType.test checks its node.)
     const scale = { kpis: 10, initiatives: 3, epicsPerInitiative: 4, storiesPerEpic: 2, subtasksPerStory: 1 };
-    const issues = ['200000', '200001', '200002', '200003', '200005', '200007', '200010', '300000', '300003', '1000'];
+    const issues = ['200000', '200001', '200002', '200003', '200005', '200007', '200010', '300000', '300003'];
     const panels: PanelData[] = [];
     for (const issueId of issues) {
       vi.resetModules();
@@ -188,10 +189,17 @@ describe('same output as the key-based code', () => {
     // Map ids back to keys (and drop the new key fields) to compare with the
     // digest of `getPanelData` on the same issues taken before this change.
     const node = (n: TimelineNodeDto): TimelineNodeDto => ({ ...n, kpiId: n.issueKey, children: n.children.map(node) });
+    // Spec 11 · 06: the panel no longer carries `access` (looked up per space when an
+    // action needs it) and catalog entries gained their `space`; put back / left out.
+    const FULL = { browse: true, create: true, edit: true, link: true };
     const asBefore = panels.map((p) => ({
       ...p,
       rows: p.rows.map(({ kpiKey, ...r }) => ({ ...r, kpiId: kpiKey })),
-      catalog: p.catalog.map(({ key, ...c }) => ({ ...c, id: key })),
+      catalog: p.catalog.map(({ key, space, ...c }) => {
+        void space;
+        return { ...c, id: key };
+      }),
+      access: FULL,
       ...(p.kpiView
         ? {
             kpiView: {
@@ -206,7 +214,8 @@ describe('same output as the key-based code', () => {
         : {}),
     }));
     const digest = createHash('sha256').update(JSON.stringify(asBefore)).digest('hex');
-    expect(digest).toBe('d4c43e2da9c9f261aea44d3777affc88b861723fdd6826c390a7ddf7494e6a85');
+    // The digest of the code before spec 11 · 06 on these nine issues.
+    expect(digest).toBe('7f8f8d18b338d3f6d5e18c2edf9a12b3b506cc98cabfca6b048b098a206baf07');
   });
 });
 

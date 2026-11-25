@@ -9,7 +9,7 @@ import InlineEdit from '@atlaskit/inline-edit';
 import Lozenge from '@atlaskit/lozenge';
 import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle } from '@atlaskit/modal-dialog';
 import Tooltip from '@atlaskit/tooltip';
-import { KPI_NO_ACCESS_LABEL, kpiPermissionMessage, type PanelRowDto } from '@domain/index.js';
+import { KPI_NO_ACCESS_LABEL, kpiPermissionMessage, projectKeyOfIssueKey, type PanelRowDto } from '@domain/index.js';
 import { DisabledReason } from '@ui/components/DisabledReason/index.js';
 import { EstimateLine } from '@ui/components/EstimateLine/index.js';
 import { TargetEditor } from '../TargetEditor/index.js';
@@ -59,6 +59,7 @@ export function TargetCard({
   onRemove,
   onRecord,
   recordBlocked = null,
+  recordBusy = false,
   kpiHref,
   onOpenKpi,
 }: {
@@ -70,8 +71,10 @@ export function TargetCard({
   onSave?: (draft: TargetDraft) => void;
   onRemove?: () => void;
   onRecord?: () => void;
-  /** why recording a value is disabled (no Edit Issues on the KPI, spec 10), or null */
+  /** why recording a value is disabled (no Edit Issues in the KPI's space, spec 10), or null */
   recordBlocked?: string | null;
+  /** true while the KPI's space access is looked up for "Record a value" (spec 11 · 06) */
+  recordBusy?: boolean;
   /** `/browse/{key}` URL of the KPI issue; with `onOpenKpi`, the KPI name links to it */
   kpiHref?: string;
   onOpenKpi?: () => void;
@@ -109,7 +112,8 @@ export function TargetCard({
   const missing = !!row.kpiMissing;
   const noAccess = !!row.kpiNoAccess;
   const readOnlyBet = missing || noAccess;
-  const viewReason = noAccess ? kpiPermissionMessage('view', undefined, row.kpiKey) : null;
+  // The KPI's own space, from its key: the user can't see the KPI, so nothing more is known.
+  const viewReason = noAccess ? kpiPermissionMessage('view', projectKeyOfIssueKey(row.kpiKey), row.kpiKey) : null;
   const pill = row.resolving || readOnlyBet ? null : pillFor(row);
   const nudge = row.resolving || readOnlyBet ? null : nudgeFor(row);
   const saved = draftFromRow(row);
@@ -271,9 +275,15 @@ export function TargetCard({
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded bg-[var(--ds-background-warning,#fff7d6)] px-2 py-1 text-xs font-medium leading-4 text-warning">
           <span className="py-1">{nudge}</span>
           {onRecord && (
-            <span className="ml-auto">
+            <span className="ml-auto" aria-busy={recordBusy || undefined}>
               <DisabledReason reason={recordBlocked}>
-                <Button appearance="subtle" spacing="compact" isDisabled={recordBlocked !== null} onClick={onRecord}>
+                <Button
+                  appearance="subtle"
+                  spacing="compact"
+                  isDisabled={recordBlocked !== null}
+                  isLoading={recordBusy}
+                  onClick={onRecord}
+                >
                   Record a value
                 </Button>
               </DisabledReason>
@@ -285,7 +295,7 @@ export function TargetCard({
       {missing && (
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded bg-[var(--ds-background-neutral,#091e420f)] px-2 py-1 text-xs leading-4 text-text-subtle">
           <span className="py-1">
-            This KPI was deleted or moved out of the KPI space, so this target can’t be tracked.
+            This KPI was deleted, so this target can’t be tracked.
           </span>
           {!preview && (
             <span className="ml-auto">

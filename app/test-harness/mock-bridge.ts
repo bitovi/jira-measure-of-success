@@ -28,7 +28,9 @@ import {
   retryMigration,
   kpiKeyOf,
   kpiSetup,
+  spaceOfKey,
 } from './fixtures/mock-resolvers.js';
+import { KPI_SPACES } from './fixtures/hierarchy.js';
 import {
   accessMode,
   applyAccessToPanelList,
@@ -36,6 +38,7 @@ import {
   applyAccessToPanelValues,
   applyAccessToTimeline,
   assertKpiWriteAllowed,
+  kpiAccessResult,
 } from './access-modes.js';
 
 /**
@@ -48,13 +51,16 @@ import {
 type Handler = (payload: any) => unknown;
 
 /**
- * `?access=none|readonly|hiddenKpi` (spec 10): answer as the backend would for a
- * user with limited KPI-space permissions — see access-modes.ts. `hiddenKpi`
+ * `?access=none|readonly|split|lookupFails|hiddenKpi` (spec 10, per space since
+ * spec 11 · 06): answer as the backend would for a user with limited
+ * permissions — see access-modes.ts. `hiddenKpi`
  * hides the first KPI targeted on the default panel issue (10048), picked once
  * at load so removing that target doesn't hide a different KPI.
  */
 const HIDDEN_KPI_ID: string | null = accessMode() === 'hiddenKpi' ? (getPanelList('10048').basis?.own[0]?.kpiId ?? null) : null;
 const hiddenKpiId = (): string | null => HIDDEN_KPI_ID;
+/** A KPI's space, for permission messages (spec 11 · 06). */
+const kpiSpace = (kpiId: string | null | undefined) => spaceOfKey(kpiKeyOf(kpiId) ?? 'KPI');
 
 const resolvers: Record<string, Handler> = {
   // Issue panel
@@ -136,24 +142,34 @@ const resolvers: Record<string, Handler> = {
   },
   recordValue: async (p) => {
     await simulateMutation();
-    assertKpiWriteAllowed('record', accessMode(), p?.kpiId ?? null, hiddenKpiId(), kpiKeyOf(p?.kpiId));
+    assertKpiWriteAllowed('record', accessMode(), p?.kpiId ?? null, hiddenKpiId(), kpiKeyOf(p?.kpiId), kpiSpace(p?.kpiId));
     return recordValue(p?.kpiId, p?.date, p?.value);
+  },
+  // Spec 11 · 06: one space's permissions, asked when an action needs them.
+  getKpiAccess: async (p) => {
+    await simulateAccessLookup();
+    return kpiAccessResult(String(p?.projectKey ?? ''), accessMode());
   },
   // `?mutationDelayMs=3000` slows the modal saves (createKpi / updateKpi / addTarget /
   // recordValue) so the saving state is visible; `?mutationFail=1` makes them
   // reject (error shown in the modal).
   createKpi: async (p) => {
     await simulateMutation();
-    assertKpiWriteAllowed('add', accessMode(), null, null);
-    if (p?.parentKpiId) assertKpiWriteAllowed('nest', accessMode(), null, null);
+    const space = Object.values(KPI_SPACES).find((sp) => sp.id === p?.projectId);
+    assertKpiWriteAllowed('add', accessMode(), null, null, null, space);
+    if (p?.parentKpiId) assertKpiWriteAllowed('nest', accessMode(), null, null, null, space);
     return createKpi(p);
   },
   searchIssues: (p) => searchIssues(p?.query ?? ''),
   updateKpi: async (p) => {
     await simulateMutation();
     const touches = kpiEditTouches(p);
-    if (touches.definition) assertKpiWriteAllowed('edit', accessMode(), p?.kpiId ?? null, hiddenKpiId(), kpiKeyOf(p?.kpiId));
-    if (touches.parent) assertKpiWriteAllowed('nest', accessMode(), p?.kpiId ?? null, hiddenKpiId());
+    if (touches.definition) {
+      assertKpiWriteAllowed('edit', accessMode(), p?.kpiId ?? null, hiddenKpiId(), kpiKeyOf(p?.kpiId), kpiSpace(p?.kpiId));
+    }
+    if (touches.parent) {
+      assertKpiWriteAllowed('nest', accessMode(), p?.kpiId ?? null, hiddenKpiId(), kpiKeyOf(p?.kpiId), kpiSpace(p?.kpiId));
+    }
     return updateKpi(p);
   },
   addTarget: async (p) => {
@@ -168,6 +184,12 @@ async function simulateMutation(): Promise<void> {
   const delay = Number(params.get('mutationDelayMs') ?? 0);
   if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
   if (params.get('mutationFail') === '1') throw new Error('Simulated save failure');
+}
+
+/** `?accessDelayMs=1500` slows `getKpiAccess` so the busy state is visible. */
+async function simulateAccessLookup(): Promise<void> {
+  const delay = Number(new URLSearchParams(globalThis.location?.search ?? '').get('accessDelayMs') ?? 300);
+  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 async function migrationDelay(): Promise<void> {

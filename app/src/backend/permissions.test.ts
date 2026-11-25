@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { buildScaleFixture, createMockJira, KPI_PROJECT, type MockJira, type MockPrincipal } from './testing/scaleFixture';
 
 /**
- * The current user's permission lookups (spec 10): `fetchKpiSpaceAccess` and
+ * The current user's permission lookups (spec 10): `fetchKpiAccess` and
  * `fetchIsJiraAdmin` must run as the USER, and a failed lookup must throw
  * `PermissionLookupError` rather than read as "no permission".
  */
@@ -18,7 +18,7 @@ vi.mock('@forge/api', async () => {
   return { default: api, ...forgeRouteHelpers };
 });
 
-import { fetchIsJiraAdmin, fetchKpiSpaceAccess, PermissionLookupError } from './jira';
+import { fetchIsJiraAdmin, fetchKpiAccess, PermissionLookupError } from './jira';
 
 const SMALL = { kpis: 3, initiatives: 1, epicsPerInitiative: 1, storiesPerEpic: 0, subtasksPerStory: 0 };
 
@@ -27,21 +27,26 @@ beforeEach(() => {
   h.calls = [];
 });
 
-describe('fetchKpiSpaceAccess', () => {
-  it('reports the user’s KPI-project permissions, asked as the user', async () => {
+describe('fetchKpiAccess', () => {
+  it('reports the user’s permissions in one space, asked as the user', async () => {
     h.jira!.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: false, edit: true, link: false };
-    expect(await fetchKpiSpaceAccess(KPI_PROJECT.key)).toEqual({ browse: true, create: false, edit: true, link: false });
+    expect(await fetchKpiAccess(KPI_PROJECT.key)).toEqual({ browse: true, create: false, edit: true, link: false });
     expect(h.calls).toEqual([{ as: 'user', path: '/rest/api/3/mypermissions' }]);
+  });
+
+  it('asks about a space by id too (createKpi gets a project id)', async () => {
+    h.jira!.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: true, edit: false, link: false };
+    expect(await fetchKpiAccess(KPI_PROJECT.id)).toEqual({ browse: true, create: true, edit: false, link: false });
   });
 
   it('throws PermissionLookupError when Jira refuses the lookup', async () => {
     h.jira!.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 500 } : undefined);
-    await expect(fetchKpiSpaceAccess(KPI_PROJECT.key)).rejects.toBeInstanceOf(PermissionLookupError);
+    await expect(fetchKpiAccess(KPI_PROJECT.key)).rejects.toBeInstanceOf(PermissionLookupError);
   });
 
   it('throws PermissionLookupError when the lookup throws', async () => {
     h.jira!.requestJira = () => Promise.reject(new Error('network'));
-    await expect(fetchKpiSpaceAccess(KPI_PROJECT.key)).rejects.toBeInstanceOf(PermissionLookupError);
+    await expect(fetchKpiAccess(KPI_PROJECT.key)).rejects.toBeInstanceOf(PermissionLookupError);
   });
 });
 

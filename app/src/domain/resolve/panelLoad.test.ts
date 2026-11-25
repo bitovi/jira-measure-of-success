@@ -187,10 +187,8 @@ describe('assemblePanel', () => {
       expect(assemblePanel(hidden, values).rows.some((r) => r.kpiId === '10008')).toBe(false);
     });
 
-    it('passes the KPI-space access through to the panel', () => {
-      const access = { browse: true, create: false, edit: false, link: false };
-      expect(assemblePanel({ ...hidden, access }, values).access).toEqual(access);
-      expect(assemblePanel(basis, values).access).toBeUndefined();
+    it('carries no access: it is looked up per space when an action is used (spec 11 · 06)', () => {
+      expect(assemblePanel(hidden, values).access).toBeUndefined();
     });
   });
 

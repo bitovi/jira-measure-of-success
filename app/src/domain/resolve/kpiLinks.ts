@@ -87,13 +87,20 @@ export function findAppLinkType<T extends Pick<IssueLinkTypeInfo, 'name'>>(types
   return types.find((t) => t.name.toLowerCase() === DEFAULT_KPI_LINK_TYPE.name.toLowerCase()) ?? null;
 }
 
+/** The issue at one end of a link, as `issuelinks` returns it (Jira includes the linked issue's type). */
+export interface IssueLinkEnd {
+  id?: string;
+  key?: string;
+  fields?: { issuetype?: { id?: string } };
+}
+
 /** Minimal shape of a Jira issue link as returned in an issue's `issuelinks`. */
 export interface IssueLinkRef {
   /** the link's own id (for `DELETE /rest/api/3/issueLink/{id}`) */
   id?: string;
   type?: { id?: string; name?: string; inward?: string; outward?: string };
-  inwardIssue?: { id?: string; key?: string };
-  outwardIssue?: { id?: string; key?: string };
+  inwardIssue?: IssueLinkEnd;
+  outwardIssue?: IssueLinkEnd;
 }
 
 /** A hierarchy link on which another issue is the parent: the link id (to remove it) and the parent. */
@@ -101,26 +108,48 @@ export interface HierarchyParentLink {
   linkId: string;
   parentId: string;
   parentKey: string | null;
+  /** the parent's work type id, when Jira included it */
+  parentTypeId: string | null;
+}
+
+/** Order link ids numerically (Jira's ids are numbers, possibly longer than 2^53 one day). */
+export function compareLinkIds(a: string, b: string): number {
+  const numeric = /^\d+$/;
+  if (numeric.test(a) && numeric.test(b)) return a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
  * Every link of the hierarchy type on which another issue is this one's parent,
- * in link order. Not filtered by project: Jira's search lags behind recent
- * changes, so a caller that's about to write looks each parent up to check it's
- * a KPI rather than trusting a search snapshot. Normally at most one.
+ * **lowest link id first** (the oldest link: the one-parent rule, spec 11 · 06).
+ * Not filtered by project or type: Jira's search lags behind recent changes, so
+ * a caller that's about to write looks each parent up to check it's a KPI
+ * rather than trusting a search snapshot. Normally at most one.
  */
 export function hierarchyParentLinks(
   links: IssueLinkRef[] | undefined,
   hierarchy: KpiHierarchyLink | null,
 ): HierarchyParentLink[] {
+  return parentLinksOf(links, hierarchy).filter((l) => l.linkId !== '');
+}
+
+/** Hierarchy parent links, lowest id first; a link without an id (only in hand-built data) sorts last. */
+function parentLinksOf(links: IssueLinkRef[] | undefined, hierarchy: KpiHierarchyLink | null): HierarchyParentLink[] {
   if (!hierarchy) return [];
   const out: HierarchyParentLink[] = [];
   for (const link of links ?? []) {
-    if (String(link.type?.id ?? '') !== hierarchy.linkTypeId || !link.id) continue;
+    if (String(link.type?.id ?? '') !== hierarchy.linkTypeId) continue;
     const parent = hierarchy.parentEnd === 'outward' ? link.outwardIssue : link.inwardIssue;
-    if (parent?.id) out.push({ linkId: String(link.id), parentId: String(parent.id), parentKey: parent.key ?? null });
+    if (parent?.id) {
+      out.push({
+        linkId: link.id ? String(link.id) : '',
+        parentId: String(parent.id),
+        parentKey: parent.key ?? null,
+        parentTypeId: parent.fields?.issuetype?.id ? String(parent.fields.issuetype.id) : null,
+      });
+    }
   }
-  return out;
+  return out.sort((a, b) => (a.linkId === '' ? (b.linkId === '' ? 0 : 1) : b.linkId === '' ? -1 : compareLinkIds(a.linkId, b.linkId)));
 }
 
 /**
@@ -149,38 +178,52 @@ export async function wouldCreateKpiCycle(
 }
 
 /**
- * Resolve a KPI issue's parent id from its `issuelinks`, considering only links
- * of the configured hierarchy type whose parent end is another issue in the KPI
- * space. Foreign links (other types, the child end, or a parent outside the KPI
- * project) are ignored, which keeps a reused generic type like "Blocks" safe for
- * links that don't involve two KPIs. Returns null for a root KPI (no qualifying
- * link), or when no hierarchy link is configured.
+ * A KPI's parent KPIs from its `issuelinks` (spec 11 · 06, one-parent rule):
+ * hierarchy links whose parent is a KPI, lowest link id first. A parent counts
+ * as a KPI when it's in `loadedIds` (the KPIs the caller loaded), or when Jira
+ * says its work type is `workTypeId`. Foreign links (other types, the child end,
+ * a parent that's no KPI) are ignored, which keeps a reused generic type like
+ * "Blocks" safe. A parent the user can't browse never shows up: Jira leaves
+ * the link out (01 C2), so the KPI reads as top-level.
+ */
+export function kpiParentLinks(
+  links: IssueLinkRef[] | undefined,
+  hierarchy: KpiHierarchyLink | null,
+  isKpi: { loadedIds?: ReadonlySet<string>; workTypeId?: string | null },
+): HierarchyParentLink[] {
+  return parentLinksOf(links, hierarchy).filter(
+    (l) =>
+      (isKpi.loadedIds?.has(l.parentId) ?? false) ||
+      (!!isKpi.workTypeId && l.parentTypeId === isKpi.workTypeId),
+  );
+}
+
+/**
+ * Resolve a KPI's parent id from its `issuelinks`: the **lowest-id** hierarchy
+ * link whose parent is another loaded KPI (`inSetIds`), so every surface agrees
+ * whatever order Jira lists the links in. Returns null for a root KPI (no
+ * qualifying link, or its parent wasn't loaded), or when no hierarchy link is
+ * configured.
  */
 export function parentFromIssueLinks(
   links: IssueLinkRef[] | undefined,
-  inProjectIds: ReadonlySet<string>,
+  inSetIds: ReadonlySet<string>,
   hierarchy: KpiHierarchyLink | null,
 ): string | null {
-  if (!hierarchy) return null;
-  for (const link of links ?? []) {
-    if (String(link.type?.id ?? '') !== hierarchy.linkTypeId) continue;
-    const parentId = (hierarchy.parentEnd === 'outward' ? link.outwardIssue : link.inwardIssue)?.id;
-    if (parentId && inProjectIds.has(String(parentId))) return String(parentId);
-  }
-  return null;
+  return kpiParentLinks(links, hierarchy, { loadedIds: inSetIds })[0]?.parentId ?? null;
 }
 
 /** An issue in a link request: by id (digits) or by key. */
-export type IssueLinkEnd = { id: string } | { key: string };
+export type IssueLinkRequestEnd = { id: string } | { key: string };
 
-const linkEnd = (idOrKey: string): IssueLinkEnd => (/^\d+$/.test(idOrKey) ? { id: idOrKey } : { key: idOrKey });
+const linkEnd = (idOrKey: string): IssueLinkRequestEnd => (/^\d+$/.test(idOrKey) ? { id: idOrKey } : { key: idOrKey });
 
 /** The `POST /rest/api/3/issueLink` body that nests `child` under `parent` (each an issue id or key). */
 export function kpiParentLinkBody(
   hierarchy: KpiHierarchyLink,
   parent: string,
   child: string,
-): { type: { id: string }; inwardIssue: IssueLinkEnd; outwardIssue: IssueLinkEnd } {
+): { type: { id: string }; inwardIssue: IssueLinkRequestEnd; outwardIssue: IssueLinkRequestEnd } {
   return hierarchy.parentEnd === 'outward'
     ? { type: { id: hierarchy.linkTypeId }, inwardIssue: linkEnd(child), outwardIssue: linkEnd(parent) }
     : { type: { id: hierarchy.linkTypeId }, inwardIssue: linkEnd(parent), outwardIssue: linkEnd(child) };

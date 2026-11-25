@@ -1,10 +1,13 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn, within, userEvent, expect, waitFor, screen } from '@storybook/test';
-import type {
-  CatalogEntryDto,
-  PanelData,
-  PanelRowDto,
-  TimelineNodeDto,
+import {
+  NO_KPIS_MESSAGE,
+  type CatalogEntryDto,
+  type KpiSpaceAccess,
+  type KpiSpaceRef,
+  type PanelData,
+  type PanelRowDto,
+  type TimelineNodeDto,
 } from '@domain/index.js';
 import { IssuePanel } from './IssuePanel.js';
 import type { PanelController, UsePanel } from '@ui/data/usePanelData/index.js';
@@ -128,7 +131,7 @@ const SAVED_STATES: PanelData = {
 const estimateLine = (re: RegExp) => (_: string, el: Element | null) => el?.tagName === 'P' && re.test(el.textContent ?? '');
 
 /** Build a stub loader hook returning a fixed controller. */
-// This issue IS a KPI (lives in the KPI space): the panel renders the single-KPI
+// This issue IS a KPI (of the KPI work type): the panel renders the single-KPI
 // chart (KpiView) instead of the associate/target-editor form (Feature 04).
 const KPI_NODE: TimelineNodeDto = {
   id: 'n1',
@@ -180,6 +183,7 @@ function stub(over: Partial<PanelController> & { data: PanelData | null }): UseP
     save: over.save ?? (() => {}),
     remove: over.remove ?? (() => {}),
     record: over.record ?? (async () => {}),
+    ...(over.getKpiAccess ? { getKpiAccess: over.getKpiAccess } : {}),
   });
 }
 
@@ -339,50 +343,106 @@ export const NoCatalog: Story = {
   args: { usePanel: stub({ data: NO_CATALOG }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(c.getByText(/KPIs are not defined yet/i)).toBeInTheDocument();
-    await expect(c.queryByText('Associate a KPI')).not.toBeInTheDocument();
-    await expect(c.getByRole('button', { name: /define a KPI/i })).toBeInTheDocument();
+    // Spec 11 · 06 (Q4): no KPIs found — none yet, or none the user may see.
+    await expect(c.getByText(NO_KPIS_MESSAGE)).toBeInTheDocument();
+    await expect(c.queryByText(/KPI space/)).toBeNull();
+    await expect(c.queryByText('Set a KPI target')).not.toBeInTheDocument();
+    await expect(c.getByRole('button', { name: /Add KPI/i })).toBeInTheDocument();
   },
 };
 
-// ── Spec 10: the KPI space follows the user's Jira permissions ──────────────
+export const NoCatalogDark: Story = { ...NoCatalog, globals: { theme: 'dark' } };
 
-/** No Browse on the KPI project: explain that instead of "define a KPI", and offer no form. */
-export const NoAccess: Story = {
-  args: {
-    usePanel: stub({ data: { ...NO_CATALOG, access: { browse: false, create: false, edit: false, link: false } } }),
+// ── Spec 11 · 06: access per KPI space, looked up when "Record a value" is used ──
+
+const PORT: KpiSpaceRef = { id: '10400', key: 'PORT', name: 'Portfolio' };
+const READ_ONLY: KpiSpaceAccess = { browse: true, create: false, edit: false, link: false };
+/** SAVED_STATES with its KPIs in the Portfolio space. */
+const IN_PORTFOLIO: PanelData = {
+  ...SAVED_STATES,
+  rows: SAVED_STATES.rows.map((r, i) => ({ ...r, kpiKey: `PORT-${i + 1}` })),
+  catalog: SAVED_STATES.rows.map((r, i) => ({
+    id: r.kpiId,
+    key: `PORT-${i + 1}`,
+    name: r.name,
+    unit: r.unit,
+    direction: r.direction,
+    space: PORT,
+  })),
+};
+
+const refusedLookup = fn(async () => READ_ONLY);
+/**
+ * No Edit Issues in the KPI's space: the first "Record a value" looks the
+ * space up, then explains instead of opening the dialog, naming the space; the
+ * space's other targets then show disabled with the reason, and the space is
+ * asked once.
+ */
+export const RecordRefusedInKpiSpace: Story = {
+  args: { usePanel: stub({ data: IN_PORTFOLIO, getKpiAccess: refusedLookup }) },
+  play: async ({ canvasElement }) => {
+    refusedLookup.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]!);
+    const alert = await c.findByRole('alert');
+    await expect(alert).toHaveTextContent(
+      'Recording a value on PORT-4 needs Edit Issues permission on the Portfolio space. Ask a Jira admin.',
+    );
+    await expect(screen.queryByRole('dialog')).toBeNull();
+    for (const b of c.getAllByRole('button', { name: 'Record a value' })) await expect(b).toBeDisabled();
+    await expect(refusedLookup).toHaveBeenCalledTimes(1);
+    await userEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }));
+    await expect(c.queryByRole('alert')).toBeNull();
   },
+};
+
+export const RecordRefusedInKpiSpaceDark: Story = { ...RecordRefusedInKpiSpace, globals: { theme: 'dark' } };
+
+/** Jira couldn't answer the lookup: the record dialog opens anyway (Jira's refusal would explain a denied save). */
+export const RecordAccessLookupFails: Story = {
+  args: { usePanel: stub({ data: IN_PORTFOLIO, getKpiAccess: async () => null }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(c.getByText(/You don't have permission to view the KPI space/)).toBeInTheDocument();
-    await expect(c.queryByText(/KPIs are not defined yet/i)).not.toBeInTheDocument();
-    await expect(c.queryByRole('button', { name: /define a KPI/i })).not.toBeInTheDocument();
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]!);
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(c.queryByRole('alert')).toBeNull();
   },
 };
 
-/** Browse only: targets still show, but the nudge's Record a value is disabled with the reason. */
-export const ReadOnly: Story = {
-  args: {
-    usePanel: stub({ data: { ...SAVED_STATES, access: { browse: true, create: false, edit: false, link: false } } }),
-  },
-  play: async ({ canvasElement }) => {
-    const c = within(canvasElement);
-    const buttons = c.getAllByRole('button', { name: 'Record a value' });
-    await expect(buttons.length).toBeGreaterThan(0);
-    for (const b of buttons) await expect(b).toBeDisabled();
-  },
-};
+export const RecordAccessLookupFailsDark: Story = { ...RecordAccessLookupFails, globals: { theme: 'dark' } };
 
-/** The issue IS a KPI, but the user can't edit it: the chart shows, Record a value is disabled. */
+/** The issue IS a KPI, but the user can't edit in its space: the chart shows, Record a value is disabled naming the space. */
 export const KpiViewReadOnly: Story = {
   args: {
-    usePanel: stub({ data: { ...KPI_VIEW, access: { browse: true, create: false, edit: false, link: false } } }),
+    usePanel: stub({ data: { ...KPI_VIEW, kpiView: { ...KPI_VIEW.kpiView!, node: { ...KPI_NODE, space: PORT } }, access: READ_ONLY } }),
   },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(await c.findByRole('button', { name: 'Record a value' })).toBeDisabled();
+    const btn = await c.findByRole('button', { name: 'Record a value' });
+    await expect(btn).toBeDisabled();
+    await expect(btn.closest('[data-disabled-reason]')).toHaveAttribute(
+      'data-disabled-reason',
+      'Recording a value on KPI-1 needs Edit Issues permission on the Portfolio space. Ask a Jira admin.',
+    );
   },
 };
+
+export const KpiViewReadOnlyDark: Story = { ...KpiViewReadOnly, globals: { theme: 'dark' } };
+
+/** One parent rule (spec 11 · 06): a KPI linked under two parent KPIs in Jira is flagged on its own panel. */
+export const KpiViewTwoParents: Story = {
+  args: {
+    usePanel: stub({ data: { ...KPI_VIEW, kpiView: { ...KPI_VIEW.kpiView!, parentLinks: { count: 2, shownKey: 'PORT-12' } } } }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(await c.findByRole('note')).toHaveTextContent(
+      'Linked under 2 KPIs in Jira; showing PORT-12. Remove the other link in Jira.',
+    );
+  },
+};
+
+export const KpiViewTwoParentsDark: Story = { ...KpiViewTwoParents, globals: { theme: 'dark' } };
 
 export const PendingTargetDate: Story = {
   args: { usePanel: stub({ data: PENDING_DATE }) },

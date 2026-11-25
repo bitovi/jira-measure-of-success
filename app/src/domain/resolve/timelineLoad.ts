@@ -69,6 +69,7 @@ export function insertCreatedKpi(data: TimelineData, kpi: CreatedKpi): TimelineD
     undated: [],
     readings: [],
     children: [],
+    ...(kpi.space ? { space: kpi.space } : {}),
   });
   if (kpi.parentKpiId && containsKpi(data.roots, kpi.parentKpiId)) {
     const parentId = kpi.parentKpiId;

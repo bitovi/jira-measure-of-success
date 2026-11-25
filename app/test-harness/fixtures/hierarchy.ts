@@ -3,6 +3,7 @@ import type {
   KpiDefinition,
   KpiDirection,
   KpiReading,
+  KpiSpaceRef,
   DateFieldCatalog,
   HierarchyLevel,
   RollupConfig,
@@ -306,7 +307,7 @@ export interface TimelineTargetFixture {
 export interface KpiTreeNode {
   /** the KPI's Jira issue id */
   kpiId: string;
-  /** Jira issue key of the KPI issue (KPIs are issues in the KPI space) */
+  /** Jira issue key of the KPI issue (its prefix is its space, `KPI_SPACES`) */
   issueKey: string;
   name: string;
   unit: string;
@@ -361,6 +362,18 @@ function series(
 }
 const r0 = (v: number) => Math.round(v);
 const r1 = (v: number) => Math.round(v * 10) / 10;
+
+/**
+ * The spaces holding the harness KPIs (spec 11 · 06): the central KPI space,
+ * plus Operations (Order Throughput and its children, nested under the central
+ * space's # of Orders) and Finance (Costs). A KPI's space is its key's prefix.
+ */
+export const KPI_SPACES: Record<string, KpiSpaceRef> = {
+  KPI: { id: '10000', key: 'KPI', name: 'KPIs' },
+  OPS: { id: '10400', key: 'OPS', name: 'Operations' },
+  FIN: { id: '10401', key: 'FIN', name: 'Finance' },
+};
+export const CENTRAL_SPACE = KPI_SPACES.KPI;
 
 export const KPI_TREE: KpiTreeNode[] = [
   {
@@ -442,7 +455,7 @@ export const KPI_TREE: KpiTreeNode[] = [
           },
           {
             kpiId: '20006',
-            issueKey: 'KPI-6',
+            issueKey: 'OPS-1',
             name: 'Order Throughput',
             unit: 'orders/hr',
             direction: 'increase',
@@ -457,7 +470,7 @@ export const KPI_TREE: KpiTreeNode[] = [
             children: [
               {
                 kpiId: '20007',
-                issueKey: 'KPI-7',
+                issueKey: 'OPS-2',
                 name: 'Time To Checkout',
                 unit: 'seconds',
                 direction: 'decrease',
@@ -469,7 +482,7 @@ export const KPI_TREE: KpiTreeNode[] = [
               },
               {
                 kpiId: '20008',
-                issueKey: 'KPI-8',
+                issueKey: 'OPS-3',
                 name: 'Error Rate',
                 unit: '%',
                 direction: 'decrease',
@@ -487,7 +500,7 @@ export const KPI_TREE: KpiTreeNode[] = [
   },
   {
     kpiId: '20009',
-    issueKey: 'KPI-9',
+    issueKey: 'FIN-1',
     name: 'Costs',
     unit: 'USD',
     direction: 'decrease',

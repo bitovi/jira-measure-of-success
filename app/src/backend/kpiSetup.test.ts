@@ -177,17 +177,21 @@ describe('site configuration (Step 3)', () => {
     expect(after.timeline.byEndpoint('GET /rest/api/3/issuetype')).toBe(0);
   });
 
-  it('createKpi creates the configured work type (by id), or the type named KPI as before', async () => {
+  it('createKpi creates the configured work type by id: the derived type named KPI, or the saved one', async () => {
     const bodies: unknown[] = [];
     jira.intercept = (method, path, body) => {
       if (method === 'POST' && path === '/rest/api/3/issue') bodies.push(JSON.parse(String(body)).fields.issuetype);
       return undefined;
     };
+    expect((await call('createKpi', { projectId: '10000', name: 'A', unit: '', direction: null }, {})).error).toBeUndefined();
     jira.fixture.issueTypes.find((t) => t.id === KPI_TYPE)!.name = 'Metric';
-    await call('createKpi', { name: 'A', unit: '', direction: null }, {});
+    jira.fixture.projects.get('KPI')!.issueTypeNames = ['Metric'];
+    // Nothing saved and no type named KPI: no work type, so nothing is created (spec 11 · 06).
+    const refused = await call('createKpi', { projectId: '10000', name: 'B', unit: '', direction: null }, {});
+    expect(refused.error?.message).toMatch(/^No KPI work type is configured yet/);
     jira.fixture.kvs.set('kpi:config:site', { workType: { id: KPI_TYPE, name: 'Metric' }, fields: null, schemes: {} });
-    await call('createKpi', { name: 'B', unit: '', direction: null }, {});
-    expect(bodies).toEqual([{ name: 'KPI' }, { id: KPI_TYPE }]);
+    expect((await call('createKpi', { projectId: '10000', name: 'C', unit: '', direction: null }, {})).error).toBeUndefined();
+    expect(bodies).toEqual([{ id: KPI_TYPE }, { id: KPI_TYPE }]);
   });
 
   it('marks a deleted field, option or work type broken, keeping its id', async () => {

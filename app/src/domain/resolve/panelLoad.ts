@@ -149,7 +149,6 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
     catalog,
     issueDueDate: ctx.issue.due.date,
     issueDueRolledUp: ctx.issue.due.source === 'children',
-    ...(basis.access ? { access: basis.access } : {}),
   };
   return values ? data : { ...data, resolving: true };
 }

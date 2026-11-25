@@ -73,13 +73,31 @@ import { dateFieldSelection } from '../domain/index.js';
 
 describe('createKpiIssue', () => {
   const HIER = { linkTypeId: '10500', parentEnd: 'inward' as const };
+  const KPI_TYPE = { id: '10300' };
   beforeEach(() => {
     requestJira.mockClear();
   });
 
+  it('refuses without a space or a work type (spec 11 · 06), before any request', async () => {
+    await expect(createKpiIssue('', { name: 'Revenue', unit: '$', direction: null }, HIER, KPI_TYPE)).rejects.toThrow(
+      /^Choose a space for the new KPI/,
+    );
+    await expect(createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null }, HIER, null)).rejects.toThrow(
+      /^No KPI work type is configured yet/,
+    );
+    expect(requestJira).not.toHaveBeenCalled();
+  });
+
+  it('creates the KPI work type by id in the given space', async () => {
+    postResult = { ok: true, status: 201, json: async () => ({ id: '10051', key: 'PORT-3' }) };
+    await createKpiIssue('10400', { name: 'Margin', unit: '%', direction: null }, HIER, KPI_TYPE);
+    const body = JSON.parse((requestJira.mock.calls[0][1] as { body: string }).body) as { fields: Record<string, unknown> };
+    expect(body.fields).toMatchObject({ project: { id: '10400' }, issuetype: { id: '10300' } });
+  });
+
   it('refuses to nest (before creating anything) when no hierarchy link type is configured', async () => {
     await expect(
-      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, null),
+      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, null, KPI_TYPE),
     ).rejects.toThrow(/^KPI hierarchy is not set up/);
     expect(requestJira).not.toHaveBeenCalled();
   });
@@ -89,7 +107,7 @@ describe('createKpiIssue', () => {
     // return a KPI with an undefined key.
     postResult = { ok: false, status: 400, json: async () => ({ errorMessages: ['boom'] }) };
     await expect(
-      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: 'increase', parentKpiId: 'KPI-1' }, HIER),
+      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: 'increase', parentKpiId: 'KPI-1' }, HIER, KPI_TYPE),
     ).rejects.toThrow('Jira 400 while trying to create KPI issue "Revenue": boom');
 
     // No property write should have been attempted after the failed create.
@@ -106,7 +124,7 @@ describe('createKpiIssue', () => {
       unit: ' $ ',
       direction: 'increase',
       parentKpiId: 'KPI-1',
-    }, HIER);
+    }, HIER, KPI_TYPE);
 
     expect(created).toEqual({
       id: '10050',
@@ -149,7 +167,7 @@ describe('createKpiIssue', () => {
     it('deletes the just-created issue (no orphan root KPI, no duplicate on retry) and rethrows', async () => {
       linkFails({ ok: true, status: 204 });
       await expect(
-        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER),
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER, KPI_TYPE),
       ).rejects.toThrow('Jira 404 while trying to link KPI "KPI-7" under "KPI-1": No issue KPI-1');
       const del = requestJira.mock.calls.find(([, o]) => o?.method === 'DELETE');
       expect(String(del?.[0])).toBe('/rest/api/3/issue/KPI-7');
@@ -158,7 +176,7 @@ describe('createKpiIssue', () => {
     it('says the KPI was left behind when the rollback fails too', async () => {
       linkFails({ ok: false, status: 403 });
       await expect(
-        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER),
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER, KPI_TYPE),
       ).rejects.toThrow('KPI-7 was created without its parent; delete it in Jira.');
     });
   });

@@ -139,11 +139,11 @@ describe('reads', () => {
     expect(metaOf(data!).find((m) => m.key === 'KPI-2')).toEqual({ key: 'KPI-2', unit: FIELD_EDITED_UNIT, direction: null });
   });
 
-  it('the Timeline request count is unchanged: the field ids ride in the KPI-space search', async () => {
+  it('the field ids ride in the KPI search: a saved config adds no request (a derived one reads the work types once)', async () => {
     const before = await invoke<TimelineData>('not configured', 'getTimelineSkeleton');
     const after = await invoke<TimelineData>('migrated', 'getTimelineSkeleton');
-    expect(after.summary.byEndpoint).toEqual(before.summary.byEndpoint);
-    expect(after.summary.totalRequests).toBe(before.summary.totalRequests);
+    expect(before.summary.byEndpoint).toEqual({ ...after.summary.byEndpoint, 'GET /rest/api/3/issuetype': 1 });
+    expect(after.summary.totalRequests).toBe(before.summary.totalRequests - 1);
   });
 
   it('fetchKpiMeta: one GET with the fields (fields chosen), the property GET otherwise', async () => {
@@ -172,7 +172,7 @@ describe('writes', () => {
   const INCREASE = expect.objectContaining({ id: KPI_DIRECTION_OPTION_IDS.increase });
 
   it('createKpi sends the fields and a marked kpi-meta in one request, as the user', async () => {
-    const { data, jira, sent } = await invoke<CreatedKpi>('migrated', 'createKpi', { name: 'Churn', unit: '%', direction: 'decrease' });
+    const { data, jira, sent } = await invoke<CreatedKpi>('migrated', 'createKpi', { projectId: '10000', name: 'Churn', unit: '%', direction: 'decrease' });
     expect(sent.filter((s) => s.method === 'POST' && s.path === '/rest/api/3/issue')).toEqual([
       {
         method: 'POST',
@@ -193,7 +193,7 @@ describe('writes', () => {
   });
 
   it('createKpi with an empty unit and no direction sends no field values (kpi-meta still marked)', async () => {
-    const { data, jira, sent } = await invoke<CreatedKpi>('migrated', 'createKpi', { name: 'Blank', unit: '', direction: null }, undefined, 'text');
+    const { data, jira, sent } = await invoke<CreatedKpi>('migrated', 'createKpi', { projectId: '10000', name: 'Blank', unit: '', direction: null }, undefined, 'text');
     const body = sent.find((s) => s.path === '/rest/api/3/issue')!.body as { fields: Record<string, unknown> };
     expect(body.fields).not.toHaveProperty(KPI_UNIT_FIELD_ID);
     expect(body.fields).not.toHaveProperty(KPI_DIRECTION_FIELD_ID);
@@ -201,7 +201,7 @@ describe('writes', () => {
   });
 
   it('createKpi with the fields not chosen: an unmarked kpi-meta only, as before', async () => {
-    const { data, jira, sent } = await invoke<CreatedKpi>('not configured', 'createKpi', { name: 'Churn', unit: '%', direction: 'decrease' });
+    const { data, jira, sent } = await invoke<CreatedKpi>('not configured', 'createKpi', { projectId: '10000', name: 'Churn', unit: '%', direction: 'decrease' });
     const body = sent.find((s) => s.path === '/rest/api/3/issue')!.body as { fields: Record<string, unknown> };
     expect(Object.keys(body.fields).sort()).toEqual(['issuetype', 'project', 'summary']);
     expect(kpiMeta(jira, data!.id)).toEqual({ unit: '%', direction: 'decrease' });

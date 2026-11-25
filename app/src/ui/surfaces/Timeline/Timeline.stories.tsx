@@ -1,6 +1,13 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn, within, userEvent, expect, waitFor, screen } from '@storybook/test';
-import type { TimelineData, TimelineNodeDto } from '@domain/index.js';
+import {
+  KPI_WORK_TYPE_NOT_SET_UP,
+  NO_KPIS_MESSAGE,
+  type KpiSpaceAccess,
+  type KpiSpaceRef,
+  type TimelineData,
+  type TimelineNodeDto,
+} from '@domain/index.js';
 import { Timeline } from './Timeline.js';
 import type { TimelineController, UseTimeline } from '@ui/data/useTimelineData/index.js';
 
@@ -16,8 +23,12 @@ const src = (issue: string, type: string, title: string) => ({
   iconUrl: `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'><rect width='16' height='16' rx='3' fill='#5243AA'/></svg>`)}`,
 });
 
+const KPI_SPACE: KpiSpaceRef = { id: '10000', key: 'KPI', name: 'KPIs' };
+const PORT_SPACE: KpiSpaceRef = { id: '10400', key: 'PORT', name: 'Portfolio' };
+
 const node = (over: Partial<TimelineNodeDto> & { id: string; kpiId: string; name: string }): TimelineNodeDto => ({
   issueKey: 'KPI-0',
+  space: KPI_SPACE,
   unit: 'USD',
   direction: 'increase',
   depth: 0,
@@ -121,6 +132,7 @@ function stub(over: Partial<TimelineController>): UseTimeline {
     updateKpi: over.updateKpi ?? (async () => {}),
     searchIssues: over.searchIssues ?? (async () => []),
     addTarget: over.addTarget ?? (async () => {}),
+    ...(over.getKpiAccess ? { getKpiAccess: over.getKpiAccess } : {}),
   });
 }
 
@@ -401,82 +413,157 @@ export const EmptyTree: Story = {
   args: { useData: stub({ data: { today: '2026-07-10', roots: [] } }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(c.getByText(/No KPIs yet/i)).toBeInTheDocument();
-    // Add KPI is available even with an empty tree.
-    await expect(c.getByRole('button', { name: /Add KPI/i })).toBeInTheDocument();
+    // Spec 11 · 06 (Q4): one message for "none yet" and "none you can see".
+    await expect(c.getByText(NO_KPIS_MESSAGE)).toBeInTheDocument();
+    await expect(c.queryByText(/KPI space/)).toBeNull();
+    // Add KPI is available with an empty tree: in the toolbar and next to the message.
+    await expect(c.getAllByRole('button', { name: /Add KPI/i })).toHaveLength(2);
+    await userEvent.click(c.getAllByRole('button', { name: /Add KPI/i })[1]);
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
   },
 };
 
-// ── Spec 10: the KPI space follows the user's Jira permissions ──────────────
+export const EmptyTreeDark: Story = { ...EmptyTree, globals: { theme: 'dark' } };
 
-/** No Browse on the KPI project: the backend returns no KPIs and says why; Add KPI is disabled with the reason. */
-export const NoAccess: Story = {
-  args: {
-    useData: stub({
-      data: { today: '2026-07-10', roots: [], access: { browse: false, create: false, edit: false, link: false } },
+const openSettingsSpy = fn();
+/** No KPI work type configured yet (04): the empty Timeline says so, with Open Settings. */
+export const NoWorkType: Story = {
+  args: { useData: stub({ data: { today: '2026-07-10', roots: [], noWorkType: true } }), onOpenSettings: openSettingsSpy },
+  play: async ({ canvasElement }) => {
+    openSettingsSpy.mockClear();
+    const c = within(canvasElement);
+    await expect(c.getByText(/No KPI work type configured yet/)).toBeInTheDocument();
+    await expect(c.queryByText(NO_KPIS_MESSAGE)).toBeNull();
+    await userEvent.click(c.getByRole('button', { name: 'Open Settings' }));
+    await expect(openSettingsSpy).toHaveBeenCalledTimes(1);
+  },
+};
+
+export const NoWorkTypeDark: Story = { ...NoWorkType, globals: { theme: 'dark' } };
+
+// ── Spec 11 · 06: access per KPI space, looked up when an action is used ────
+
+const FULL: KpiSpaceAccess = { browse: true, create: true, edit: true, link: true };
+const READ_ONLY: KpiSpaceAccess = { browse: true, create: false, edit: false, link: false };
+
+/** KPIs in two spaces: Revenue (KPI, central) with Margin (Portfolio) nested under it. */
+const TWO_SPACES: TimelineData = {
+  today: '2026-07-10',
+  centralSpace: KPI_SPACE,
+  roots: [
+    node({
+      id: 'n1',
+      kpiId: '20001',
+      issueKey: 'KPI-1',
+      name: 'Revenue',
+      readings: [{ date: '2026-01-03', value: 1_000_000 }],
+      children: [
+        node({
+          id: 'n2',
+          kpiId: '20050',
+          issueKey: 'PORT-1',
+          name: 'Portfolio margin',
+          unit: '%',
+          depth: 1,
+          space: PORT_SPACE,
+          readings: [{ date: '2026-02-03', value: 12 }],
+        }),
+      ],
     }),
-  },
+  ],
+};
+
+const refusedRecordSpy = fn();
+const refusedLookups = fn(async (projectKey: string) => (projectKey === 'PORT' ? READ_ONLY : FULL));
+/**
+ * Recording on a KPI in a space where the user lacks Edit Issues: the first use
+ * looks the space up, then shows the reason naming that space instead of the
+ * dialog; the row's actions then show disabled with their reasons. A KPI in
+ * another space records fine, and each space is asked once.
+ */
+export const RefusedInAnotherSpace: Story = {
+  args: { useData: stub({ data: TWO_SPACES, record: refusedRecordSpy, getKpiAccess: refusedLookups }) },
   play: async ({ canvasElement }) => {
+    refusedRecordSpy.mockClear();
+    refusedLookups.mockClear();
     const c = within(canvasElement);
-    await expect(c.getByText(/You don't have permission to view the KPI space/)).toBeInTheDocument();
-    await expect(c.queryByText(/No KPIs yet/i)).toBeNull();
-    await expect(c.getByRole('button', { name: /Add KPI/i })).toBeDisabled();
+    const portRecord = () => c.getAllByRole('button', { name: 'Record a value' })[1];
+    await userEvent.click(portRecord());
+    const alert = await c.findByRole('alert');
+    await expect(alert).toHaveTextContent(
+      'Recording a value on PORT-1 needs Edit Issues permission on the Portfolio space. Ask a Jira admin.',
+    );
+    await expect(screen.queryByRole('dialog')).toBeNull();
+    await expect(portRecord()).toHaveAttribute('aria-disabled', 'true');
+    await expect(c.getAllByRole('button', { name: 'Edit KPI' })[1]).toHaveAttribute('aria-disabled', 'true');
+
+    // The central space's KPI is unaffected: its own lookup, then the dialog.
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]);
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(refusedLookups.mock.calls.map(([key]) => key)).toEqual(['PORT', 'KPI']);
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Cancel/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    // A second action in the same space reuses the answer.
+    await userEvent.click(c.getAllByRole('button', { name: 'Edit KPI' })[0]);
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(refusedLookups).toHaveBeenCalledTimes(2);
+    await expect(refusedRecordSpy).not.toHaveBeenCalled();
   },
 };
 
-const readOnlyRecordSpy = fn();
-/** Browse only: KPIs are visible, but Add KPI, add-child and record are disabled, each with its reason. */
-export const ReadOnly: Story = {
-  args: {
-    useData: stub({
-      data: { ...POPULATED, access: { browse: true, create: false, edit: false, link: false } },
-      record: readOnlyRecordSpy,
-    }),
-  },
-  play: async ({ canvasElement }) => {
-    readOnlyRecordSpy.mockClear();
-    const c = within(canvasElement);
-    const addKpi = c.getByRole('button', { name: /Add KPI/i });
-    await expect(addKpi).toBeDisabled();
-    await userEvent.hover(addKpi.closest('[data-disabled-reason]') as HTMLElement);
-    await expect(await screen.findByRole('tooltip')).toHaveTextContent(/Adding a KPI needs Create Issues permission/);
-    await userEvent.unhover(addKpi.closest('[data-disabled-reason]') as HTMLElement);
+export const RefusedInAnotherSpaceDark: Story = { ...RefusedInAnotherSpace, globals: { theme: 'dark' } };
 
-    const recordBtn = c.getAllByRole('button', { name: 'Record a value' })[0];
-    await expect(recordBtn).toHaveAttribute('aria-disabled', 'true');
-    await userEvent.click(recordBtn);
+/** While a space's access is looked up, the action shows a busy state and nothing opens yet. */
+export const CheckingAccess: Story = {
+  args: { useData: stub({ data: TWO_SPACES, getKpiAccess: () => new Promise<KpiSpaceAccess | null>(() => {}) }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    const record = c.getAllByRole('button', { name: 'Record a value' })[1];
+    await userEvent.click(record);
+    await waitFor(() => expect(record).toHaveAttribute('aria-busy', 'true'));
     await expect(screen.queryByRole('dialog')).toBeNull();
-    await expect(c.getAllByRole('button', { name: 'Add child KPI' })[0]).toHaveAttribute('aria-disabled', 'true');
-    const editBtn = c.getAllByRole('button', { name: 'Edit KPI' })[0];
-    await expect(editBtn).toHaveAttribute('aria-disabled', 'true');
-    await userEvent.click(editBtn);
+    // Clicking the track's past side (to record a value there) waits the same way.
+    const track = canvasElement.querySelectorAll<HTMLElement>('.group.relative.border-b')[1];
+    await userEvent.click(track);
+    await waitFor(() => expect(track).toHaveAttribute('data-access-pending', 'true'));
     await expect(screen.queryByRole('dialog')).toBeNull();
-    // The tip no longer offers recording.
-    await expect(c.queryByText(/click a past date to record a value/)).toBeNull();
-    // Value dots on the plot are disabled with the reason, and clicking one opens nothing.
-    const dot = canvasElement.querySelector<HTMLElement>('[data-reading]')!;
-    await expect(dot).toHaveAttribute('aria-disabled', 'true');
-    await expect(dot.getAttribute('title')).toMatch(/Recording a value needs Edit Issues permission/);
-    await userEvent.click(dot);
-    await expect(screen.queryByRole('dialog')).toBeNull();
-    await expect(readOnlyRecordSpy).not.toHaveBeenCalled();
   },
 };
 
-/** Create but no Link Issues: Add KPI works, but the parent picker is disabled with the reason. */
-export const CanAddButNotNest: Story = {
+export const CheckingAccessDark: Story = { ...CheckingAccess, globals: { theme: 'dark' } };
+
+/** When Jira can't answer the lookup, the action goes ahead (Jira's own refusal explains a denied save). */
+export const AccessLookupFails: Story = {
+  args: { useData: stub({ data: TWO_SPACES, getKpiAccess: async () => null }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[1]);
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(c.queryByRole('alert')).toBeNull();
+  },
+};
+
+export const AccessLookupFailsDark: Story = { ...AccessLookupFails, globals: { theme: 'dark' } };
+
+/** No Link Issues in the space new KPIs go to: "+" (add child) is refused with the reason; Add KPI needs no lookup. */
+export const AddChildRefusedWithoutLinkIssues: Story = {
   args: {
-    useData: stub({ data: { ...POPULATED, access: { browse: true, create: true, edit: true, link: false } } }),
+    useData: stub({ data: TWO_SPACES, getKpiAccess: async () => ({ ...FULL, link: false }) }),
   },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
+    await userEvent.click(c.getAllByRole('button', { name: 'Add child KPI' })[1]);
+    const alert = await c.findByRole('alert');
+    await expect(alert).toHaveTextContent(/Nesting a KPI under another needs Link Issues permission on the KPIs space\./);
+    await expect(screen.queryByRole('dialog')).toBeNull();
+    // Add KPI opens; its parent picker now knows nesting isn't allowed there.
     await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
     const dialog = await screen.findByRole('dialog');
     await expect(dialog.querySelector('[data-disabled-reason]')).toHaveAttribute(
       'data-disabled-reason',
-      expect.stringMatching(/^Nesting a KPI under another needs Link Issues permission/),
+      expect.stringMatching(/^Nesting a KPI under another needs Link Issues permission on the KPIs space/),
     );
-    await expect(c.getAllByRole('button', { name: 'Add child KPI' })[0]).toHaveAttribute('aria-disabled', 'true');
   },
 };
 
@@ -601,9 +688,10 @@ export const AddKpi: Story = {
     await userEvent.type(dialog.getByLabelText('KPI name'), 'Net Revenue');
     await userEvent.type(dialog.getByLabelText('KPI unit'), 'USD');
     await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    // Until 08's space chooser, a new KPI goes to the one space the KPIs are in.
     await waitFor(() =>
       expect(createSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Net Revenue', unit: 'USD', parentKpiId: null }),
+        expect.objectContaining({ projectId: '10000', name: 'Net Revenue', unit: 'USD', parentKpiId: null }),
       ),
     );
     // Saved → the modal closes.
@@ -615,6 +703,25 @@ export const AddKpi: Story = {
  * While the KPI is being created (a multi-second Jira round-trip) the modal
  * stays open: Create KPI shows a spinner, the fields and Cancel are disabled.
  */
+const chooseSpaceSpy = fn();
+/** KPIs in two spaces and no central space: until 08's space chooser, saving says to choose a space. */
+export const AddKpiChooseSpace: Story = {
+  args: { useData: stub({ data: { ...TWO_SPACES, centralSpace: null }, createKpi: chooseSpaceSpy }) },
+  play: async ({ canvasElement }) => {
+    chooseSpaceSpy.mockClear();
+    const c = within(canvasElement);
+    await userEvent.click(c.getByRole('button', { name: /Add KPI/i }));
+    const dialog = within(await screen.findByRole('dialog'));
+    await userEvent.type(dialog.getByLabelText('KPI name'), 'Net Revenue');
+    await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
+    const alert = within(await dialog.findByRole('alert'));
+    await expect(alert.getByText(/^Choose a space for the new KPI/)).toBeInTheDocument();
+    await expect(chooseSpaceSpy).not.toHaveBeenCalled();
+  },
+};
+
+export const AddKpiChooseSpaceDark: Story = { ...AddKpiChooseSpace, globals: { theme: 'dark' } };
+
 export const AddKpiSaving: Story = {
   args: { useData: stub({ data: POPULATED, createKpi: () => new Promise<void>(() => {}) }) },
   play: async ({ canvasElement }) => {
@@ -850,8 +957,8 @@ export const AddTarget: Story = {
 };
 
 /**
- * A failed save keeps the Add Target modal open with the error inside it; a
- * missing KPI space offers the same "Open Settings" action as the page banner.
+ * A failed save keeps the Add Target modal open with the error inside it; no
+ * KPI work type configured yet offers the same "Open Settings" action as the page.
  */
 export const AddTargetFailed: Story = {
   args: {
@@ -859,7 +966,7 @@ export const AddTargetFailed: Story = {
       data: POPULATED,
       searchIssues: searchIssuesStub,
       addTarget: async () => {
-        throw new Error('KPI space is not set up — configure it in Settings first.');
+        throw new Error(`${KPI_WORK_TYPE_NOT_SET_UP} — choose one in Settings first.`);
       },
     }),
   },
@@ -872,7 +979,7 @@ export const AddTargetFailed: Story = {
     await userEvent.type(dialog.getByLabelText('Target value'), '2000000');
     await userEvent.click(dialog.getByRole('button', { name: 'Add target' }));
     const alert = within(await dialog.findByRole('alert'));
-    await expect(alert.getByText(/KPI space isn’t set up/i)).toBeInTheDocument();
+    await expect(alert.getByText(/No KPI work type configured yet/i)).toBeInTheDocument();
     await expect(alert.getByRole('button', { name: /Open Settings/i })).toBeInTheDocument();
     await expect(dialog.getByLabelText('Target value')).toHaveValue('2000000');
   },

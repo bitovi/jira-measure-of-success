@@ -43,7 +43,10 @@ export function loadKpiSiteConfig(): Promise<LoadedKpiSiteConfig> {
       if (project) space = { key: space.key, projectId: project.id, name: project.name };
     }
     // The work type is only derived (the type named KPI) when nothing is saved yet.
-    const issueTypes = parseStoredKpiSiteConfig(stored) ? null : await listIssueTypes().catch(() => null);
+    // A team-managed space's own "KPI" type is never the KPI work type (spec 11 · 06).
+    const issueTypes = parseStoredKpiSiteConfig(stored)
+      ? null
+      : await listIssueTypes().then((types) => types.filter((t) => !t.projectScoped)).catch(() => null);
     return kpiSiteConfigFrom({ stored, space, hierarchy, issueTypes });
   });
 }
