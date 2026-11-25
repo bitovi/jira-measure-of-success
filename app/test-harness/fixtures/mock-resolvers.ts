@@ -17,6 +17,7 @@ import {
   readOwnDates,
   encodeReadingValue,
   groupByRelationship,
+  isKpiIssueId,
   isValidProjectKey,
   normalizeProjectKey,
   readingsFromChangelog,
@@ -121,7 +122,7 @@ function catalogDto(): CatalogEntryDto[] {
     for (const n of nodes) {
       const readings = readingsFor(n.kpiId);
       const latest = readings.length ? readings[readings.length - 1].value : null;
-      out.push({ id: n.kpiId, name: n.name, unit: n.unit, direction: n.direction, currentValue: latest, depth });
+      out.push({ id: n.kpiId, key: n.issueKey, name: n.name, unit: n.unit, direction: n.direction, currentValue: latest, depth });
       if (n.children) walk(n.children, depth + 1);
     }
   };
@@ -234,7 +235,7 @@ export function getPanelData(issueId: string): PanelData {
   // Feature 04: when the panel is opened ON a KPI issue (its id/key names a KPI
   // in the KPI space), return the single-KPI chart payload instead of the
   // associate/target-editor rows. In the harness, open it via
-  // `?surface=issue&issueId=KPI-1` (or the KPI id, e.g. `revenue`).
+  // `?surface=issue&issueId=KPI-1` (or the KPI's issue id, e.g. `20001`).
   const kpiNode = findKpiByRef(kpiTree, issueId);
   if (kpiNode) {
     timelineIdSeq = 1;
@@ -276,12 +277,14 @@ export function getPanelData(issueId: string): PanelData {
     assignment?: Assignment,
   ) => {
     const def = CATALOG.find((k) => k.id === kpiId);
+    const kpiKey = findKpiNode(kpiTree, kpiId)?.issueKey ?? kpiId;
     if (!assignment) {
       // Don't offer to track a parent's target on a KPI that no longer exists.
       if (!def) return;
       rows.push({
         kpiId,
-        name: def?.name ?? kpiId,
+        kpiKey,
+        name: def?.name ?? kpiKey,
         unit: def?.unit ?? '',
         direction: def?.direction ?? null,
         target: null,
@@ -304,7 +307,8 @@ export function getPanelData(issueId: string): PanelData {
     if (!def) {
       rows.push({
         kpiId,
-        name: kpiId,
+        kpiKey,
+        name: kpiKey,
         unit: '',
         direction: null,
         target: assignment.target,
@@ -338,7 +342,8 @@ export function getPanelData(issueId: string): PanelData {
     });
     rows.push({
       kpiId,
-      name: def?.name ?? kpiId,
+      kpiKey,
+      name: def?.name ?? kpiKey,
       unit: def?.unit ?? '',
       direction: def?.direction ?? null,
       target: assignment.target,
@@ -386,7 +391,8 @@ export function getPanelList(issueId: string): PanelListData {
       own: issue.assignments,
       parentKpiIds: [...new Set((parent?.assignments ?? []).map((a) => a.kpiId))],
       catalog: catalogDto().map((c) => ({ ...c, currentValue: null })),
-      // The harness has no search-index lag: a targeted KPI outside the catalog is deleted.
+      // The harness has no search-index lag: a targeted KPI outside the catalog is
+      // deleted (EPIC-231's key-only reference is one, read without asking Jira).
       deletedKpiIds: [
         ...new Set([...issue.assignments, ...(parent?.assignments ?? [])].map((a) => a.kpiId)),
       ].filter((id) => !CATALOG.some((k) => k.id === id)),
@@ -661,6 +667,11 @@ export function recordValue(kpiId: string, date: string, value: number | null): 
   return null;
 }
 
+/** A KPI's issue key, for messages (null when the id names no KPI). */
+export function kpiKeyOf(kpiId: string | null | undefined): string | null {
+  return kpiId ? (findKpiNode(kpiTree, kpiId)?.issueKey ?? null) : null;
+}
+
 function findKpiNode(nodes: KpiTreeNode[], kpiId: string): KpiTreeNode | undefined {
   for (const n of nodes) {
     if (n.kpiId === kpiId) return n;
@@ -670,15 +681,17 @@ function findKpiNode(nodes: KpiTreeNode[], kpiId: string): KpiTreeNode | undefin
   return undefined;
 }
 
-function slugifyKpi(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'kpi';
-}
-
-function uniqueKpiId(base: string): string {
-  let id = base;
-  let n = 2;
-  while (findKpiNode(kpiTree, id)) id = `${base}-${n++}`;
-  return id;
+/** A fresh numeric issue id for a newly created KPI (KPI ids are issue ids). */
+function nextKpiId(): string {
+  let max = 20_000;
+  const walk = (nodes: KpiTreeNode[]) => {
+    for (const n of nodes) {
+      if (isKpiIssueId(n.kpiId)) max = Math.max(max, Number(n.kpiId));
+      if (n.children) walk(n.children);
+    }
+  };
+  walk(kpiTree);
+  return String(max + 1);
 }
 
 /** Generate a fresh, plausible KPI issue key (KPI-N) for a newly created KPI. */
@@ -703,7 +716,7 @@ export function createKpi(input: CreateKpiInput): CreatedKpi {
   if (input.parentKpiId && getKpiHierarchy().state !== 'ready') {
     throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
   }
-  const kpiId = uniqueKpiId(slugifyKpi(input.name));
+  const kpiId = nextKpiId();
   const node: KpiTreeNode = {
     kpiId,
     issueKey: nextIssueKey(),
@@ -719,7 +732,7 @@ export function createKpi(input: CreateKpiInput): CreatedKpi {
   if (parent) (parent.children ??= []).push(node);
   else kpiTree.push(node);
   return {
-    id: `created-${node.issueKey}`,
+    id: kpiId,
     kpiId,
     issueKey: node.issueKey,
     name: node.name,
@@ -793,7 +806,7 @@ export function updateKpi(payload: unknown): UpdateKpiResult {
   if (input.direction !== undefined) node.direction = input.direction;
   return {
     kpi: {
-      id: `kpi-${node.kpiId}`,
+      id: node.kpiId,
       kpiId: node.kpiId,
       issueKey: node.issueKey,
       name: node.name,
@@ -925,7 +938,8 @@ export function resetMigrations(mode: MigrationsMode = migrationsMode()): void {
       dto: {
         id: 'kpi-target-refs-to-ids',
         title: 'Point targets at KPI ids',
-        description: 'Saves the KPI id next to the key on every target, so targets survive a KPI moving space.',
+        description:
+          "Saves each KPI's issue id next to its key on every target, so targets keep working when a KPI moves to another space.",
         writeAs: 'app',
         dependsOn: [],
       },

@@ -29,10 +29,15 @@ modules:
       entityType: issue
       propertyKey: kpi-assignments
       values:
+        # KPI keys. The customer's reporting app searches it (spec 11, Compatibility);
+        # this app no longer does. No longer written after the cleanup release (09).
         - path: kpiIds
           type: text
           searchAlias: kpiIds
-        # Spec 11 · 03: KPI ids (exact-match discovery) and the migration's marker.
+        # Spec 11 · 03: KPI issue ids, exact match — Timeline discovery
+        # (`kpiIssueIds IS NOT EMPTY`) and "who targets KPI X" lookups. And
+        # `refsVersion: 2`, stamped once a work item's references have ids: the
+        # `kpi-target-refs-to-ids` migration counts `refsVersion IS EMPTY` as pending.
         - path: kpiIssueIds
           type: string
           searchAlias: kpiIssueIds

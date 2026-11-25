@@ -151,8 +151,8 @@ export function IssuePanel({
                   onRemove={() => remove(row.kpiId)}
                   onRecord={() => setRecordFor(row)}
                   recordBlocked={recordBlocked}
-                  kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiId}` : `/browse/${row.kpiId}`}
-                  onOpenKpi={() => void onOpenIssue(row.kpiId)}
+                  kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiKey}` : `/browse/${row.kpiKey}`}
+                  onOpenKpi={() => void onOpenIssue(row.kpiKey)}
                 />
               ),
             )}

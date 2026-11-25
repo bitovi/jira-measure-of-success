@@ -161,7 +161,8 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     }, null);
     ctx.rootKey = created.issueKey;
     expect(ctx.rootKey).toBeTruthy();
-    expect(created).toMatchObject({ kpiId: ctx.rootKey, name: 'E2E Revenue', unit: '$', parentKpiId: null });
+    // Spec 11 · 03: a KPI's id is its issue id; the key is display-only.
+    expect(created).toMatchObject({ kpiId: created.id, name: 'E2E Revenue', unit: '$', parentKpiId: null });
   });
 
   it('fetchKpiMeta → round-trips unit/direction', async () => {
@@ -241,7 +242,7 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
   it('writeAssignments + fetchAssignments → entity-property round-trip', async () => {
     expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
     const assignment: Assignment = {
-      kpiId: ctx.rootKey!,
+      kpiId: ctx.rootId!,
       inheritFromParent: false,
       target: 100,
       targetType: 'absolute',
@@ -252,16 +253,17 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
       updatedBy: ctx.leadAccountId!,
       updatedAt: Date.now(),
     };
-    await writeAssignments(ctx.rootId!, [assignment]);
+    // Looks the KPI's key up as the app (an `id in (…)` search) for the customer's `kpiId`.
+    await writeAssignments(ctx.rootId!, [assignment], null);
     const read = await fetchAssignments(ctx.rootId!);
     expect(read).toHaveLength(1);
-    expect(read[0].kpiId).toBe(ctx.rootKey);
+    expect(read[0].kpiId).toBe(ctx.rootId);
     expect(read[0].target).toBe(100);
   });
 
-  it('fetchTargetContributions → discovers the targeted issue via the kpiIds index', async () => {
+  it('fetchTargetContributions → discovers the targeted issue via the kpiIssueIds index', async () => {
     expect(ctx.rootKey, 'requires the writeAssignments round-trip to have run').toBeTruthy();
-    // The denormalized `kpiIds` search index (written by writeAssignments) trails
+    // The denormalized `kpiIssueIds` search index (written by writeAssignments) trails
     // the property write by a few seconds, so poll the `IS NOT EMPTY` query until
     // the issue we just targeted shows up.
     const contributions = await pollFor(
@@ -269,9 +271,9 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
       (c) => c.issues.some((i) => i.issueKey === ctx.rootKey),
     );
     const mine = contributions.issues.find((i) => i.issueKey === ctx.rootKey);
-    expect(mine, `issue ${ctx.rootKey} not surfaced by the kpiIds IS NOT EMPTY search`).toBeTruthy();
+    expect(mine, `issue ${ctx.rootKey} not surfaced by the kpiIssueIds IS NOT EMPTY search`).toBeTruthy();
     expect(
-      mine!.assignments.some((a) => a.kpiId === ctx.rootKey && a.target === 100),
+      mine!.assignments.some((a) => a.kpiId === ctx.rootId && a.target === 100),
       'the discovered issue should carry the target we wrote',
     ).toBe(true);
   });

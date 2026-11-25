@@ -19,13 +19,14 @@ import type { PanelController, UsePanel } from '@ui/data/usePanelData/index.js';
 // costs is a separate root) so the associate-form picker can indent options
 // to show the parent/child relationship.
 const CATALOG: CatalogEntryDto[] = [
-  { id: 'revenue', name: 'Revenue', unit: 'USD', direction: 'increase', depth: 0 },
-  { id: 'orders', name: '# of Orders', unit: 'count', direction: 'increase', depth: 1 },
-  { id: 'stores', name: 'Number of Stores', unit: 'count', direction: 'increase', depth: 2 },
-  { id: 'costs', name: 'Costs', unit: 'USD', direction: 'decrease', depth: 0 },
+  { id: '20001', key: 'KPI-1', name: 'Revenue', unit: 'USD', direction: 'increase', depth: 0 },
+  { id: '20002', key: 'KPI-2', name: '# of Orders', unit: 'count', direction: 'increase', depth: 1 },
+  { id: '20003', key: 'KPI-3', name: 'Number of Stores', unit: 'count', direction: 'increase', depth: 2 },
+  { id: '20009', key: 'KPI-9', name: 'Costs', unit: 'USD', direction: 'decrease', depth: 0 },
 ];
 
 const row = (over: Partial<PanelRowDto> & { kpiId: string }): PanelRowDto => ({
+  kpiKey: CATALOG.find((k) => k.id === over.kpiId)?.key ?? over.kpiId,
   name: over.kpiId,
   unit: 'USD',
   direction: 'increase',
@@ -52,7 +53,7 @@ const ALL_GROUPS: PanelData = {
   issueDueRolledUp: false,
   rows: [
     row({
-      kpiId: 'revenue',
+      kpiId: '20001',
       name: 'Revenue',
       target: 100_000,
       relationship: 'shared',
@@ -60,8 +61,8 @@ const ALL_GROUPS: PanelData = {
       targetDate: { date: '2026-10-31', pending: false, source: '+1 mo after INIT-48 due, own date' },
       dueDate: '2026-09-30',
     }),
-    row({ kpiId: 'stores', name: 'Number of Stores', unit: 'count', target: 250, relationship: 'onlyHere', targetDate: { date: '2026-09-30', pending: false, source: 'absolute date' } }),
-    row({ kpiId: 'costs', name: 'Costs', unit: 'USD', direction: 'decrease', target: null, targetType: null, targetDate: null, dueTiming: null, relationship: 'onParentNotTracked', resolvedValue: null, displayState: null, dueDate: null }),
+    row({ kpiId: '20003', name: 'Number of Stores', unit: 'count', target: 250, relationship: 'onlyHere', targetDate: { date: '2026-09-30', pending: false, source: 'absolute date' } }),
+    row({ kpiId: '20009', name: 'Costs', unit: 'USD', direction: 'decrease', target: null, targetType: null, targetDate: null, dueTiming: null, relationship: 'onParentNotTracked', resolvedValue: null, displayState: null, dueDate: null }),
   ],
 };
 
@@ -72,7 +73,7 @@ const PENDING_DATE: PanelData = {
   issueDueRolledUp: false,
   rows: [
     row({
-      kpiId: 'revenue',
+      kpiId: '20001',
       name: 'Revenue',
       target: 1_500_000,
       relationship: 'onlyHere',
@@ -131,7 +132,7 @@ const estimateLine = (re: RegExp) => (_: string, el: Element | null) => el?.tagN
 // chart (KpiView) instead of the associate/target-editor form (Feature 04).
 const KPI_NODE: TimelineNodeDto = {
   id: 'n1',
-  kpiId: 'revenue',
+  kpiId: '20001',
   issueKey: 'KPI-1',
   name: 'Revenue',
   unit: 'USD',
@@ -248,9 +249,9 @@ export const OpenKpiIssue: Story = {
     openKpiSpy.mockClear();
     const c = within(canvasElement);
     const link = c.getByRole('link', { name: 'Number of Stores' });
-    await waitFor(() => expect(link).toHaveAttribute('href', 'https://example.atlassian.net/browse/stores'));
+    await waitFor(() => expect(link).toHaveAttribute('href', 'https://example.atlassian.net/browse/KPI-3'));
     await userEvent.click(link);
-    await expect(openKpiSpy).toHaveBeenCalledWith('stores');
+    await expect(openKpiSpy).toHaveBeenCalledWith('KPI-3');
     // "On parent, not tracked here" rows aren't target cards — no link
     await expect(c.queryByRole('link', { name: 'Costs' })).not.toBeInTheDocument();
   },
@@ -272,7 +273,7 @@ export const TrackThisPrefillsForm: Story = {
     await waitFor(() => expect(form.getByLabelText('Target value')).toHaveFocus());
     await userEvent.type(form.getByLabelText('Target value'), '-5');
     await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
-    await expect(trackSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ kpiId: 'costs', target: -5, targetType: 'percent' }));
+    await expect(trackSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ kpiId: '20009', target: -5, targetType: 'percent' }));
   },
 };
 
@@ -494,7 +495,7 @@ export const EditRoundTrip: Story = {
     await userEvent.click(card.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(editSaveSpy).toHaveBeenCalledTimes(1));
     await expect(editSaveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kpiId: 'revenue', target: 123456, targetType: 'absolute' }),
+      expect.objectContaining({ kpiId: '20001', target: 123456, targetType: 'absolute' }),
     );
   },
 };
@@ -554,7 +555,7 @@ export const CardMenu: Story = {
     await expect(dialog.getByText('Remove this KPI target?')).toBeInTheDocument();
     await expect(menuRemoveSpy).not.toHaveBeenCalled();
     await userEvent.click(dialog.getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(menuRemoveSpy).toHaveBeenCalledWith('revenue'));
+    await waitFor(() => expect(menuRemoveSpy).toHaveBeenCalledWith('20001'));
   },
 };
 
@@ -591,7 +592,7 @@ export const EditTargetDate: Story = {
     await waitFor(() => expect(dateSaveSpy).toHaveBeenCalledTimes(1));
     await expect(dateSaveSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        kpiId: 'revenue',
+        kpiId: '20001',
         timing: expect.objectContaining({ due: expect.objectContaining({ mode: 'relative', offsetMonths: 4 }) }),
       }),
     );
@@ -643,7 +644,7 @@ export const EditDateTypeRoundTrip: Story = {
 /** The form previews the exact card it will create, and flags a bet against the KPI's direction. */
 const formSaveSpy = fn();
 export const FormPreview: Story = {
-  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === 'stores' ? { ...k, currentValue: 250 } : k)) }, save: formSaveSpy }) },
+  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === '20003' ? { ...k, currentValue: 250 } : k)) }, save: formSaveSpy }) },
   play: async ({ canvasElement }) => {
     formSaveSpy.mockClear();
     const c = within(canvasElement);
@@ -666,7 +667,7 @@ export const FormPreview: Story = {
     await expect(form.getByText(/Double-check the sign/)).toBeInTheDocument();
     await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
     await expect(formSaveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kpiId: 'stores', target: -2, targetType: 'percent' }),
+      expect.objectContaining({ kpiId: '20003', target: -2, targetType: 'percent' }),
     );
   },
 };
@@ -674,7 +675,7 @@ export const FormPreview: Story = {
 /** An additive ("more") target: `+100` on # of Orders previews latest + 100 and saves as `relative`. */
 const amountSaveSpy = fn();
 export const FormAmountChange: Story = {
-  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === 'orders' ? { ...k, currentValue: 1200 } : k)) }, save: amountSaveSpy }) },
+  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === '20002' ? { ...k, currentValue: 1200 } : k)) }, save: amountSaveSpy }) },
   play: async ({ canvasElement }) => {
     amountSaveSpy.mockClear();
     const c = within(canvasElement);
@@ -693,7 +694,7 @@ export const FormAmountChange: Story = {
     await expect(form.getByText(/Double-check the sign/)).toBeInTheDocument();
     await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
     await expect(amountSaveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kpiId: 'orders', target: -100, targetType: 'relative' }),
+      expect.objectContaining({ kpiId: '20002', target: -100, targetType: 'relative' }),
     );
   },
 };
@@ -719,6 +720,6 @@ export const KpiIssue: Story = {
     const dialog = within(await screen.findByRole('dialog'));
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
-    await waitFor(() => expect(kpiRecordSpy).toHaveBeenCalledWith('revenue', '2026-07-10', 1_300_000));
+    await waitFor(() => expect(kpiRecordSpy).toHaveBeenCalledWith('20001', '2026-07-10', 1_300_000));
   },
 };

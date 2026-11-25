@@ -1,5 +1,6 @@
 import type { MigrationBatchResult, MigrationFailure, MigrationStatus } from '../../domain/index';
 import type { RequestJira } from '../requestLog';
+import { kpiTargetRefsToIds } from './kpiTargetRefsToIds';
 
 /**
  * Data migrations (spec 11 · 02): moving existing data to new storage, run by a
@@ -36,13 +37,17 @@ export const MIGRATION_BATCH_SIZE = 25;
 /** Per-item writes in flight at once. */
 export const MIGRATION_WRITE_CONCURRENCY = 5;
 
-/** Every migration, in the order they run. Later stages add theirs here. */
-const MIGRATIONS: Migration[] = [];
+/**
+ * Every migration, in the order they run. Later stages add theirs here. A
+ * function, not a constant: the migrations import this module's helpers, so the
+ * list can't be built while this module is still loading.
+ */
+const MIGRATIONS = (): Migration[] => [kpiTargetRefsToIds];
 
 let registryOverride: readonly Migration[] | null = null;
 
 export function migrationRegistry(): readonly Migration[] {
-  return registryOverride ?? MIGRATIONS;
+  return registryOverride ?? MIGRATIONS();
 }
 
 /** Tests only: replace the registry (null restores the real one). */

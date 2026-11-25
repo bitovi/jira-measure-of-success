@@ -110,7 +110,7 @@ describe('createKpiIssue', () => {
 
     expect(created).toEqual({
       id: '10050',
-      kpiId: 'KPI-7',
+      kpiId: '10050',
       issueKey: 'KPI-7',
       name: 'Revenue',
       unit: '$',
@@ -247,9 +247,9 @@ describe('writeAssignments', () => {
     requestJira.mockClear();
   });
 
-  it('writes a denormalized kpiIds index so the property is JQL-searchable', async () => {
-    // The manifest indexes kpi-assignments -> kpiIds; without writing kpiIds the
-    // index stays empty and the timeline can never discover targeted KPIs.
+  it('writes both index arrays (kpiIssueIds for discovery, kpiIds keys for the customer app) so the property is JQL-searchable', async () => {
+    // The manifest indexes kpi-assignments -> kpiIssueIds / kpiIds; without
+    // writing them the index stays empty and the timeline can't discover targets.
     putResult = { ok: true, status: 200 };
     const base = {
       inheritFromParent: false,
@@ -262,19 +262,40 @@ describe('writeAssignments', () => {
       updatedBy: 'acc-jm',
       updatedAt: 0,
     };
-    await writeAssignments('10001', [
-      { kpiId: 'revenue', ...base },
-      { kpiId: 'costs', ...base },
-    ]);
+    await writeAssignments(
+      '10001',
+      [
+        { kpiId: '20001', ...base },
+        { kpiId: '20002', ...base },
+      ],
+      null,
+      new Map([
+        ['20001', 'KPI-1'],
+        ['20002', 'KPI-2'],
+      ]),
+    );
 
     const putCall = requestJira.mock.calls.find(
       ([, opts]) => (opts as { method?: string } | undefined)?.method === 'PUT',
     );
     expect(putCall).toBeDefined();
     const [, putOpts] = putCall as [unknown, { body: string }];
-    const body = JSON.parse(putOpts.body) as { assignments: unknown[]; kpiIds: string[] };
-    expect(body.kpiIds).toEqual(['revenue', 'costs']);
-    expect(body.assignments).toHaveLength(2);
+    const body = JSON.parse(putOpts.body) as {
+      assignments: Array<{ kpiId: string; kpiIssueId: string }>;
+      kpiIds: string[];
+      kpiIssueIds: string[];
+      refsVersion: number;
+    };
+    expect(body.kpiIssueIds).toEqual(['20001', '20002']);
+    expect(body.kpiIds).toEqual(['KPI-1', 'KPI-2']);
+    expect(body.assignments.map((a) => [a.kpiIssueId, a.kpiId])).toEqual([
+      ['20001', 'KPI-1'],
+      ['20002', 'KPI-2'],
+    ]);
+    // A first write on an issue with no targets yet is stamped as migrated.
+    expect(body.refsVersion).toBe(2);
+    // Every key was already known: no lookup.
+    expect(requestJira.mock.calls.filter(([r]) => String(r).includes('/search/jql'))).toEqual([]);
   });
 
   it('throws when Jira rejects the write (e.g. no Edit Issues permission)', async () => {
@@ -283,7 +304,7 @@ describe('writeAssignments', () => {
       status: 403,
       json: async () => ({ errorMessages: ['You do not have permission to edit issues.'] }),
     };
-    await expect(writeAssignments('10001', [])).rejects.toThrow(
+    await expect(writeAssignments('10001', [], null)).rejects.toThrow(
       'Jira 403 while trying to save targets on issue 10001: You do not have permission to edit issues.',
     );
   });

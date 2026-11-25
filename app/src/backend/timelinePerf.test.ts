@@ -131,7 +131,7 @@ describe('getTimelineData at scale', () => {
     const epic = jira.fixture.issues.get(epicId)!;
     expect(epic.key).toBe('APP-10');
     expect(epic.due).toBeNull();
-    const marker = nodes.find((n) => n.kpiId === 'KPI-10')!.targets.find((t) => t.source.issue === 'APP-10');
+    const marker = nodes.find((n) => n.issueKey === 'KPI-10')!.targets.find((t) => t.source.issue === 'APP-10');
     expect(marker?.date).toBe(latestDue(jira.fixture, epicId));
 
     // Changed by spec 08 (targets carry `relative`); identical to the previous digest with it stripped.
@@ -139,9 +139,17 @@ describe('getTimelineData at scale', () => {
     // Changed by PR #3 review (marker status uses the shared displayState rule); identical to the previous digest with `status` stripped.
     // `detail` (the tooltip's bet + resolution) is left out so this still guards the rest of the output.
     // Spec 10 added `access` (the user's KPI-space permissions); left out, so the digest is unchanged.
+    // Spec 11 · 03: a node's kpiId is its issue id. Read on the migrated fixture, the
+    // output with kpiId mapped back to the key matches the digest of the key-based code.
     expect(data.access).toEqual({ browse: true, create: true, edit: true, link: true });
+    expect(nodes.every((n) => n.kpiId === n.id && /^\d+$/.test(n.kpiId))).toBe(true);
+    const asBefore = (n: TimelineNodeDto): TimelineNodeDto => ({ ...n, kpiId: n.issueKey, children: n.children.map(asBefore) });
     const digest = createHash('sha256')
-      .update(JSON.stringify(data, (key, value) => (key === 'detail' || key === 'access' ? undefined : value)))
+      .update(
+        JSON.stringify({ ...data, roots: data.roots.map(asBefore) }, (key, value) =>
+          key === 'detail' || key === 'access' ? undefined : value,
+        ),
+      )
       .digest('hex');
     expect(digest).toMatchInlineSnapshot(`"d1eb83616cf65f687391c5f7297dc8cb1cb2e9ca27f449acf3b3db414fdbe0ad"`);
   });
@@ -156,7 +164,7 @@ describe('getTimelineData at scale', () => {
   it('an unparseable kpi-assignments property yields no targets for that issue instead of failing', async () => {
     vi.resetModules();
     const fixture = buildScaleFixture({ initiatives: 1, epicsPerInitiative: 3 });
-    fixture.issues.get(fixture.contributorIds[1])!.properties['kpi-assignments'] = { assignments: 'nope' };
+    fixture.issues.get(fixture.contributorIds[1])!.properties['kpi-assignments'] = { assignments: 'nope', kpiIssueIds: ['1000'] };
     h.jira = createMockJira(fixture);
     const { fetchTargetContributions } = await import('./jira');
     const { issues } = await fetchTargetContributions();
@@ -189,8 +197,8 @@ describe('getTimelineData at scale', () => {
         expect(n.undated).toEqual([]);
         expect(n.readings).toHaveLength(DEFAULT_SCALE.readingsPerKpi);
       }
-      expect(nodes.find((n) => n.kpiId === 'KPI-1')).toMatchObject({ unit: '%', direction: 'increase' });
-      expect(nodes.find((n) => n.kpiId === 'KPI-2')).toMatchObject({ unit: 'count', direction: 'decrease' });
+      expect(nodes.find((n) => n.kpiId === '1000')).toMatchObject({ issueKey: 'KPI-1', unit: '%', direction: 'increase' });
+      expect(nodes.find((n) => n.kpiId === '1001')).toMatchObject({ issueKey: 'KPI-2', unit: 'count', direction: 'decrease' });
     });
 
     it('the /field lookup starts together with the config read (not after it)', async () => {

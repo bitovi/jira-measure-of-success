@@ -52,7 +52,10 @@ export interface ResolvedTargetValueDto {
 }
 
 export interface PanelRowDto {
+  /** the KPI's Jira issue id (spec 11 · 03); a deleted KPI's key-only reference keeps its key */
   kpiId: string;
+  /** the KPI's issue key, for labels and `/browse/{key}` links (the id when Jira didn't give one) */
+  kpiKey: string;
   name: string;
   unit: string;
   direction: KpiDirection | null;
@@ -104,7 +107,10 @@ export interface PanelRowDto {
 }
 
 export interface CatalogEntryDto {
+  /** the KPI's Jira issue id */
   id: string;
+  /** the KPI's issue key (display only) */
+  key: string;
   name: string;
   unit: string;
   direction: KpiDirection | null;
@@ -149,14 +155,15 @@ export interface PanelBasis {
   closed: boolean;
   /** the issue's own targets */
   own: Assignment[];
-  /** KPI ids targeted on the parent issue (only used to group the rows) */
+  /** KPI ids targeted on the parent issue (only used to group the rows); key-only references keep their key */
   parentKpiIds: string[];
   /** the KPI picker catalog, without `currentValue` (that needs readings) */
   catalog: CatalogEntryDto[];
   /**
-   * Targeted KPI ids (own or parent's) that Jira confirmed no longer exist. A KPI
-   * merely missing from the catalog isn't enough — the search index lags new
-   * KPIs — so only these are shown as "KPI deleted".
+   * Targeted KPI ids (own or parent's) that Jira confirmed no longer exist, plus
+   * every key-only reference (read as deleted without asking Jira, spec 11 · 03).
+   * A KPI merely missing from the catalog isn't enough — the search index lags
+   * new KPIs — so only these are shown as "KPI deleted".
    */
   deletedKpiIds?: string[];
   /**
@@ -164,6 +171,8 @@ export interface PanelBasis {
    * (spec 10). Shown as "You don't have permission to view this KPI".
    */
   noAccessKpiIds?: string[];
+  /** keys of targeted KPIs the catalog doesn't list but Jira found (KPI id → key), for their labels */
+  kpiKeys?: Record<string, string>;
   /** the user's KPI-space permissions (spec 10); absent when no space is set up */
   access?: KpiSpaceAccess;
 }
@@ -264,6 +273,7 @@ export interface TimelineReadingDto {
 
 export interface TimelineNodeDto {
   id: string;
+  /** the KPI's Jira issue id */
   kpiId: string;
   /** Jira issue key of the KPI issue (for deep-linking to /browse/{key}) */
   issueKey: string;
@@ -364,7 +374,7 @@ export interface CreateKpiInput {
   name: string;
   unit: string;
   direction: KpiDirection | null;
-  /** parent KPI to nest under; null/omitted = a root KPI */
+  /** parent KPI's issue id to nest under; null/omitted = a root KPI */
   parentKpiId?: string | null;
 }
 
@@ -375,11 +385,13 @@ export interface CreateKpiInput {
  */
 export interface CreatedKpi {
   id: string;
+  /** the new KPI's issue id */
   kpiId: string;
   issueKey: string;
   name: string;
   unit: string;
   direction: KpiDirection | null;
+  /** the parent KPI's issue id; null = a root KPI */
   parentKpiId: string | null;
 }
 
@@ -391,6 +403,7 @@ export interface CreatedKpi {
  */
 export interface UpdatedKpi {
   id: string;
+  /** the KPI's issue id */
   kpiId: string;
   issueKey: string;
   name: string;
@@ -438,6 +451,7 @@ export interface IssuePickerItem {
  * picker chooses the issue that owns the target.
  */
 export interface AddTargetInput {
+  /** the KPI's issue id */
   kpiId: string;
   issueId: string;
   issueKey: string;

@@ -22,7 +22,7 @@ import { buildKpiTargets, type KpiTargetContribution } from './timelineTargets';
  * client (merging Phase 2 into the skeleton) share this one implementation.
  */
 
-/** Raw per-KPI contributions, keyed by KPI id (a KPI's id is its issue key). */
+/** Raw per-KPI contributions, keyed by KPI id (its issue id, spec 11 · 03). */
 export type TargetContributionsByKpi = Record<string, KpiTargetContribution[]>;
 
 /** Fill every node's targets from `contributions` and clear its `resolving` flag. */

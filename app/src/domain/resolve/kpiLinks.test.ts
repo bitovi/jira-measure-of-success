@@ -123,7 +123,7 @@ describe('kpiParentLinkBody', () => {
     for (const hierarchy of [HIER, BLOCKS_CHILD_BLOCKS_PARENT]) {
       const body = kpiParentLinkBody(hierarchy, 'P', 'C');
       const onChild: IssueLinkRef =
-        body.inwardIssue.key === 'C'
+        'key' in body.inwardIssue && body.inwardIssue.key === 'C'
           ? { type: { id: hierarchy.linkTypeId }, outwardIssue: { id: '100' } }
           : { type: { id: hierarchy.linkTypeId }, inwardIssue: { id: '100' } };
       expect(body.type).toEqual({ id: hierarchy.linkTypeId });
@@ -133,6 +133,10 @@ describe('kpiParentLinkBody', () => {
 
   it('parentEnd inward reads "parent <outward> child"', () => {
     expect(kpiParentLinkBody(HIER, 'P', 'C')).toMatchObject({ inwardIssue: { key: 'P' }, outwardIssue: { key: 'C' } });
+  });
+
+  it('names an issue id by id and a key by key', () => {
+    expect(kpiParentLinkBody(HIER, '10234', 'KPI-9')).toMatchObject({ inwardIssue: { id: '10234' }, outwardIssue: { key: 'KPI-9' } });
   });
 });
 

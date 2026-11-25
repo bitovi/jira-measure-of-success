@@ -72,9 +72,11 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
   const rows: PanelRowDto[] = [];
   const push = (kpiId: string, relationship: PanelRowDto['relationship'], a?: Assignment) => {
     const def = defOf(kpiId);
+    const kpiKey = def?.key ?? basis.kpiKeys?.[kpiId] ?? kpiId;
     const head = {
       kpiId,
-      name: def?.name ?? kpiId,
+      kpiKey,
+      name: def?.name ?? kpiKey,
       unit: def?.unit ?? '',
       direction: def?.direction ?? null,
     };

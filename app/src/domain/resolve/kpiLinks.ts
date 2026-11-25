@@ -170,15 +170,20 @@ export function parentFromIssueLinks(
   return null;
 }
 
-/** The `POST /rest/api/3/issueLink` body that nests `childKey` under `parentKey`. */
+/** An issue in a link request: by id (digits) or by key. */
+export type IssueLinkEnd = { id: string } | { key: string };
+
+const linkEnd = (idOrKey: string): IssueLinkEnd => (/^\d+$/.test(idOrKey) ? { id: idOrKey } : { key: idOrKey });
+
+/** The `POST /rest/api/3/issueLink` body that nests `child` under `parent` (each an issue id or key). */
 export function kpiParentLinkBody(
   hierarchy: KpiHierarchyLink,
-  parentKey: string,
-  childKey: string,
-): { type: { id: string }; inwardIssue: { key: string }; outwardIssue: { key: string } } {
+  parent: string,
+  child: string,
+): { type: { id: string }; inwardIssue: IssueLinkEnd; outwardIssue: IssueLinkEnd } {
   return hierarchy.parentEnd === 'outward'
-    ? { type: { id: hierarchy.linkTypeId }, inwardIssue: { key: childKey }, outwardIssue: { key: parentKey } }
-    : { type: { id: hierarchy.linkTypeId }, inwardIssue: { key: parentKey }, outwardIssue: { key: childKey } };
+    ? { type: { id: hierarchy.linkTypeId }, inwardIssue: linkEnd(child), outwardIssue: linkEnd(parent) }
+    : { type: { id: hierarchy.linkTypeId }, inwardIssue: linkEnd(parent), outwardIssue: linkEnd(child) };
 }
 
 /**

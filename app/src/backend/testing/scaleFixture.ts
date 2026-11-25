@@ -1,6 +1,9 @@
 import {
   encodeReadingValue,
+  REFS_VERSION,
   type Assignment,
+  type StoredAssignment,
+  type StoredAssignments,
   type IssueLinkTypeInfo,
   type KpiDirection,
   type RollupConfig,
@@ -32,6 +35,11 @@ export interface ScaleOptions {
   rollup: RollupConfig;
   /** artificial per-request latency (ms) so stage timings reflect round trips */
   latencyMs: number;
+  /**
+   * How targets reference KPIs (spec 11 · 03): `migrated` = ids + keys, stamped
+   * `refsVersion` (what this version writes); `keys` = keys only (pre-migration data).
+   */
+  refs: 'migrated' | 'keys';
 }
 
 export const DEFAULT_SCALE: ScaleOptions = {
@@ -45,6 +53,7 @@ export const DEFAULT_SCALE: ScaleOptions = {
   undatedStoryEvery: 5,
   rollup: { dueDateRollup: {} },
   latencyMs: 0,
+  refs: 'migrated',
 };
 
 export const KPI_PROJECT = { key: 'KPI', id: '10000', name: 'KPIs (KPI)' };
@@ -80,6 +89,8 @@ export interface FixtureIssue {
    */
   extraKpiParentIds?: string[];
   rank?: string;
+  /** keys the issue had before it moved; Jira still resolves them (01 D1) */
+  formerKeys?: string[];
   properties: Record<string, unknown>;
 }
 
@@ -203,7 +214,7 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
       const epicId = String(200_000 + epicN);
       const project = WORK_PROJECTS[epicN % WORK_PROJECTS.length];
       const undated = epicN % options.undatedEpicEvery === 0;
-      const kpiKey = `KPI-${(epicN % options.kpis) + 1}`;
+      const kpi = { id: String(1000 + (epicN % options.kpis)), key: `KPI-${(epicN % options.kpis) + 1}` };
       add({
         id: epicId,
         key: `${project}-${epicN + 1}`,
@@ -212,7 +223,7 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
         parentId: initId,
         due: undated ? null : isoDay(30 + (epicN % 330)),
         start: null,
-        properties: { 'kpi-assignments': assignmentProperty(kpiKey, epicN) },
+        properties: { 'kpi-assignments': assignmentProperty(kpi, epicN, options.refs) },
       });
       contributorIds.push(epicId);
       for (let s = 0; s < options.storiesPerEpic; s += 1) {
@@ -276,10 +287,10 @@ export function buildScaleFixture(overrides: Partial<ScaleOptions> = {}): ScaleF
 }
 
 /** One target per epic, cycling absolute / relative-to-own-due / relative-to-parent-due / percent. */
-function assignmentProperty(kpiKey: string, n: number): { assignments: Assignment[]; kpiIds: string[] } {
+function assignmentProperty(kpi: { id: string; key: string }, n: number, refs: ScaleOptions['refs']): StoredAssignments {
   const variant = n % 4;
   const assignment: Assignment = {
-    kpiId: kpiKey,
+    kpiId: kpi.key,
     inheritFromParent: false,
     target: variant === 3 ? 10 : 150 + (n % 50),
     targetType: variant === 3 ? 'percent' : 'absolute',
@@ -295,7 +306,72 @@ function assignmentProperty(kpiKey: string, n: number): { assignments: Assignmen
     updatedBy: 'fixture',
     updatedAt: BASE,
   };
-  return { assignments: [assignment], kpiIds: [kpiKey] };
+  return storedTargets([{ ...assignment, ...(refs === 'migrated' ? { kpiIssueId: kpi.id } : {}) }], refs === 'migrated');
+}
+
+/** A `kpi-assignments` value with its index arrays, as the app writes it (`stamp` = `refsVersion`). */
+export function storedTargets(assignments: StoredAssignment[], stamp: boolean): StoredAssignments {
+  return {
+    assignments,
+    kpiIssueIds: [...new Set(assignments.flatMap((a) => (a.kpiIssueId ? [a.kpiIssueId] : [])))],
+    kpiIds: [...new Set(assignments.map((a) => a.kpiId))],
+    ...(stamp ? { refsVersion: REFS_VERSION } : {}),
+  };
+}
+
+/** A plain absolute target, for tests that build `kpi-assignments` by hand. */
+export function fixtureTarget(kpiId: string, over: Partial<StoredAssignment> = {}): StoredAssignment {
+  return {
+    kpiId,
+    inheritFromParent: false,
+    target: 42,
+    targetType: 'absolute',
+    timing: { start: null, due: { mode: 'absolute', absolute: '2026-09-30', anchor: 'issueDueDate', offsetMonths: 0 } },
+    updatedBy: 'fixture',
+    updatedAt: BASE,
+    ...over,
+  };
+}
+
+/** A key no issue has: a KPI deleted before the migration ran. */
+export const DELETED_KPI_KEY = 'KPI-404';
+
+export interface RefEdgeCases {
+  /** a KPI whose key changed (it moved); its old key still resolves */
+  moved: { id: string; oldKey: string; newKey: string };
+  /** a KPI hidden from the user (the app can see it) */
+  hiddenKpiId: string;
+  /** a work item targeting a deleted KPI next to its live target */
+  mixedIssueId: string;
+  /** a work item whose only target is on a deleted KPI */
+  deletedOnlyIssueId: string;
+}
+
+/**
+ * The reference edge cases of spec 11 · 03 on top of a built fixture, in the
+ * fixture's `refs` shape: a moved KPI (the 3rd), a KPI hidden from the user
+ * (the 4th), and a deleted KPI's key next to a live target (1st contributor)
+ * and alone (2nd contributor). Deleted references are key-only in both shapes.
+ */
+export function addRefEdgeCases(fixture: ScaleFixture): RefEdgeCases {
+  const migrated = fixture.options.refs === 'migrated';
+  const movedIssue = fixture.issues.get(fixture.kpiIds[2])!;
+  const moved = { id: movedIssue.id, oldKey: movedIssue.key, newKey: `${KPI_PROJECT.key}-${900 + fixture.kpiIds.length}` };
+  movedIssue.formerKeys = [moved.oldKey];
+  movedIssue.key = moved.newKey;
+
+  const hiddenKpiId = fixture.kpiIds[3];
+  fixture.userView.hidden.add(hiddenKpiId);
+
+  const [mixedIssueId, deletedOnlyIssueId] = fixture.contributorIds;
+  const mixed = fixture.issues.get(mixedIssueId)!;
+  const live = (mixed.properties['kpi-assignments'] as StoredAssignments).assignments;
+  mixed.properties['kpi-assignments'] = storedTargets([...live, fixtureTarget(DELETED_KPI_KEY)], migrated);
+  fixture.issues.get(deletedOnlyIssueId)!.properties['kpi-assignments'] = storedTargets(
+    [fixtureTarget(DELETED_KPI_KEY)],
+    migrated,
+  );
+  return { moved, hiddenKpiId, mixedIssueId, deletedOnlyIssueId };
 }
 
 // ── Mock Jira REST API ───────────────────────────────────────────────────────
@@ -396,8 +472,20 @@ function issueJson(
   return out;
 }
 
+/** The `kpi-assignments` property paths the manifest indexes, as JQL clauses can test them. */
+const TARGETS_CLAUSE = /^issue\.property\[kpi-assignments\]\.(kpiIds|kpiIssueIds|refsVersion)\s+IS\s+(NOT\s+)?EMPTY$/i;
+
+function targetsClauseMatches(issue: FixtureIssue, clause: string): boolean | null {
+  const m = TARGETS_CLAUSE.exec(clause.trim());
+  if (!m) return null;
+  const value = (issue.properties['kpi-assignments'] as Record<string, unknown> | undefined)?.[m[1]];
+  const empty = value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+  return m[2] ? !empty : empty;
+}
+
 function runJql(fixture: ScaleFixture, jql: string): FixtureIssue[] | null {
-  const q = jql.trim();
+  const [where, orderBy] = jql.trim().split(/\s+ORDER\s+BY\s+/i);
+  const q = where.trim();
   const get = (id: string): FixtureIssue | undefined => fixture.issues.get(id);
   const inList = (s: string) =>
     s
@@ -415,8 +503,11 @@ function runJql(fixture: ScaleFixture, jql: string): FixtureIssue[] | null {
   if (m) return childrenOf(m[1]);
   m = /^project\s*=\s*(\w+)/i.exec(q);
   if (m && m[1] === KPI_PROJECT.key) return fixture.kpiIds.map(get).filter((i): i is FixtureIssue => !!i);
-  if (/issue\.property\[kpi-assignments\]\.kpiIds\s+IS\s+NOT\s+EMPTY/i.test(q)) {
-    return fixture.contributorIds.map(get).filter((i): i is FixtureIssue => !!i);
+  // `kpi-assignments` index clauses, ANDed: matched against the stored property (no index lag).
+  const clauses = q.split(/\s+AND\s+/i);
+  if (clauses.every((c) => TARGETS_CLAUSE.test(c.trim()))) {
+    const matched = [...fixture.issues.values()].filter((i) => clauses.every((c) => targetsClauseMatches(i, c)));
+    return orderBy && /^id\s+ASC$/i.test(orderBy.trim()) ? matched.sort((a, b) => Number(a.id) - Number(b.id)) : matched;
   }
   return null;
 }
@@ -473,7 +564,9 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
   const unhandled: string[] = [];
   const writes: string[] = [];
   const findIssue = (idOrKey: string) =>
-    fixture.issues.get(idOrKey) ?? [...fixture.issues.values()].find((i) => i.key === idOrKey);
+    fixture.issues.get(idOrKey) ??
+    [...fixture.issues.values()].find((i) => i.key === idOrKey) ??
+    [...fixture.issues.values()].find((i) => i.formerKeys?.includes(idOrKey));
   const keyOf = (id: string) => fixture.issues.get(id)?.key;
   let nextIssueId = 900_000;
   let clock = Date.UTC(2026, 6, 1);
@@ -545,6 +638,13 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
         isLast: !more,
         ...(more ? { nextPageToken: String(offset + maxResults) } : {}),
       });
+    }
+
+    if (method === 'POST' && path === '/rest/api/3/search/approximate-count') {
+      const { jql } = JSON.parse(String(body)) as { jql: string };
+      const matched = runJql(fixture, jql);
+      if (!matched) return respond(400, { errorMessages: [`Unsupported JQL: ${jql}`] });
+      return respond(200, { count: matched.filter((i) => visible(i, as)).length });
     }
 
     const single = /^\/rest\/api\/3\/issue\/([^/]+)$/.exec(path);
@@ -644,18 +744,16 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     }
 
     if (method === 'POST' && path === '/rest/api/3/issueLink') {
-      const req = JSON.parse(String(body)) as {
-        type: { id?: string };
-        outwardIssue: { key: string };
-        inwardIssue: { key: string };
-      };
+      type End = { id?: string; key?: string };
+      const req = JSON.parse(String(body)) as { type: { id?: string }; outwardIssue: End; inwardIssue: End };
+      const ref = (end: End) => end.id ?? end.key ?? '';
       if (!fixture.linkTypes.some((t) => t.id === req.type?.id)) {
         return respond(404, { errorMessages: [`No issue link type with id '${req.type?.id}' found.`] });
       }
       const cfg = fixture.kvs.get('kpi:hierarchy') as { parentEnd?: string } | undefined;
       const parentOnOutward = cfg?.parentEnd === 'outward';
-      const parent = findIssue(parentOnOutward ? req.outwardIssue.key : req.inwardIssue.key);
-      const child = findIssue(parentOnOutward ? req.inwardIssue.key : req.outwardIssue.key);
+      const parent = findIssue(ref(parentOnOutward ? req.outwardIssue : req.inwardIssue));
+      const child = findIssue(ref(parentOnOutward ? req.inwardIssue : req.outwardIssue));
       if (!parent || !child || !visible(parent, as) || !visible(child, as)) {
         return respond(404, { errorMessages: ['Issue does not exist'] });
       }

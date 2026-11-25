@@ -45,4 +45,8 @@ describe('kpiNotVisibleMessage', () => {
       "KPI-7 doesn't exist, or you don't have permission to view it. Viewing KPIs needs Browse Projects permission on the KPIs (KPI) project. Ask a Jira admin.",
     );
   });
+
+  it('says "This KPI" for an issue id, whose key isn\'t known', () => {
+    expect(kpiNotVisibleMessage('10234')).toMatch(/^This KPI doesn't exist, or you don't have permission/);
+  });
 });

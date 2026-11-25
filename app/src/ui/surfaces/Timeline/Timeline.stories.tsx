@@ -33,7 +33,7 @@ const POPULATED: TimelineData = {
   roots: [
     node({
       id: 'n1',
-      kpiId: 'revenue',
+      kpiId: '20001',
       issueKey: 'KPI-1',
       name: 'Revenue',
       unit: 'USD',
@@ -48,7 +48,7 @@ const POPULATED: TimelineData = {
       children: [
         node({
           id: 'n2',
-          kpiId: 'orders',
+          kpiId: '20002',
           issueKey: 'KPI-2',
           name: '# of Orders',
           unit: 'count',
@@ -74,7 +74,7 @@ const POPULATED: TimelineData = {
 
 const NO_READINGS: TimelineData = {
   today: '2026-07-10',
-  roots: [node({ id: 'n1', kpiId: 'opportunity', name: 'Opportunity Enablement', unit: 'future value', direction: null })],
+  roots: [node({ id: 'n1', kpiId: '20010', name: 'Opportunity Enablement', unit: 'future value', direction: null })],
 };
 
 /** A KPI with a provisional (estimate) marker and an undated projection chip. */
@@ -83,7 +83,7 @@ const PROJECTIONS: TimelineData = {
   roots: [
     node({
       id: 'n1',
-      kpiId: 'revenue',
+      kpiId: '20001',
       issueKey: 'KPI-1',
       name: 'Revenue',
       unit: 'USD',
@@ -569,7 +569,7 @@ export const EditValue: Story = {
     await userEvent.clear(input);
     await userEvent.type(input, '1250000');
     await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(editSpy).toHaveBeenCalledWith('revenue', '2026-07-06', 1_250_000));
+    await waitFor(() => expect(editSpy).toHaveBeenCalledWith('20001', '2026-07-06', 1_250_000));
   },
 };
 
@@ -585,7 +585,7 @@ export const DeleteValue: Story = {
     );
     const dialog = within(await screen.findByRole('dialog'));
     await userEvent.click(dialog.getByRole('button', { name: 'Delete' }));
-    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('revenue', '2026-01-03', null));
+    await waitFor(() => expect(deleteSpy).toHaveBeenCalledWith('20001', '2026-01-03', null));
   },
 };
 
@@ -698,7 +698,7 @@ export const AddChildKpi: Story = {
     await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
     await waitFor(() =>
       expect(createChildSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Sub Metric', parentKpiId: 'revenue' }),
+        expect.objectContaining({ name: 'Sub Metric', parentKpiId: '20001' }),
       ),
     );
   },
@@ -723,7 +723,7 @@ export const AddKpiWithParent: Story = {
     await userEvent.click(dialog.getByRole('button', { name: /Create KPI/i }));
     await waitFor(() =>
       expect(createWithParentSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Repeat Orders', parentKpiId: 'orders' }),
+        expect.objectContaining({ name: 'Repeat Orders', parentKpiId: '20002' }),
       ),
     );
   },
@@ -754,7 +754,7 @@ export const EditKpi: Story = {
     await userEvent.type(dialog.getByLabelText('KPI name'), 'Orders');
     await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() =>
-      expect(editKpiSpy).toHaveBeenCalledWith({ kpiId: 'orders', name: 'Orders' }),
+      expect(editKpiSpy).toHaveBeenCalledWith({ kpiId: '20002', name: 'Orders' }),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   },
@@ -773,7 +773,7 @@ export const EditKpiMoveToTop: Story = {
     await userEvent.keyboard('{Backspace}');
     await expect(dialog.getByText('None (top-level KPI)')).toBeInTheDocument();
     await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(moveKpiSpy).toHaveBeenCalledWith({ kpiId: 'orders', parentKpiId: null }));
+    await waitFor(() => expect(moveKpiSpy).toHaveBeenCalledWith({ kpiId: '20002', parentKpiId: null }));
   },
 };
 
@@ -842,7 +842,7 @@ export const AddTarget: Story = {
     await userEvent.click(dialog.getByRole('button', { name: 'Add target' }));
     await waitFor(() =>
       expect(addTargetSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ kpiId: 'revenue', issueKey: 'INIT-48', value: 2_000_000 }),
+        expect.objectContaining({ kpiId: '20001', issueKey: 'INIT-48', value: 2_000_000 }),
       ),
     );
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());

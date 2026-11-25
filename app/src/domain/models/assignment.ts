@@ -53,6 +53,11 @@ export const Timing = z.object({
 });
 export type Timing = z.infer<typeof Timing>;
 
+/**
+ * A KPI target, as the app works with it. `kpiId` is the KPI's Jira issue id
+ * (spec 11 · 03), except for a reference to a deleted KPI kept by its key (see
+ * `readStoredAssignments`).
+ */
 export const Assignment = z.object({
   kpiId: z.string().min(1),
   inheritFromParent: z.boolean(),
@@ -65,17 +70,35 @@ export const Assignment = z.object({
 });
 export type Assignment = z.infer<typeof Assignment>;
 
-/** The whole issue-entity-property value: an array of assignments. */
-export const AssignmentProperty = z.object({
-  assignments: z.array(Assignment),
+/**
+ * A target as stored in the `kpi-assignments` issue property. `kpiId` keeps its
+ * original meaning, the KPI's issue KEY (what the customer's reporting app
+ * reads), and `kpiIssueId` holds the id. Data saved before spec 11 · 03 has no
+ * `kpiIssueId`. Only `domain/resolve/kpiRef` converts between this and `Assignment`.
+ */
+export const StoredAssignment = Assignment.extend({
+  kpiIssueId: z.string().optional(),
+});
+export type StoredAssignment = z.infer<typeof StoredAssignment>;
+
+/** The `refsVersion` that marks a work item's references as migrated to ids. */
+export const REFS_VERSION = 2;
+
+/** The whole `kpi-assignments` issue-entity-property value. */
+export const StoredAssignments = z.object({
+  assignments: z.array(StoredAssignment),
   /**
-   * Denormalized list of the assigned KPI ids, written alongside `assignments`
-   * so the manifest's `kpi-assignments` → `kpiIds` search index (searchAlias)
-   * is populated. This is what lets the timeline discover which issues set a
-   * target for a given KPI (JQL `issue.property[kpi-assignments].kpiIds = ...`).
-   * Optional on read for backward-compat with assignments saved before the
-   * index was written.
+   * Denormalized KPI keys, indexed as `kpiIds` (a `text` path). Kept for the
+   * customer's reporting app (spec 11, Compatibility); this app no longer reads it.
    */
   kpiIds: z.array(z.string()).optional(),
+  /**
+   * Denormalized KPI issue ids, indexed as `kpiIssueIds` (a `string` path): what
+   * Timeline discovery (`kpiIssueIds IS NOT EMPTY`) and exact lookups search.
+   * A property path can't index a field inside an array of objects, hence the copy.
+   */
+  kpiIssueIds: z.array(z.string()).optional(),
+  /** `REFS_VERSION` once every reference has a `kpiIssueId` (deleted KPIs aside); indexed for the migration's pending count */
+  refsVersion: z.number().optional(),
 });
-export type AssignmentProperty = z.infer<typeof AssignmentProperty>;
+export type StoredAssignments = z.infer<typeof StoredAssignments>;

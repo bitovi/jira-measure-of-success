@@ -241,8 +241,11 @@ describe('getMigrations', () => {
     expect(migrations[0]).toMatchObject({ status: null, statusError: 'Jira 500' });
   });
 
-  it('is an empty list with the real (empty) registry', async () => {
+  it('lists the real registry: 03\'s target-reference migration, counted as the app', async () => {
     (await import('./index')).setMigrationRegistryForTests(null);
-    expect(await call<MigrationsData>('getMigrations')).toEqual({ migrations: [] });
+    const { migrations } = await call<MigrationsData>('getMigrations');
+    expect(migrations.map((m) => m.id)).toEqual(['kpi-target-refs-to-ids']);
+    // The fixture's targets are already in the migrated shape.
+    expect(migrations[0]).toMatchObject({ writeAs: 'app', ready: true, status: { applicable: true, pending: 0 } });
   });
 });

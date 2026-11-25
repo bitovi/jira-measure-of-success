@@ -1,7 +1,7 @@
 import { assumeTrustedRoute, getAppContext, route, routeFromAbsolute } from '@forge/api';
-import { asApp, asUser } from './requestLog';
+import { asApp, asUser, type RequestJira } from './requestLog';
 import {
-  AssignmentProperty,
+  isKpiIssueId,
   KpiMetaProperty,
   KPI_META_PROPERTY_KEY,
   breakParentCycles,
@@ -13,6 +13,11 @@ import {
   kpiParentLinkBody,
   parentFromIssueLinks,
   readOwnDates,
+  readStoredAssignments,
+  shouldStampRefs,
+  storedKeysById,
+  StoredAssignments,
+  toStoredAssignments,
   FALLBACK_DATE_FIELD_DEFAULTS,
   type Assignment,
   type DateFieldCatalog,
@@ -130,21 +135,33 @@ export async function fetchIssueWithAssignments(
   };
 }
 
-/** Assignments from a raw `kpi-assignments` property value; [] when absent or invalid. */
-function parseAssignments(value: unknown): Assignment[] {
-  const parsed = AssignmentProperty.safeParse(value);
-  return parsed.success ? parsed.data.assignments : [];
+/** A raw `kpi-assignments` property value; null when absent or invalid. */
+function parseStoredAssignments(value: unknown): StoredAssignments | null {
+  const parsed = StoredAssignments.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
-/** One issue's assignments. For single-issue paths; bulk loads read the property in the search instead. */
-export async function fetchAssignments(issueId: string): Promise<Assignment[]> {
+/** Assignments (KPI ids, spec 11 · 03) from a raw `kpi-assignments` property value; [] when absent or invalid. */
+function parseAssignments(value: unknown): Assignment[] {
+  const stored = parseStoredAssignments(value);
+  return stored ? readStoredAssignments(stored).assignments : [];
+}
+
+/** One issue's stored `kpi-assignments` property, as the user; null when it has none. */
+export async function fetchStoredAssignments(issueId: string): Promise<StoredAssignments | null> {
   const res = await asUser()
     .requestJira(
       route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`,
     );
-  if (res.status === 404) return [];
+  if (res.status === 404) return null;
   const body = (await res.json()) as { value?: unknown };
-  return parseAssignments(body.value);
+  return parseStoredAssignments(body.value);
+}
+
+/** One issue's assignments. For single-issue paths; bulk loads read the property in the search instead. */
+export async function fetchAssignments(issueId: string): Promise<Assignment[]> {
+  const stored = await fetchStoredAssignments(issueId);
+  return stored ? readStoredAssignments(stored).assignments : [];
 }
 
 /**
@@ -160,6 +177,8 @@ export async function fetchTargetSourceIssue(issueId: string): Promise<{
   summary: string;
   due: string | null;
   assignments: Assignment[];
+  /** the stored property the assignments were read from (null when it has none), for `writeAssignments` */
+  stored: StoredAssignments | null;
 }> {
   const res = await asUser().requestJira(
     route`/rest/api/3/issue/${issueId}?fields=summary,issuetype,duedate&properties=${ASSIGNMENT_PROPERTY_KEY}`,
@@ -181,20 +200,67 @@ export async function fetchTargetSourceIssue(issueId: string): Promise<{
     hierarchyLevel: data.fields?.issuetype?.hierarchyLevel ?? null,
     summary: data.fields?.summary ?? data.key,
     due: data.fields?.duedate ?? null,
-    assignments: parseAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
+    ...storedAndAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
   };
 }
 
-/** Persist the full assignment list for an issue (batched single write). */
-export async function writeAssignments(issueId: string, assignments: Assignment[]): Promise<void> {
-  // Also persist a denormalized `kpiIds` list: the manifest indexes
-  // `kpi-assignments` → `kpiIds` (searchAlias), and that index is what the
-  // timeline uses to find which issues target a given KPI. Without writing it
-  // the index stays empty and no targets are ever discovered.
-  const value: unknown = AssignmentProperty.parse({
-    assignments,
-    kpiIds: [...new Set(assignments.map((a) => a.kpiId))],
-  });
+function storedAndAssignments(value: unknown): { stored: StoredAssignments | null; assignments: Assignment[] } {
+  const stored = parseStoredAssignments(value);
+  return { stored, assignments: stored ? readStoredAssignments(stored).assignments : [] };
+}
+
+/**
+ * Current keys of the given issue ids, looked up AS THE APP (so a KPI the user
+ * can't see still gets its key written for the customer's app; the keys are
+ * only written, never shown). One `id in (…)` search per BATCH_SIZE ids; if Jira
+ * refuses the search (e.g. JQL naming a deleted issue), one GET per id instead.
+ * Ids that no longer exist are absent.
+ */
+export async function fetchIssueKeysAsApp(issueIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(issueIds)].filter(isKpiIssueId);
+  await Promise.all(
+    chunkArray(ids, BATCH_SIZE).map(async (batch) => {
+      const jql = `id in (${batch.join(',')})`;
+      const res = await asApp().requestJira(route`/rest/api/3/search/jql?jql=${jql}&fields=id&maxResults=100`);
+      if (res.ok) {
+        const data = (await res.json()) as { issues?: Array<{ id: string; key: string }> };
+        for (const issue of data.issues ?? []) out.set(String(issue.id), issue.key);
+        return;
+      }
+      await Promise.all(
+        batch.map(async (id) => {
+          const one = await asApp().requestJira(route`/rest/api/3/issue/${id}?fields=issuetype`);
+          if (one.ok) out.set(id, ((await one.json()) as { key: string }).key);
+        }),
+      );
+    }),
+  );
+  return out;
+}
+
+/**
+ * Persist the full assignment list for an issue (one write), in the stored
+ * format (spec 11 · 03): every id reference gets `kpiIssueId` plus the KPI's
+ * current key in `kpiId`, and both index arrays are filled (`kpiIssueIds` for
+ * discovery, `kpiIds` for the customer's app). Keys come from `loadedKeys` (KPIs
+ * the caller already looked up), then one app lookup for the others; an id whose
+ * KPI no longer exists keeps the key stored with it in `previous`. The issue is
+ * stamped `refsVersion` per `shouldStampRefs(previous)`.
+ */
+export async function writeAssignments(
+  issueId: string,
+  assignments: Assignment[],
+  previous: StoredAssignments | null,
+  loadedKeys: ReadonlyMap<string, string> = new Map(),
+): Promise<void> {
+  const keyOfId = storedKeysById(previous);
+  for (const [id, key] of loadedKeys) keyOfId.set(id, key);
+  const toLookUp = [...new Set(assignments.map((a) => a.kpiId))].filter((id) => isKpiIssueId(id) && !loadedKeys.has(id));
+  if (toLookUp.length > 0) {
+    for (const [id, key] of await fetchIssueKeysAsApp(toLookUp)) keyOfId.set(id, key);
+  }
+  const value: unknown = StoredAssignments.parse(toStoredAssignments(assignments, keyOfId, shouldStampRefs(previous)));
   const res = await asUser()
     .requestJira(route`/rest/api/3/issue/${issueId}/properties/${ASSIGNMENT_PROPERTY_KEY}`, {
       method: 'PUT',
@@ -733,23 +799,28 @@ export interface TargetContributions {
   parentById: Map<string, { key: string; due: string | null }>;
 }
 
-/** JQL that finds every issue carrying a KPI target, via the denormalized index. */
-const ASSIGNMENT_INDEX_JQL = 'issue.property[kpi-assignments].kpiIds IS NOT EMPTY';
+/**
+ * JQL that finds every issue carrying a KPI target, via the denormalized id
+ * index (spec 11 · 03). Not `kpiIds`: that's the customer's app's (keys), and
+ * goes away in the cleanup release.
+ */
+const ASSIGNMENT_INDEX_JQL = 'issue.property[kpi-assignments].kpiIssueIds IS NOT EMPTY';
 
 /**
  * Discover every issue that has authored a KPI target — in ONE JQL query against
- * the denormalized `kpiIds` search index (`issue.property[kpi-assignments].kpiIds
- * IS NOT EMPTY`), and let the caller group the assignments by KPI in memory.
- * This deliberately avoids a per-KPI query fan-out.
+ * the denormalized `kpiIssueIds` search index, and let the caller group the
+ * assignments by KPI (id) in memory. This deliberately avoids a per-KPI query
+ * fan-out.
  *
  * The search asks Jira to include each issue's `kpi-assignments` property in the
  * results (`properties=`), so the targets arrive WITH the issues — no per-issue
  * property request (spec 06 P1). Pages may hold fewer than 100 issues when
  * properties are included, so paging follows `nextPageToken` until `isLast`.
  *
- * Caveat: only finds issues SAVED AFTER the `kpiIds` index was populated
- * (writeAssignments) — assignments written before that must be re-saved or
- * backfilled once. See specs/bug-fixes/timeline-targets-not-shown.md.
+ * Caveat: only finds issues whose targets carry KPI ids — saved by this version
+ * or migrated (`kpi-target-refs-to-ids`). Before the migration runs, older
+ * targets aren't discovered (spec 11, Compatibility). Only id references are
+ * returned: a deleted KPI's key-only reference has nothing to show under.
  *
  * Live-only: exercised via `forge tunnel` / `npm run test:e2e`; the mock harness
  * bakes targets into fixtures instead. Non-throwing — a failed search yields no
@@ -804,7 +875,7 @@ export async function fetchTargetContributions(): Promise<TargetContributions> {
         title: i.fields?.summary ?? i.key,
         ownDue: i.fields?.duedate ?? null,
         parentId: i.fields?.parent?.id != null ? String(i.fields.parent.id) : null,
-        assignments: parseAssignments(i.properties?.[ASSIGNMENT_PROPERTY_KEY]),
+        assignments: parseAssignments(i.properties?.[ASSIGNMENT_PROPERTY_KEY]).filter((a) => isKpiIssueId(a.kpiId)),
       });
     }
     if (data.isLast || !data.nextPageToken || batch.length === 0) break;
@@ -1150,7 +1221,7 @@ export async function ensureKpiIssueTypeOnProject(projectId: string): Promise<vo
 }
 
 /**
- * Create a KPI as an issue in the KPI space. Nesting under `parentKpiId` uses an
+ * Create a KPI as an issue in the KPI space. Nesting under `parentKpiId` (an issue id) uses an
  * issue LINK of the configured `hierarchy` type, because Jira forbids a
  * standard issue from being the native `parent` of another standard issue.
  * Nesting without a configured hierarchy throws before anything is created.
@@ -1206,7 +1277,7 @@ export async function createKpiIssue(
   }
   return {
     id: String(created.id),
-    kpiId: created.key,
+    kpiId: String(created.id),
     issueKey: created.key,
     name,
     unit: meta.unit,
@@ -1216,23 +1287,24 @@ export async function createKpiIssue(
 }
 
 /**
- * Link a child KPI to its parent with the configured hierarchy link type; the
- * body puts each issue on the end `parentFromIssueLinks` reads it back from.
+ * Link a child KPI to its parent (each an issue id or key) with the configured
+ * hierarchy link type; the body puts each issue on the end
+ * `parentFromIssueLinks` reads it back from.
  */
 export async function linkKpiParent(
   hierarchy: KpiHierarchyLink,
-  parentKpiKey: string,
-  childKpiKey: string,
+  parentKpi: string,
+  childKpi: string,
 ): Promise<void> {
   // As the USER: Jira requires Link Issues (spec 10).
   const res = await asUser().requestJira(route`/rest/api/3/issueLink`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(kpiParentLinkBody(hierarchy, parentKpiKey, childKpiKey)),
+    body: JSON.stringify(kpiParentLinkBody(hierarchy, parentKpi, childKpi)),
   });
   // 201 on success. Surface failures so a broken nest doesn't look like a no-op.
   if (!res.ok) {
-    throw new Error(await jiraError(res, `link KPI "${childKpiKey}" under "${parentKpiKey}"`));
+    throw new Error(await jiraError(res, `link KPI "${childKpi}" under "${parentKpi}"`));
   }
 }
 
@@ -1369,33 +1441,76 @@ async function deleteIssue(issueKey: string): Promise<void> {
 }
 
 /**
- * Sort the targeted KPI keys the user's catalog doesn't list into:
- * - `deleted`: the app can't find them either (404 asApp) — gone from Jira;
+ * Sort the targeted KPIs the user's catalog doesn't list (KPI ids, spec 11 · 03) into:
+ * - `deleted`: the app can't find them either (404 asApp) — gone from Jira. A
+ *   key-only reference is deleted without a request: after the migration, those
+ *   are the only key-only references left;
  * - `noAccess`: they exist, but the user may not see them (404 asUser, or no
  *   Browse on the KPI space at all).
- * Anything else is just too new for the search index and is in neither list. The
- * app lookup is needed because `asUser` alone answers 404 for both cases; a
- * transient error counts as "exists" so a hiccup never offers to remove a target
- * on a live KPI.
+ * Anything else is just too new for the search index (or outside the KPI space)
+ * and is in neither list. `keys` has the current key of every one the app found,
+ * for its label. The app lookup is needed because `asUser` alone answers 404 for
+ * both cases; a transient error counts as "exists" so a hiccup never offers to
+ * remove a target on a live KPI.
  */
 export async function classifyUnlistedKpis(
-  keys: string[],
+  kpiIds: string[],
   canBrowseSpace: boolean,
-): Promise<{ deleted: string[]; noAccess: string[] }> {
-  const unique = [...new Set(keys)];
+): Promise<{ deleted: string[]; noAccess: string[]; keys: Record<string, string> }> {
+  const unique = [...new Set(kpiIds)];
+  const keys: Record<string, string> = {};
   const results = await Promise.all(
-    unique.map(async (key): Promise<'deleted' | 'noAccess' | null> => {
-      const appRes = await asApp().requestJira(route`/rest/api/3/issue/${key}?fields=summary`);
+    unique.map(async (id): Promise<'deleted' | 'noAccess' | null> => {
+      if (!isKpiIssueId(id)) return 'deleted';
+      const appRes = await asApp().requestJira(route`/rest/api/3/issue/${id}?fields=summary`);
       if (appRes.status === 404) return 'deleted';
+      if (appRes.ok) {
+        const key = ((await appRes.json()) as { key?: string }).key;
+        if (key) keys[id] = key;
+      }
       if (!canBrowseSpace) return 'noAccess';
-      const userRes = await asUser().requestJira(route`/rest/api/3/issue/${key}?fields=summary`);
+      const userRes = await asUser().requestJira(route`/rest/api/3/issue/${id}?fields=summary`);
       return userRes.status === 404 || userRes.status === 403 ? 'noAccess' : null;
     }),
   );
   return {
     deleted: unique.filter((_, i) => results[i] === 'deleted'),
     noAccess: unique.filter((_, i) => results[i] === 'noAccess'),
+    keys,
   };
+}
+
+/**
+ * Resolve KPI keys to issues, for the `kpi-target-refs-to-ids` migration only
+ * (reads never resolve keys). One `GET /issue/{key}` per distinct key, with
+ * `jira` AS THE APP: Jira follows a moved issue's old key (01 D1), and a KPI the
+ * admin can't see still gets its id stored. `missing` = 404 (a deleted KPI);
+ * `errors` = any other failure, so the caller fails those items instead of
+ * treating a hiccup as a deletion.
+ */
+export async function resolveKpiKeys(
+  keys: string[],
+  jira: { requestJira: RequestJira } = asApp(),
+): Promise<{ found: Map<string, { id: string; key: string }>; missing: Set<string>; errors: Map<string, string> }> {
+  const found = new Map<string, { id: string; key: string }>();
+  const missing = new Set<string>();
+  const errors = new Map<string, string>();
+  await Promise.all(
+    [...new Set(keys)].map(async (key) => {
+      try {
+        const res = await jira.requestJira(route`/rest/api/3/issue/${key}?fields=issuetype`);
+        if (res.status === 404) missing.add(key);
+        else if (!res.ok) errors.set(key, await jiraError(res, `look up ${key}`));
+        else {
+          const body = (await res.json()) as { id: string | number; key: string };
+          found.set(key, { id: String(body.id), key: body.key });
+        }
+      } catch (error) {
+        errors.set(key, error instanceof Error ? error.message : String(error));
+      }
+    }),
+  );
+  return { found, missing, errors };
 }
 
 /** Read a KPI's unit/direction from the `kpi-meta` entity property (null if unset). */

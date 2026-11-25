@@ -51,10 +51,12 @@ export const KPI_NO_ACCESS_LABEL = "You don't have permission to view this KPI";
 
 /**
  * A KPI the user's lookup couldn't find. Jira answers the same 404 for "doesn't
- * exist" and "you may not see it", so the message covers both.
+ * exist" and "you may not see it", so the message covers both. Given an issue id
+ * (the app's KPI identity) it says "This KPI": the key isn't known.
  */
-export function kpiNotVisibleMessage(kpiKey: string, spaceLabel?: string | null): string {
-  return `${kpiKey} doesn't exist, or you don't have permission to view it. Viewing KPIs needs Browse Projects permission on ${projectPhrase(spaceLabel)}. Ask a Jira admin.`;
+export function kpiNotVisibleMessage(kpiKeyOrId: string, spaceLabel?: string | null): string {
+  const subject = /^\d+$/.test(kpiKeyOrId) ? 'This KPI' : kpiKeyOrId;
+  return `${subject} doesn't exist, or you don't have permission to view it. Viewing KPIs needs Browse Projects permission on ${projectPhrase(spaceLabel)}. Ask a Jira admin.`;
 }
 
 /** The empty state when the user can't browse the KPI space at all. */

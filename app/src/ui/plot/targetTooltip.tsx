@@ -35,6 +35,7 @@ function fallbackDetail(target: TimelineTargetDto): TargetDetailDto {
 function rowForTarget(target: TimelineTargetDto, node: TimelineNodeDto): PanelRowDto {
   return {
     kpiId: node.kpiId,
+    kpiKey: node.issueKey,
     name: node.name,
     unit: node.unit,
     direction: node.direction,

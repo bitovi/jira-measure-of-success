@@ -11,6 +11,7 @@ import {
   normalizeProjectKey,
   projectKeyOfIssueKey,
   readingsFromChangelog,
+  readStoredAssignments,
   type AddedTarget,
   type AddTargetInput,
   type Assignment,
@@ -45,6 +46,7 @@ import {
 } from '../domain/index';
 import {
   fetchAssignments,
+  fetchStoredAssignments,
   fetchDateFieldCatalog,
   classifyUnlistedKpis,
   fetchHierarchyLevels,
@@ -162,9 +164,10 @@ const defineSettingsWrite = (functionKey: string, cb: ResolverFunction<unknown, 
 
 /**
  * The KPI picker catalog is sourced from the KPI space (KPIs are Jira issues),
- * NOT the legacy KVS catalog: each issue's key is the KPI id and its unit/
- * direction come from the `kpi-meta` entity property. Empty when the space is
- * unset or has no KPIs yet — the panel then shows a "define a KPI first" prompt.
+ * NOT the legacy KVS catalog: each issue's id is the KPI id (its key is only
+ * for display, spec 11 · 03) and its unit/direction come from the `kpi-meta`
+ * entity property. Empty when the space is unset or has no KPIs yet — the
+ * panel then shows a "define a KPI first" prompt.
  * `currentValue` needs readings, so it arrives with the panel's Phase 2
  * (`assemblePanel` fills it in).
  */
@@ -196,7 +199,8 @@ function buildKpiCatalog(issues: KpiSpaceIssue[]): CatalogEntryDto[] {
   const out: CatalogEntryDto[] = [];
   const walk = (issue: KpiSpaceIssue, depth: number) => {
     out.push({
-      id: issue.key,
+      id: issue.id,
+      key: issue.key,
       name: issue.name,
       unit: issue.meta?.unit ?? '',
       direction: issue.meta?.direction ?? null,
@@ -328,9 +332,9 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
   // Only check the (rare) targeted KPIs the catalog doesn't list: they may be
   // deleted, hidden from this user (spec 10), or just too new for the search index.
   const unlisted = [...issue.assignments.map((a) => a.kpiId), ...parentKpiIds].filter((id) => !known.has(id));
-  const { deleted: deletedKpiIds, noAccess: noAccessKpiIds } = unlisted.length
+  const { deleted: deletedKpiIds, noAccess: noAccessKpiIds, keys: kpiKeys } = unlisted.length
     ? await stage('unlistedKpis', () => classifyUnlistedKpis(unlisted, access?.browse ?? true))
-    : { deleted: [], noAccess: [] };
+    : { deleted: [], noAccess: [], keys: {} };
   return {
     basis: {
       issueKey: issue.issueKey,
@@ -340,6 +344,7 @@ async function buildPanelList(issueId: string): Promise<PanelListData> {
       catalog,
       ...(deletedKpiIds.length ? { deletedKpiIds } : {}),
       ...(noAccessKpiIds.length ? { noAccessKpiIds } : {}),
+      ...(Object.keys(kpiKeys).length ? { kpiKeys } : {}),
       ...(access ? { access } : {}),
     },
   };
@@ -370,7 +375,7 @@ async function buildPanelValues(issueId: string): Promise<PanelValuesData> {
       const changelog = await fetchReadingChangelog(kpiIssues.map((i) => i.id));
       const readings: PanelValuesData['readings'] = {};
       for (const k of kpiIssues) {
-        readings[k.key] = readingsFromChangelog(changelog.get(k.id) ?? []).map((r) => ({ date: r.date, value: r.value }));
+        readings[k.id] = readingsFromChangelog(changelog.get(k.id) ?? []).map((r) => ({ date: r.date, value: r.value }));
       }
       return readings;
     }),
@@ -447,30 +452,40 @@ define('getPanelValues', async ({ payload, context }) => {
 /**
  * A target may only point at a KPI the user can see, in the KPI space (spec 10).
  * Looked up as the USER, so Jira applies Browse Projects + issue security.
+ * Returns the KPI's id (what the target stores) and current key.
  */
-async function requireTargetableKpi(kpiId: string): Promise<void> {
+async function requireTargetableKpi(kpiId: string): Promise<{ id: string; key: string }> {
   const [kpi, space] = await Promise.all([fetchKpiIssueRef(kpiId), readKpiSpaceConfig()]);
   if (!kpi) throw new Error(kpiNotVisibleMessage(kpiId, space.name ?? space.key));
   if (!space.key || kpi.projectKey !== space.key) {
     throw new Error(`${kpi.key} isn't a KPI: targets can only point at KPIs in the KPI space.`);
   }
+  return { id: kpi.id, key: kpi.key };
 }
 
-define('saveAssignment', async ({ payload }) => {
-  const { issueId, assignment } = payload as { issueId: string; assignment: Assignment };
-  const [existing] = await Promise.all([fetchAssignments(issueId), requireTargetableKpi(assignment.kpiId)]);
+/** `assignment` replacing the target on the same KPI, or added. */
+function withAssignment(existing: Assignment[], assignment: Assignment): Assignment[] {
   const idx = existing.findIndex((a) => a.kpiId === assignment.kpiId);
   const next = [...existing];
   if (idx >= 0) next[idx] = assignment;
   else next.push(assignment);
-  await writeAssignments(issueId, next);
+  return next;
+}
+
+define('saveAssignment', async ({ payload }) => {
+  const { issueId, assignment } = payload as { issueId: string; assignment: Assignment };
+  const [stored, kpi] = await Promise.all([fetchStoredAssignments(issueId), requireTargetableKpi(assignment.kpiId)]);
+  const existing = stored ? readStoredAssignments(stored).assignments : [];
+  const next = withAssignment(existing, { ...assignment, kpiId: kpi.id });
+  await writeAssignments(issueId, next, stored, new Map([[kpi.id, kpi.key]]));
   return buildPanelParts(issueId);
 });
 
 define('removeAssignment', async ({ payload }) => {
   const { issueId, kpiId } = payload as { issueId: string; kpiId: string };
-  const existing = await fetchAssignments(issueId);
-  await writeAssignments(issueId, existing.filter((a) => a.kpiId !== kpiId));
+  const stored = await fetchStoredAssignments(issueId);
+  const existing = stored ? readStoredAssignments(stored).assignments : [];
+  await writeAssignments(issueId, existing.filter((a) => a.kpiId !== kpiId), stored);
   return buildPanelParts(issueId);
 });
 
@@ -661,7 +676,7 @@ async function buildTimelineSkeleton(): Promise<TimelineData> {
 
   const toNode = (issue: KpiSpaceIssue, depth: number): TimelineNodeDto => ({
     id: issue.id,
-    kpiId: issue.key,
+    kpiId: issue.id,
     issueKey: issue.key,
     name: issue.name,
     unit: issue.meta?.unit ?? '',
@@ -683,7 +698,7 @@ async function buildTimelineSkeleton(): Promise<TimelineData> {
 /**
  * Phase 2 of the timeline: the raw target contributions per KPI. Aggregates the
  * targets authored on contributing issues (issue `kpi-assignments` properties,
- * discovered via the `kpiIds` search index), resolving each source issue's
+ * discovered via the `kpiIssueIds` search index), resolving each source issue's
  * rolled-up due date. The caller turns them into markers with
  * `applyTargetContributions`, which needs the KPI readings Phase 1 delivered.
  */
@@ -725,8 +740,8 @@ async function buildTargetContributionsByKpi(): Promise<TimelineTargetsData> {
     rolledDueById.set(id, effectiveTiming(id, rollupNodes, rollupConfig, new Map()).due);
   }
 
-  // Group every contributing issue's targets by the KPI they point at (a KPI's
-  // id is its issue key). Each contribution carries the source issue's own/parent
+  // Group every contributing issue's targets by the KPI they point at (its
+  // issue id). Each contribution carries the source issue's own/parent
   // due (rolled up) so relative target dates resolve at read time.
   const byKpi: TargetContributionsByKpi = {};
   for (const ci of contributions.issues) {
@@ -813,12 +828,12 @@ define('searchIssues', async ({ payload }) => {
 //
 // Returns just the saved contribution, not a rebuilt timeline: the client already
 // holds the KPI's readings, so it builds the marker itself. A rebuild would also
-// re-discover targets through the `kpiIds` search index, which lags this write.
+// re-discover targets through the `kpiIssueIds` search index, which lags this write.
 define('addTarget', async ({ payload, context }) => {
   const input = payload as AddTargetInput;
-  const [issue] = await Promise.all([fetchTargetSourceIssue(input.issueId), requireTargetableKpi(input.kpiId)]);
+  const [issue, kpi] = await Promise.all([fetchTargetSourceIssue(input.issueId), requireTargetableKpi(input.kpiId)]);
   const assignment: Assignment = {
-    kpiId: input.kpiId,
+    kpiId: kpi.id,
     inheritFromParent: false,
     target: input.value,
     targetType: 'absolute',
@@ -829,13 +844,10 @@ define('addTarget', async ({ payload, context }) => {
     updatedBy: (context as { accountId?: string })?.accountId ?? 'app',
     updatedAt: Date.now(),
   };
-  const idx = issue.assignments.findIndex((a) => a.kpiId === input.kpiId);
-  const next = [...issue.assignments];
-  if (idx >= 0) next[idx] = assignment;
-  else next.push(assignment);
+  const next = withAssignment(issue.assignments, assignment);
   // The marker's icon is inlined (see buildTargetContributionsByKpi) alongside the write.
   const [, iconByUrl] = await Promise.all([
-    writeAssignments(input.issueId, next),
+    writeAssignments(input.issueId, next, issue.stored, new Map([[kpi.id, kpi.key]])),
     inlineIssueTypeIcons([issue.typeIconUrl]),
   ]);
   const added: AddedTarget = {
@@ -993,14 +1005,14 @@ define('updateKpi', async ({ payload }) => {
 
   const asSaved = (over: Partial<UpdatedKpi> = {}): UpdatedKpi => ({
     id: kpi.id,
-    kpiId: kpi.key,
+    kpiId: kpi.id,
     issueKey: kpi.key,
     name: kpi.name,
     unit: currentMeta.unit,
     direction: currentMeta.direction,
     ...over,
   });
-  const parentSet = input.parentKpiId === undefined ? {} : { parentKpiId: target?.key ?? null };
+  const parentSet = input.parentKpiId === undefined ? {} : { parentKpiId: target?.id ?? null };
 
   if (move) {
     const { hierarchy: linkType, unlink, link } = move;
@@ -1021,7 +1033,7 @@ define('updateKpi', async ({ payload }) => {
       const lostIds = new Set(lost.map((l) => l.parent.id));
       const remaining = currentParents.find((l) => !lostIds.has(l.parent.id));
       const result: UpdateKpiResult = {
-        kpi: asSaved({ parentKpiId: remaining?.parent.key ?? null }),
+        kpi: asSaved({ parentKpiId: remaining?.parent.id ?? null }),
         error: `${(err as Error).message}. ${kpi.key} was taken off ${lost.map((l) => l.parent.key).join(', ')}; nest it again in Jira.`,
       };
       return result;

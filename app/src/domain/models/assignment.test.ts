@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Assignment, AssignmentProperty, TargetType } from './assignment';
+import { Assignment, StoredAssignments, TargetType } from './assignment';
 
 const base = {
   kpiId: 'kpi-1',
@@ -29,7 +29,7 @@ describe('TargetType', () => {
 
 describe('Assignment', () => {
   it('reads a legacy delta assignment as percent', () => {
-    const parsed = AssignmentProperty.parse({ assignments: [{ ...base, targetType: 'delta' }] });
+    const parsed = StoredAssignments.parse({ assignments: [{ ...base, targetType: 'delta' }] });
     expect(parsed.assignments[0]!.targetType).toBe('percent');
   });
 

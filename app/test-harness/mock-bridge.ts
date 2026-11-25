@@ -26,6 +26,7 @@ import {
   getMigrations,
   runMigrationBatch,
   retryMigration,
+  kpiKeyOf,
 } from './fixtures/mock-resolvers.js';
 import {
   accessMode,
@@ -106,7 +107,7 @@ const resolvers: Record<string, Handler> = {
   },
   recordValue: async (p) => {
     await simulateMutation();
-    assertKpiWriteAllowed('record', accessMode(), p?.kpiId ?? null, hiddenKpiId());
+    assertKpiWriteAllowed('record', accessMode(), p?.kpiId ?? null, hiddenKpiId(), kpiKeyOf(p?.kpiId));
     return recordValue(p?.kpiId, p?.date, p?.value);
   },
   // `?mutationDelayMs=3000` slows the modal saves (createKpi / updateKpi / addTarget /
@@ -122,7 +123,7 @@ const resolvers: Record<string, Handler> = {
   updateKpi: async (p) => {
     await simulateMutation();
     const touches = kpiEditTouches(p);
-    if (touches.definition) assertKpiWriteAllowed('edit', accessMode(), p?.kpiId ?? null, hiddenKpiId());
+    if (touches.definition) assertKpiWriteAllowed('edit', accessMode(), p?.kpiId ?? null, hiddenKpiId(), kpiKeyOf(p?.kpiId));
     if (touches.parent) assertKpiWriteAllowed('nest', accessMode(), p?.kpiId ?? null, hiddenKpiId());
     return updateKpi(p);
   },

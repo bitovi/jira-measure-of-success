@@ -79,11 +79,19 @@ export function applyAccessToPanelList(
   // only targets on this issue (or its parent) are flagged "no permission".
   const hidden = mode === 'none' ? targeted : targeted.filter((k) => k === hiddenId);
   const catalog = mode === 'none' ? [] : basis.catalog.filter((c) => c.id !== hiddenId);
+  // The backend's app lookup still finds a hidden KPI's key, for its label.
+  const kpiKeys = Object.fromEntries(
+    hidden.flatMap((id) => {
+      const key = basis.catalog.find((c) => c.id === id)?.key;
+      return key ? [[id, key]] : [];
+    }),
+  );
   return {
     basis: {
       ...basis,
       catalog,
       ...(hidden.length ? { noAccessKpiIds: hidden } : {}),
+      ...(Object.keys(kpiKeys).length ? { kpiKeys: { ...basis.kpiKeys, ...kpiKeys } } : {}),
       access: ACCESS[mode],
     },
   };
@@ -107,12 +115,16 @@ export function applyAccessToPanelParts(parts: PanelParts, mode: AccessMode | nu
   };
 }
 
-/** Throw what the real backend throws for a KPI write this mode forbids; otherwise return. */
+/**
+ * Throw what the real backend throws for a KPI write this mode forbids; otherwise
+ * return. `kpiId` is the KPI's issue id; `kpiKey` names it in permission messages.
+ */
 export function assertKpiWriteAllowed(
   action: 'add' | 'nest' | 'record' | 'edit' | 'target',
   mode: AccessMode | null,
   kpiId: string | null,
   hiddenKpiId: string | null,
+  kpiKey: string | null = kpiId,
 ): void {
   if (!mode) return;
   const access = ACCESS[mode];
@@ -122,6 +134,6 @@ export function assertKpiWriteAllowed(
   }
   if (action === 'add' && !access.create) throw new Error(kpiPermissionMessage('add'));
   if (action === 'nest' && !access.link) throw new Error(kpiPermissionMessage('nest'));
-  if (action === 'record' && !access.edit) throw new Error(kpiPermissionMessage('record', undefined, kpiId ?? undefined));
-  if (action === 'edit' && !access.edit) throw new Error(kpiPermissionMessage('edit', undefined, kpiId ?? undefined));
+  if (action === 'record' && !access.edit) throw new Error(kpiPermissionMessage('record', undefined, kpiKey ?? undefined));
+  if (action === 'edit' && !access.edit) throw new Error(kpiPermissionMessage('edit', undefined, kpiKey ?? undefined));
 }

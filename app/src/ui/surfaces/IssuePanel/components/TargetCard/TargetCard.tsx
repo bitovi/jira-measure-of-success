@@ -109,7 +109,7 @@ export function TargetCard({
   const missing = !!row.kpiMissing;
   const noAccess = !!row.kpiNoAccess;
   const readOnlyBet = missing || noAccess;
-  const viewReason = noAccess ? kpiPermissionMessage('view', undefined, row.kpiId) : null;
+  const viewReason = noAccess ? kpiPermissionMessage('view', undefined, row.kpiKey) : null;
   const pill = row.resolving || readOnlyBet ? null : pillFor(row);
   const nudge = row.resolving || readOnlyBet ? null : nudgeFor(row);
   const saved = draftFromRow(row);
@@ -131,7 +131,7 @@ export function TargetCard({
       <header className="flex min-h-6 items-center gap-1.5">
         <span className="flex min-w-0 items-center gap-1 text-sm leading-5 text-text-subtle">
           {linkName ? (
-            <Tooltip content={`Open ${row.name} (${row.kpiId}) in Jira`}>
+            <Tooltip content={`Open ${row.name} (${row.kpiKey}) in Jira`}>
               {(tooltipProps) => (
                 <a
                   {...tooltipProps}

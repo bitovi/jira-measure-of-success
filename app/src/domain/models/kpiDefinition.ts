@@ -8,7 +8,7 @@ export const KpiDirection = z.enum(['increase', 'decrease']);
 export type KpiDirection = z.infer<typeof KpiDirection>;
 
 export const KpiDefinition = z.object({
-  /** slug, e.g. "revenue", "nps", "cycle-time" — unique across the catalog */
+  /** unique across the catalog: a KPI issue id (e.g. "10234"), or a slug in older test fixtures */
   id: z
     .string()
     .min(1)

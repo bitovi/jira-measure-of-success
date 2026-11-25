@@ -25,6 +25,7 @@ export type KpiReading = z.infer<typeof KpiReading>;
  * client assumes the server stored exactly what it sent.
  */
 export const RecordValueInput = z.object({
+  /** the KPI's issue id */
   kpiId: z.string().min(1),
   date: IsoDate,
   value: z.number().finite().nullable(),

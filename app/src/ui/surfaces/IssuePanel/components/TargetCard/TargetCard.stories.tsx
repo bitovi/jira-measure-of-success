@@ -8,7 +8,8 @@ import { TargetCard } from './TargetCard.js';
  * a wide width — the card's layout follows its own width (container query).
  */
 const base: PanelRowDto = {
-  kpiId: 'stores',
+  kpiId: '10003',
+  kpiKey: 'KPI-3',
   name: 'Number of Stores',
   unit: 'stores',
   direction: 'increase',
@@ -44,10 +45,11 @@ const STATES: Array<[string, PanelRowDto]> = [
   ['Total by a fixed date', { ...base, targetType: 'absolute', target: 300, dueTiming: { mode: 'absolute', absolute: '2026-12-31', anchor: 'issueDueDate', offsetMonths: 0 }, targetDate: { date: '2026-12-31', pending: false, source: '' }, resolvedValue: { value: 300, baseline: null, baselineDate: null, baselineFrom: null, state: 'baselined', provisional: false } }],
 ];
 
-/** A target whose KPI issue was deleted: the panel only has the stored bet and the raw key. */
+/** A target whose KPI issue was deleted: the panel only has the stored bet and the raw key (a key-only reference). */
 const deletedKpi: PanelRowDto = {
   ...base,
   kpiId: 'KPI-404',
+  kpiKey: 'KPI-404',
   name: 'KPI-404',
   unit: '',
   direction: null,
@@ -143,7 +145,7 @@ export const KpiDeleted: Story = {
 };
 
 /** A target whose KPI the user may not see (spec 10): only the stored bet and the raw key. */
-const hiddenKpi: PanelRowDto = { ...deletedKpi, kpiId: 'KPI-7', name: 'KPI-7', kpiMissing: undefined, kpiNoAccess: true };
+const hiddenKpi: PanelRowDto = { ...deletedKpi, kpiId: '10007', kpiKey: 'KPI-7', name: 'KPI-7', kpiMissing: undefined, kpiNoAccess: true };
 const onRemoveHidden = fn();
 
 /** No permission to view the KPI: read-only bet, a permission notice with a tooltip, Edit disabled, Remove works. */

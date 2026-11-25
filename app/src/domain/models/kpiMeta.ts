@@ -22,8 +22,8 @@ export const KPI_NAME_MAX_LENGTH = 255;
  * `updateKpi` input: only the parts of the KPI to change. A field that's left
  * out is left alone in Jira, so an edit made from an out-of-date timeline can't
  * write back old values for fields the user didn't touch. `parentKpiId: null`
- * moves the KPI to the root; leaving it out keeps the KPI where it is. Parsed at
- * the bridge boundary.
+ * moves the KPI to the root; leaving it out keeps the KPI where it is. `kpiId`
+ * and `parentKpiId` are issue ids (spec 11 · 03). Parsed at the bridge boundary.
  */
 export const UpdateKpiInput = z.object({
   kpiId: z.string().min(1, 'No KPI to edit.'),

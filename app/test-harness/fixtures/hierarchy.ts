@@ -36,6 +36,8 @@ export const HIERARCHY_LEVELS: HierarchyLevel[] = [
 ];
 
 // ── KPI catalog ─────────────────────────────────────────────────────────────
+// A KPI's id is its Jira issue id (spec 11 · 03): 20001… here, with keys KPI-1…
+// (see KPI_TREE) that are only for display. Targets are in the migrated shape.
 function kpi(
   id: string,
   name: string,
@@ -55,17 +57,17 @@ function kpi(
 }
 
 export const CATALOG: KpiDefinition[] = [
-  kpi('revenue', 'Revenue', 'USD', 'increase'),
-  kpi('orders', '# of Orders', 'count', 'increase'),
-  kpi('stores', 'Number of Stores', 'count', 'increase'),
-  kpi('feature-parity', 'Feature Parity', 'score', 'increase'),
-  kpi('time-to-install', 'Time To Install', 'hours', 'decrease'),
-  kpi('order-throughput', 'Order Throughput', 'orders/hr', 'increase'),
-  kpi('time-to-checkout', 'Time To Checkout', 'seconds', 'decrease'),
-  kpi('error-rate', 'Error Rate', '%', 'decrease'),
-  kpi('costs', 'Costs', 'USD', 'decrease'),
-  kpi('opportunity-enablement', 'Opportunity Enablement', 'future value', 'increase'),
-  kpi('weekly-active-users', 'Weekly Active Users', 'users', 'increase'),
+  kpi('20001', 'Revenue', 'USD', 'increase'),
+  kpi('20002', '# of Orders', 'count', 'increase'),
+  kpi('20003', 'Number of Stores', 'count', 'increase'),
+  kpi('20004', 'Feature Parity', 'score', 'increase'),
+  kpi('20005', 'Time To Install', 'hours', 'decrease'),
+  kpi('20006', 'Order Throughput', 'orders/hr', 'increase'),
+  kpi('20007', 'Time To Checkout', 'seconds', 'decrease'),
+  kpi('20008', 'Error Rate', '%', 'decrease'),
+  kpi('20009', 'Costs', 'USD', 'decrease'),
+  kpi('20010', 'Opportunity Enablement', 'future value', 'increase'),
+  kpi('20011', 'Weekly Active Users', 'users', 'increase'),
 ];
 
 // ── Assignment builders ─────────────────────────────────────────────────────
@@ -116,12 +118,12 @@ export const ISSUES: FixtureIssue[] = [
     ownDue: '2026-12-31',
     assignments: [
       assignment({
-        kpiId: 'revenue',
+        kpiId: '20001',
         target: 1_500_000,
         timing: { start: '2026-01-01', due: relDue({ offsetMonths: 3 }) },
       }),
       assignment({
-        kpiId: 'costs',
+        kpiId: '20009',
         target: 800_000,
         targetType: 'absolute',
         timing: { start: null, due: relDue({ mode: 'absolute', absolute: '2026-10-15' }) },
@@ -140,12 +142,12 @@ export const ISSUES: FixtureIssue[] = [
     otherDates: { customfield_10023: '2026-03-01', customfield_10022: '2026-10-31' },
     assignments: [
       assignment({
-        kpiId: 'revenue',
+        kpiId: '20001',
         target: 100_000,
         timing: { start: null, due: relDue({ offsetMonths: 1 }) },
       }),
       assignment({
-        kpiId: 'stores',
+        kpiId: '20003',
         target: 250,
         targetType: 'absolute',
         timing: { start: null, due: relDue({ mode: 'absolute', absolute: '2026-09-30' }) },
@@ -163,7 +165,7 @@ export const ISSUES: FixtureIssue[] = [
     ownDue: '2026-03-31',
     assignments: [
       assignment({
-        kpiId: 'stores',
+        kpiId: '20003',
         target: 145,
         targetType: 'absolute',
         timing: { start: null, due: relDue({ offsetMonths: 0 }) },
@@ -179,8 +181,8 @@ export const ISSUES: FixtureIssue[] = [
     parentId: '10090',
     ownStart: '2026-02-01',
     ownDue: '2026-05-31',
-    // Points at a KPI issue that was deleted from the KPI space (not in CATALOG),
-    // so the panel shows the "KPI deleted" card.
+    // A key-only reference: a KPI deleted before the targets were migrated to
+    // ids (spec 11 · 03), so the panel shows the "KPI deleted" card.
     assignments: [
       assignment({
         kpiId: 'KPI-404',
@@ -203,7 +205,7 @@ export const ISSUES: FixtureIssue[] = [
     ownDue: '2027-06-30',
     assignments: [
       // 2 months after (not 1) so its marker doesn't sit under INIT-64's on the timeline.
-      assignment({ kpiId: 'weekly-active-users', target: 5, targetType: 'percent', timing: { start: null, due: relDue({ offsetMonths: 2 }) } }),
+      assignment({ kpiId: '20011', target: 5, targetType: 'percent', timing: { start: null, due: relDue({ offsetMonths: 2 }) } }),
     ],
   },
   ...(
@@ -224,7 +226,7 @@ export const ISSUES: FixtureIssue[] = [
       ownStart: null,
       ownDue: due,
       assignments: [
-        assignment({ kpiId: 'weekly-active-users', target: 1, targetType: 'percent', timing: { start: null, due: relDue({ offsetMonths: 1 }) } }),
+        assignment({ kpiId: '20011', target: 1, targetType: 'percent', timing: { start: null, due: relDue({ offsetMonths: 1 }) } }),
       ],
     }),
   ),
@@ -302,6 +304,7 @@ export interface TimelineTargetFixture {
 }
 
 export interface KpiTreeNode {
+  /** the KPI's Jira issue id */
   kpiId: string;
   /** Jira issue key of the KPI issue (KPIs are issues in the KPI space) */
   issueKey: string;
@@ -361,7 +364,7 @@ const r1 = (v: number) => Math.round(v * 10) / 10;
 
 export const KPI_TREE: KpiTreeNode[] = [
   {
-    kpiId: 'revenue',
+    kpiId: '20001',
     issueKey: 'KPI-1',
     name: 'Revenue',
     unit: 'USD',
@@ -381,7 +384,7 @@ export const KPI_TREE: KpiTreeNode[] = [
     ]),
     children: [
       {
-        kpiId: 'orders',
+        kpiId: '20002',
         issueKey: 'KPI-2',
         name: '# of Orders',
         unit: 'count',
@@ -397,7 +400,7 @@ export const KPI_TREE: KpiTreeNode[] = [
         ]),
         children: [
           {
-            kpiId: 'stores',
+            kpiId: '20003',
             issueKey: 'KPI-3',
             name: 'Number of Stores',
             unit: 'count',
@@ -409,7 +412,7 @@ export const KPI_TREE: KpiTreeNode[] = [
             readings: reads([['2026-01-15', 120], ['2026-04-15', 151], ['2026-07-05', 171]]),
             children: [
               {
-                kpiId: 'feature-parity',
+                kpiId: '20004',
                 issueKey: 'KPI-4',
                 name: 'Feature Parity',
                 unit: 'score',
@@ -424,7 +427,7 @@ export const KPI_TREE: KpiTreeNode[] = [
                 ]),
               },
               {
-                kpiId: 'time-to-install',
+                kpiId: '20005',
                 issueKey: 'KPI-5',
                 name: 'Time To Install',
                 unit: 'hours',
@@ -438,7 +441,7 @@ export const KPI_TREE: KpiTreeNode[] = [
             ],
           },
           {
-            kpiId: 'order-throughput',
+            kpiId: '20006',
             issueKey: 'KPI-6',
             name: 'Order Throughput',
             unit: 'orders/hr',
@@ -453,7 +456,7 @@ export const KPI_TREE: KpiTreeNode[] = [
             ]),
             children: [
               {
-                kpiId: 'time-to-checkout',
+                kpiId: '20007',
                 issueKey: 'KPI-7',
                 name: 'Time To Checkout',
                 unit: 'seconds',
@@ -465,7 +468,7 @@ export const KPI_TREE: KpiTreeNode[] = [
                 readings: series('2026-01-06', '2026-07-07', 7, 205, 145, 0.04, 23, r0),
               },
               {
-                kpiId: 'error-rate',
+                kpiId: '20008',
                 issueKey: 'KPI-8',
                 name: 'Error Rate',
                 unit: '%',
@@ -483,7 +486,7 @@ export const KPI_TREE: KpiTreeNode[] = [
     ],
   },
   {
-    kpiId: 'costs',
+    kpiId: '20009',
     issueKey: 'KPI-9',
     name: 'Costs',
     unit: 'USD',
@@ -498,7 +501,7 @@ export const KPI_TREE: KpiTreeNode[] = [
     ]),
   },
   {
-    kpiId: 'opportunity-enablement',
+    kpiId: '20010',
     issueKey: 'KPI-10',
     name: 'Opportunity Enablement',
     unit: 'future value',
@@ -509,7 +512,7 @@ export const KPI_TREE: KpiTreeNode[] = [
     readings: [],
   },
   {
-    kpiId: 'weekly-active-users',
+    kpiId: '20011',
     issueKey: 'KPI-11',
     name: 'Weekly Active Users',
     unit: 'users',

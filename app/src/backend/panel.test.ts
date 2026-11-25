@@ -60,10 +60,10 @@ async function invoke<T>(
   return { data, routes: [...h.routes], trace: traces[0] };
 }
 
-function findNode(nodes: TimelineNodeDto[], issueKey: string): TimelineNodeDto | undefined {
+function findNode(nodes: TimelineNodeDto[], kpiId: string): TimelineNodeDto | undefined {
   for (const n of nodes) {
-    if (n.issueKey === issueKey) return n;
-    const found = findNode(n.children, issueKey);
+    if (n.kpiId === kpiId) return n;
+    const found = findNode(n.children, kpiId);
     if (found) return found;
   }
   return undefined;
@@ -83,8 +83,9 @@ describe('issue panel load', () => {
     expect(data.panel).toBeUndefined();
     const basis = data.basis!;
     expect(basis.issueKey).toBe('WEB-2');
-    expect(basis.own.map((a) => a.kpiId)).toEqual(['KPI-2']);
+    expect(basis.own.map((a) => a.kpiId)).toEqual(['1001']);
     expect(basis.catalog).toHaveLength(40);
+    expect(basis.catalog.find((c) => c.id === '1000')).toMatchObject({ key: 'KPI-1', name: 'KPI 1' });
     expect(basis.catalog.every((c) => c.currentValue === null)).toBe(true);
     // The issue's targets come inside the issue GET; no rollup walk, no readings.
     expect(routes.some((r) => r.includes(`/issue/${EPIC_OWN_DUE}/properties/`))).toBe(false);
@@ -94,7 +95,7 @@ describe('issue panel load', () => {
     const panel = assemblePanel(basis, null);
     expect(panel.resolving).toBe(true);
     expect(panel.rows).toHaveLength(1);
-    expect(panel.rows[0]).toMatchObject({ kpiId: 'KPI-2', name: 'KPI 2', relationship: 'onlyHere', resolving: true });
+    expect(panel.rows[0]).toMatchObject({ kpiId: '1001', kpiKey: 'KPI-2', name: 'KPI 2', relationship: 'onlyHere', resolving: true });
   });
 
   it('walks only the issue subtree unless a target anchors to the parent due date', async () => {
@@ -120,7 +121,7 @@ describe('issue panel load', () => {
 
   it('a story without targets lists its epic\'s KPI as "on parent" and reports its due date', async () => {
     const { data } = await invoke<PanelData>('getPanelData', { payload: { issueId: STORY } });
-    expect(data.rows.map((r) => [r.kpiId, r.relationship])).toEqual([['KPI-1', 'onParentNotTracked']]);
+    expect(data.rows.map((r) => [r.kpiId, r.kpiKey, r.relationship])).toEqual([['1000', 'KPI-1', 'onParentNotTracked']]);
     expect(data.issueDueDate).not.toBeNull();
   });
 

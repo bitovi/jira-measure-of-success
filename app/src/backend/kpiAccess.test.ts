@@ -107,9 +107,9 @@ describe('reads follow the user’s KPI-space permissions', () => {
       jira.fixture.userView.hidden.add(KPI_1_ID);
       bodies = captureBulkfetch(jira);
     });
-    const keys = flatten(data!.roots).map((n) => n.kpiId);
-    expect(keys).not.toContain('KPI-1');
-    expect(keys).toHaveLength(SMALL.kpis - 1);
+    const ids = flatten(data!.roots).map((n) => n.kpiId);
+    expect(ids).not.toContain(KPI_1_ID);
+    expect(ids).toHaveLength(SMALL.kpis - 1);
     expect(bodies.flat()).not.toContain(KPI_1_ID);
   });
 
@@ -119,7 +119,7 @@ describe('reads follow the user’s KPI-space permissions', () => {
     });
     expect(data!.basis!.catalog).toEqual([]);
     expect(data!.basis!.access).toEqual(NO_ACCESS);
-    expect(data!.basis!.noAccessKpiIds).toEqual(['KPI-1']);
+    expect(data!.basis!.noAccessKpiIds).toEqual([KPI_1_ID]);
     expect(data!.basis!.deletedKpiIds).toBeUndefined();
   });
 
@@ -127,9 +127,11 @@ describe('reads follow the user’s KPI-space permissions', () => {
     const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.hidden.add(KPI_1_ID);
     });
-    expect(data!.basis!.catalog.map((c) => c.id)).not.toContain('KPI-1');
-    expect(data!.basis!.noAccessKpiIds).toEqual(['KPI-1']);
+    expect(data!.basis!.catalog.map((c) => c.id)).not.toContain(KPI_1_ID);
+    expect(data!.basis!.noAccessKpiIds).toEqual([KPI_1_ID]);
     expect(data!.basis!.deletedKpiIds).toBeUndefined();
+    // Labelled with the key the app's lookup found (it's on the work item's own property anyway).
+    expect(data!.basis!.kpiKeys).toEqual({ [KPI_1_ID]: 'KPI-1' });
   });
 
   it('panel: a KPI that exists but is not indexed yet is in neither list (unchanged)', async () => {
@@ -138,8 +140,8 @@ describe('reads follow the user’s KPI-space permissions', () => {
       // Exists in Jira, but the KPI-space search doesn't return it yet.
       issues.set('1999', { ...issues.get(KPI_1_ID)!, id: '1999', key: 'KPI-99' });
       const epic = issues.get(EPIC)!;
-      const prop = epic.properties['kpi-assignments'] as { assignments: Array<{ kpiId: string }> };
-      prop.assignments.push({ ...prop.assignments[0], kpiId: 'KPI-99' });
+      const prop = epic.properties['kpi-assignments'] as { assignments: Array<{ kpiId: string; kpiIssueId?: string }> };
+      prop.assignments.push({ ...prop.assignments[0], kpiIssueId: '1999', kpiId: 'KPI-99' });
     });
     expect(data!.basis!.noAccessKpiIds).toBeUndefined();
     expect(data!.basis!.deletedKpiIds).toBeUndefined();
@@ -150,7 +152,7 @@ describe('reads follow the user’s KPI-space permissions', () => {
       jira.fixture.issues.delete(KPI_1_ID);
       jira.fixture.kpiIds = jira.fixture.kpiIds.filter((id) => id !== KPI_1_ID);
     });
-    expect(data!.basis!.deletedKpiIds).toEqual(['KPI-1']);
+    expect(data!.basis!.deletedKpiIds).toEqual([KPI_1_ID]);
     expect(data!.basis!.noAccessKpiIds).toBeUndefined();
   });
 
@@ -216,7 +218,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
   });
 
   it('createKpi runs as the user', async () => {
-    const { error, asOf } = await invoke('createKpi', kpiInput({ parentKpiId: 'KPI-1' }));
+    const { error, asOf } = await invoke('createKpi', kpiInput({ parentKpiId: '1000' }));
     expect(error).toBeUndefined();
     expect(asOf('POST /rest/api/3/issue')).toEqual(['user']);
     expect(asOf('POST /rest/api/3/issueLink')).toEqual(['user']);
@@ -233,7 +235,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
   });
 
   it('createKpi under a parent without Link Issues: refused before the create (no orphan)', async () => {
-    const { error, jira } = await invoke('createKpi', kpiInput({ parentKpiId: 'KPI-1' }), (j) => {
+    const { error, jira } = await invoke('createKpi', kpiInput({ parentKpiId: '1000' }), (j) => {
       j.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: true, edit: true, link: false };
     });
     expect(error?.message).toMatch(/^Nesting a KPI under another needs Link Issues permission/);
@@ -251,7 +253,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
   });
 
   it('when the link fails after the create, the rollback delete still runs as the app', async () => {
-    const { error, jira, asOf } = await invoke('createKpi', kpiInput({ parentKpiId: 'KPI-1' }), (j) => {
+    const { error, jira, asOf } = await invoke('createKpi', kpiInput({ parentKpiId: '1000' }), (j) => {
       j.fixture.userView.isAdmin = false; // a plain user can't delete issues
       j.intercept = (method, path) => (method === 'POST' && path === '/rest/api/3/issueLink' ? { status: 500 } : undefined);
     });
@@ -262,11 +264,11 @@ describe('writes follow the user’s KPI-space permissions', () => {
 
   it('updateKpi edits and re-nests as the user', async () => {
     const { error, asOf } = await invoke('updateKpi', {
-      kpiId: 'KPI-2',
+      kpiId: '1001',
       name: 'Orders',
       unit: '$',
       direction: null,
-      parentKpiId: 'KPI-6',
+      parentKpiId: '1005',
     });
     expect(error).toBeUndefined();
     expect(asOf('PUT /rest/api/3/issue/{id}')).toEqual(['user']);
@@ -277,7 +279,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
   it('updateKpi without Edit Issues: says so, changes nothing', async () => {
     const { error, jira } = await invoke(
       'updateKpi',
-      { kpiId: 'KPI-2', name: 'Orders', unit: 'count', direction: 'decrease', parentKpiId: 'KPI-1' },
+      { kpiId: '1001', name: 'Orders', unit: 'count', direction: 'decrease', parentKpiId: '1000' },
       (j) => {
         j.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
       },
@@ -289,7 +291,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
   it('updateKpi moving a KPI without Link Issues: refused before any write (not even the rename)', async () => {
     const { error, jira } = await invoke(
       'updateKpi',
-      { kpiId: 'KPI-2', name: 'Orders', unit: 'count', direction: 'decrease', parentKpiId: 'KPI-6' },
+      { kpiId: '1001', name: 'Orders', unit: 'count', direction: 'decrease', parentKpiId: '1005' },
       (j) => {
         j.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: true, edit: true, link: false };
       },
@@ -299,7 +301,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
   });
 
   it('updateKpi when the permission lookup fails: refused with a retry message, writes nothing', async () => {
-    const { error, jira } = await invoke('updateKpi', { kpiId: 'KPI-2', name: 'Orders', parentKpiId: 'KPI-6' }, (j) => {
+    const { error, jira } = await invoke('updateKpi', { kpiId: '1001', name: 'Orders', parentKpiId: '1005' }, (j) => {
       j.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
     });
     expect(error?.message).toBe("Couldn't check your permissions on the KPI space, so the KPI wasn't saved. Try again.");
@@ -307,7 +309,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
   });
 
   it('updateKpi moving a KPI with Link Issues but not Edit Issues: allowed (a move only changes links)', async () => {
-    const { error, jira } = await invoke('updateKpi', { kpiId: 'KPI-2', parentKpiId: 'KPI-6' }, (j) => {
+    const { error, jira } = await invoke('updateKpi', { kpiId: '1001', parentKpiId: '1005' }, (j) => {
       j.fixture.userView.access[KPI_PROJECT.key] = { browse: true, create: false, edit: false, link: true };
     });
     expect(error).toBeUndefined();
@@ -317,17 +319,17 @@ describe('writes follow the user’s KPI-space permissions', () => {
   it('updateKpi on a KPI the user may not see: says so, changes nothing', async () => {
     const { error, jira } = await invoke(
       'updateKpi',
-      { kpiId: 'KPI-1', name: 'X', unit: '', direction: null, parentKpiId: null },
+      { kpiId: '1000', name: 'X', unit: '', direction: null, parentKpiId: null },
       (j) => {
         j.fixture.userView.hidden.add(KPI_1_ID);
       },
     );
-    expect(error?.message).toMatch(/^KPI-1 doesn't exist, or you don't have permission to view it/);
+    expect(error?.message).toMatch(/^This KPI doesn't exist, or you don't have permission to view it/);
     expect(jira.writes).toEqual([]);
   });
 
   it('recordValue writes as the user, so the reading names who recorded it', async () => {
-    const { error, jira, asOf } = await invoke('recordValue', { kpiId: 'KPI-1', date: '2026-06-01', value: 42 });
+    const { error, jira, asOf } = await invoke('recordValue', { kpiId: '1000', date: '2026-06-01', value: 42 });
     expect(error).toBeUndefined();
     expect(asOf('PUT /rest/api/3/issue/{id}')).toEqual(['user']);
     expect(jira.writes.some((w) => w.includes('/app/field/'))).toBe(false);
@@ -337,7 +339,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
 
   it('recordValue without Edit Issues: says so, records nothing', async () => {
     let before = 0;
-    const { error, jira } = await invoke('recordValue', { kpiId: 'KPI-1', date: '2026-06-01', value: 42 }, (j) => {
+    const { error, jira } = await invoke('recordValue', { kpiId: '1000', date: '2026-06-01', value: 42 }, (j) => {
       j.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
       before = j.fixture.readingChanges.get(KPI_1_ID)!.length;
     });
@@ -348,10 +350,10 @@ describe('writes follow the user’s KPI-space permissions', () => {
   });
 
   it('recordValue on a KPI hidden from the user: refused, nothing written', async () => {
-    const { error, jira } = await invoke('recordValue', { kpiId: 'KPI-1', date: '2026-06-01', value: 42 }, (j) => {
+    const { error, jira } = await invoke('recordValue', { kpiId: '1000', date: '2026-06-01', value: 42 }, (j) => {
       j.fixture.userView.hidden.add(KPI_1_ID);
     });
-    expect(error?.message).toMatch(/^KPI-1 doesn't exist, or you don't have permission to view it\. Viewing KPIs needs Browse Projects/);
+    expect(error?.message).toMatch(/^This KPI doesn't exist, or you don't have permission to view it\. Viewing KPIs needs Browse Projects/);
     expect(jira.writes).toEqual([]);
   });
 
@@ -362,10 +364,10 @@ describe('writes follow the user’s KPI-space permissions', () => {
   });
 
   it('addTarget on a KPI hidden from the user: refused, no kpi-assignments write', async () => {
-    const { error, jira } = await invoke('addTarget', targetInput('KPI-2'), (j) => {
+    const { error, jira } = await invoke('addTarget', targetInput('1001'), (j) => {
       j.fixture.userView.hidden.add('1001');
     });
-    expect(error?.message).toMatch(/^KPI-2 doesn't exist, or you don't have permission to view it\./);
+    expect(error?.message).toMatch(/^This KPI doesn't exist, or you don't have permission to view it\./);
     expect(jira.writes).toEqual([]);
   });
 
@@ -377,7 +379,7 @@ describe('writes follow the user’s KPI-space permissions', () => {
 
   it('saveAssignment on a KPI hidden from the user: refused', async () => {
     const assignment = {
-      kpiId: 'KPI-1',
+      kpiId: '1000',
       inheritFromParent: false,
       target: 1,
       targetType: 'absolute',
@@ -388,12 +390,12 @@ describe('writes follow the user’s KPI-space permissions', () => {
     const { error, jira } = await invoke('saveAssignment', { issueId: EPIC, assignment }, (j) => {
       j.fixture.userView.hidden.add(KPI_1_ID);
     });
-    expect(error?.message).toMatch(/^KPI-1 doesn't exist, or you don't have permission to view it\. Viewing KPIs needs Browse Projects/);
+    expect(error?.message).toMatch(/^This KPI doesn't exist, or you don't have permission to view it\. Viewing KPIs needs Browse Projects/);
     expect(jira.writes).toEqual([]);
   });
 
   it('removeAssignment of a target on a KPI hidden from the user still works (decided)', async () => {
-    const { error, jira } = await invoke('removeAssignment', { issueId: EPIC, kpiId: 'KPI-1' }, (j) => {
+    const { error, jira } = await invoke('removeAssignment', { issueId: EPIC, kpiId: '1000' }, (j) => {
       j.fixture.userView.hidden.add(KPI_1_ID);
     });
     expect(error).toBeUndefined();
