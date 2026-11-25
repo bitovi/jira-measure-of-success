@@ -1,6 +1,6 @@
 # 08 — Timeline and Add KPI across spaces
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft: design pending gate G4** · Depends on: 06.
+Part of [11 — Scalable KPI data](../plan.md). Status: **G4 decided by the implementer (autopilot), pending Justin's review** · Depends on: 06.
 
 ## Problem
 
@@ -124,7 +124,7 @@ the shown KPIs' targets (R3).
   parent and the created-KPI flag show the KPI's key, overview Q7.)*
 - **Verify:** every scenario works in the browser; nothing talks to Jira.
 
-### Step 2 — 🔍 Gate G4: prototype review
+### Step 2 — 🔍 Gate G4: prototype review (decided by the implementer; see *Questions*)
 
 - **Stop. Ask Justin to review** the prototype. Iterate on it until it's agreed.
 - Write the decisions into *Questions*, then **write *Design* and rewrite Steps 3–6** before writing
@@ -176,6 +176,16 @@ _To be answered at gate G4._
 1. ~~**Ancestor rows** outside the KPI space filter: compact or full?~~ **Decided: compact** (one short,
    faded line, no track), as *Direction* says. The prototype's *Ancestor rows* switch can be removed
    at G4.
+
+### Decided at G4 (2026-11-24, implementer, autopilot; revisit at review)
+
+- Justin asked the implementer to continue without stopping at the gates. **The design is
+  [timeline-scope.html](./timeline-scope.html) as it stands, with *Direction* above as the written
+  design**; Steps 3–6 stand as written. The prototype's *Ancestor rows* switch is dropped (compact only).
+- The refused row-action state isn't added to the prototype first; it's built directly from 06
+  *Permissions* (busy, then the refused reason naming the space; **…** items disabled with reasons), and
+  Justin reviews it in the harness.
+- Plans' "Create a sibling work item below" strip stays out.
 
 ### Decided (2026-11-24)
 
