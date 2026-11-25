@@ -239,6 +239,26 @@ export function applyReadingEdits(
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
+/**
+ * Lay readings loaded after the skeleton (`getTimelineReadings`, spec 11 · 08)
+ * over KPIs the load left them out of; a KPI not in `readings` keeps its own.
+ */
+export function applyLoadedReadings(
+  data: TimelineData,
+  readings: Readonly<Record<string, TimelineReadingDto[]>>,
+): TimelineData {
+  if (Object.keys(readings).length === 0) return data;
+  const patch = (node: TimelineNodeDto): TimelineNodeDto => {
+    const children = node.children.map(patch);
+    const loaded = readings[node.kpiId];
+    if (!loaded || !node.readingsPending) return { ...node, children };
+    const { readingsPending, ...rest } = node;
+    void readingsPending;
+    return { ...rest, readings: loaded, children };
+  };
+  return { ...data, roots: data.roots.map(patch) };
+}
+
 /** `applyReadingEdits` across a timeline tree (each node by its kpiId). */
 export function applyReadingEditsToTree(
   data: TimelineData,

@@ -1145,21 +1145,44 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     }
 
     if (method === 'POST' && path === '/rest/api/3/changelog/bulkfetch') {
-      const req = JSON.parse(String(body)) as { issueIdsOrKeys: string[] };
+      const req = JSON.parse(String(body)) as { issueIdsOrKeys: string[]; maxResults?: number; nextPageToken?: string };
+      // Like Jira: at most 1,000 issues a request and 1,000 histories a page, paged by `nextPageToken` (R4).
+      if (req.issueIdsOrKeys.length > 1000) {
+        return respond(400, { errorMessages: ['issueIdsOrKeys must contain at most 1000 items'], errors: {} });
+      }
       // Jira silently leaves out issues the caller can't see.
       const ids = req.issueIdsOrKeys.filter((id) => {
         const issue = findIssue(id);
         return issue ? visible(issue, as) : true;
       });
-      return respond(200, {
-        issueChangeLogs: ids.map((id) => ({
+      const histories = ids.flatMap((id) =>
+        (fixture.readingChanges.get(id) ?? []).map((c) => ({
           issueId: id,
-          changeHistories: (fixture.readingChanges.get(id) ?? []).map((c) => ({
+          history: {
             created: c.created,
             ...(c.by ? { author: { accountId: c.by } } : {}),
             items: [{ fieldId: READING_FIELD_ID, to: c.to, toString: c.to }],
-          })),
+          },
         })),
+      );
+      const from = Number(req.nextPageToken ?? 0);
+      const size = Math.min(Math.max(1, req.maxResults ?? 1000), 1000);
+      const page = histories.slice(from, from + size);
+      const issueChangeLogs: Array<{ issueId: string; changeHistories: unknown[] }> = [];
+      for (const { issueId, history } of page) {
+        const last = issueChangeLogs[issueChangeLogs.length - 1];
+        if (last?.issueId === issueId) last.changeHistories.push(history);
+        else issueChangeLogs.push({ issueId, changeHistories: [history] });
+      }
+      // An issue with no history is listed (empty) on the first page.
+      if (from === 0) {
+        for (const id of ids) {
+          if (!(fixture.readingChanges.get(id) ?? []).length) issueChangeLogs.push({ issueId: id, changeHistories: [] });
+        }
+      }
+      return respond(200, {
+        issueChangeLogs,
+        ...(from + size < histories.length ? { nextPageToken: String(from + size) } : {}),
       });
     }
 
@@ -1336,7 +1359,13 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const all = [...fixture.projects.entries()]
         .filter(([key, p]) => !query || key.toLowerCase().includes(query) || p.name.toLowerCase().includes(query))
         .filter(([key]) => as === 'app' || accessTo(key).browse)
-        .sort(([a], [b]) => (params.get('orderBy') === 'key' ? (a < b ? -1 : a > b ? 1 : 0) : 0))
+        // `action=create`: only projects the user may create issues in (01 B6)
+        .filter(([key]) => as === 'app' || params.get('action') !== 'create' || accessTo(key).create)
+        .sort(([a, pa], [b, pb]) => {
+          const by = params.get('orderBy');
+          const [x, y] = by === 'name' ? [pa.name, pb.name] : by === 'key' ? [a, b] : ['', ''];
+          return x < y ? -1 : x > y ? 1 : 0;
+        })
         .map(([key, p]) => projectJson(key, p));
       const startAt = Number(params.get('startAt') ?? 0);
       const max = Number(params.get('maxResults') ?? 50);

@@ -7,18 +7,21 @@ import ChevronDownIcon from '@atlaskit/icon/core/chevron-down';
 import ChevronRightIcon from '@atlaskit/icon/core/chevron-right';
 import CrossIcon from '@atlaskit/icon/core/cross';
 import Modal, { ModalBody, ModalFooter, ModalHeader, ModalTitle, ModalTransition } from '@atlaskit/modal-dialog';
-import Select, { AsyncSelect, CheckboxSelect, type ClearIndicatorProps } from '@atlaskit/select';
+import Select, { AsyncSelect, type ClearIndicatorProps } from '@atlaskit/select';
 import Textfield from '@atlaskit/textfield';
 import Tooltip from '@atlaskit/tooltip';
 import {
+  browserTimelineFilters,
   toActionError,
   useTimelineData,
+  type TimelineFilterStore,
   type UseTimeline,
-  type TimelineActionError,
 } from '@ui/data/useTimelineData/index.js';
 import { openKpiSettings, openIssue, openIssueNewTab, getSiteUrl } from '@ui/bridge.js';
 import { AccessRefusal } from '@ui/components/AccessRefusal/index.js';
 import { DisabledReason } from '@ui/components/DisabledReason/index.js';
+import { SpaceKey } from '@ui/components/SpaceFilter/index.js';
+import { TypeIcon } from '@ui/components/WorkItemRef/index.js';
 import { useKpiAccess } from '@ui/data/useKpiAccess/index.js';
 import {
   buildAxis,
@@ -41,7 +44,6 @@ import {
   PlotKey,
   KeyHighlightProvider,
   Dimmable,
-  flattenNodes,
   summarizeKey,
   undatedKeyKinds,
   useKeyHighlight,
@@ -55,24 +57,34 @@ import {
 } from '@ui/plot/index.js';
 import {
   collectContributingProjects,
-  defaultKpiCreateSpace,
-  filterTimelineByProjects,
+  fullRowKpiIds,
   kpiActionBlockedReason,
   kpiEditChanges,
+  kpiSpaceKeyOf,
+  kpiSpacesOf,
   kpiSubtreeIds,
   NO_KPIS_MESSAGE,
   parentKpiIdOf,
-  projectKeyOfIssueKey,
   projectSeries,
+  scopeShowsKpi,
+  scopeTimeline,
   type KpiSpaceAccess,
   type KpiSpaceRef,
   type AddTargetInput,
+  type CreatedKpi,
   type CreateKpiInput,
   type IssuePickerItem,
+  type KpiRefLookup,
   type TimelineNodeDto,
   type TimelineReadingDto,
   type TimelineTargetDto,
 } from '@domain/index.js';
+import { ActionErrorBanner, SETUP_ERRORS } from './components/ActionErrorBanner/index.js';
+import { AddKpiDialog, kpiSpaceName } from './components/AddKpiDialog/index.js';
+import { CreatedFlag } from './components/CreatedFlag/index.js';
+import { ParentField, type ParentOption } from './components/ParentField/index.js';
+import { RowActions } from './components/RowActions/index.js';
+import { ScopeFilter } from './components/ScopeFilter/index.js';
 
 /**
  * KPI Timeline v2 (Custom UI) — the KPI tree as a nested plan against a shared
@@ -87,10 +99,17 @@ import {
  * the KPI View via `@ui/plot` — see specs/04-kpi-view/plan.md.
  * Mock: specs/00-mocks/kpi-timeline-v2.html. Stories TL-1…TL-7.
  *
+ * Spec 11 · 08: one Timeline across spaces, scoped by a **KPI space** filter
+ * (default all KPIs; ancestors outside it as compact context rows) next to
+ * **Work from**, both remembered in the browser; Plans-style row actions; Add
+ * KPI in a chosen space. Prototype: specs/11-scalable-data/08-timeline-across-spaces/timeline-scope.html.
+ *
  * Data comes from an INJECTABLE loader hook (`useData`) — see usePanelData.ts.
  */
 const LABEL_W = 300;
 const ROW_H = 60;
+/** A context row: an ancestor outside the KPI space filter, one short line with no track. */
+const CONTEXT_ROW_H = 32;
 const HEADER_H = 33;
 // Right-pinned "Undated" lane holding projection chips for pending targets (FR-24).
 const UNDATED_W = 140;
@@ -119,36 +138,16 @@ function PageTitle() {
 /** Stable empty set for the issue picker's default `excludedKeys`. */
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
-// Project filter (contributing issues can live in any Jira project). The
-// selection is kept in the URL (`?projects=ECOM,POS`) via `history.replaceState`
-// — shareable/refresh-safe without spamming browser back-history on every
-// checkbox toggle.
-const PROJECTS_PARAM = 'projects';
-
-function readSelectedProjectsFromUrl(): Set<string> | null {
-  if (typeof window === 'undefined') return null;
-  const raw = new URLSearchParams(window.location.search).get(PROJECTS_PARAM);
-  if (!raw) return null;
-  const keys = raw.split(',').filter(Boolean);
-  return keys.length > 0 ? new Set(keys) : null;
-}
-
-function writeSelectedProjectsToUrl(selected: Set<string> | null): void {
-  if (typeof window === 'undefined') return;
-  const url = new URL(window.location.href);
-  if (selected && selected.size > 0) url.searchParams.set(PROJECTS_PARAM, [...selected].sort().join(','));
-  else url.searchParams.delete(PROJECTS_PARAM);
-  window.history.replaceState(window.history.state, '', url);
-}
-
 interface FlatRow {
   node: TimelineNodeDto;
   hasChildren: boolean;
+  /** an ancestor kept only for context: compact, faded, no track */
+  context: boolean;
 }
 
 /** A KPI's space: its key (what access is looked up by) and a label for messages. */
 function spaceOf(node: TimelineNodeDto): { key: string; label: string } {
-  const key = node.space?.key ?? projectKeyOfIssueKey(node.issueKey);
+  const key = kpiSpaceKeyOf(node);
   return { key, label: node.space?.name ?? key };
 }
 
@@ -161,14 +160,34 @@ function blockedReasons(
   access: KpiSpaceAccess | null,
   space: { label: string },
   kpiKey?: string,
-): { record: string | null; edit: string | null; add: string | null; nest: string | null } {
+): { record: string | null; edit: string | null; nest: string | null } {
   return {
     record: kpiActionBlockedReason('record', access, space.label, kpiKey),
     edit: kpiActionBlockedReason('edit', access, space.label, kpiKey),
-    add: kpiActionBlockedReason('add', access, space.label),
     nest: kpiActionBlockedReason('nest', access, space.label),
   };
 }
+
+/** Every loaded KPI, as the Parent field offers them (with keys, overview Q7). */
+function parentOptionsOf(roots: readonly TimelineNodeDto[], centralSpaceKey: string | null): ParentOption[] {
+  const out: ParentOption[] = [];
+  const walk = (nodes: readonly TimelineNodeDto[]) => {
+    for (const n of nodes) {
+      const key = kpiSpaceKeyOf(n);
+      out.push({
+        kpiId: n.kpiId,
+        key: n.issueKey,
+        name: n.name,
+        space: { key, name: kpiSpaceName({ key, name: n.space?.name ?? key }, centralSpaceKey) },
+      });
+      walk(n.children);
+    }
+  };
+  walk(roots);
+  return out;
+}
+
+const keySet = (keys: readonly string[] | undefined): Set<string> => new Set(keys ?? []);
 
 export function Timeline({
   useData = useTimelineData,
@@ -176,12 +195,15 @@ export function Timeline({
   onOpenIssue = openIssue,
   onOpenIssueNewTab = openIssueNewTab,
   loadSiteUrl = getSiteUrl,
+  filterStore = browserTimelineFilters,
 }: {
   useData?: UseTimeline;
   onOpenSettings?: () => void | Promise<void>;
   onOpenIssue?: (issueKey: string) => void | Promise<void>;
   onOpenIssueNewTab?: (issueKey: string) => void | Promise<void>;
   loadSiteUrl?: () => Promise<string>;
+  /** where the KPI space and Work from filters are remembered (spec 11 · 08) */
+  filterStore?: TimelineFilterStore;
 }) {
   const {
     data,
@@ -196,32 +218,36 @@ export function Timeline({
     searchIssues,
     addTarget,
     getKpiAccess,
+    loadReadings,
+    readingsError,
+    retryReadings,
+    getKpiCreateSpaces,
+    lookupKpiRef,
   } = useData();
   // Spec 11 · 06: a KPI's space access is looked up when one of its actions is
   // first used, and remembered per space for the page session.
   const kpiAccess = useKpiAccess(getKpiAccess);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [selectedProjects, setSelectedProjects] = useState<Set<string> | null>(() =>
-    readSelectedProjectsFromUrl(),
-  );
-  const isFirstProjectsRender = useRef(true);
+  // Spec 11 · 08: the KPI space filter and Work from, remembered in the browser.
+  const [remembered] = useState(() => filterStore.read());
+  const [spaceFilter, setSpaceFilter] = useState<Set<string>>(() => keySet(remembered?.spaces));
+  const [workFilter, setWorkFilter] = useState<Set<string>>(() => keySet(remembered?.workFrom));
+  const isFirstFiltersRender = useRef(true);
   useEffect(() => {
-    // Skip the initial mount — the URL already reflects `selectedProjects` (it
-    // was read FROM the URL above), so there's nothing to write back yet.
-    if (isFirstProjectsRender.current) {
-      isFirstProjectsRender.current = false;
+    if (isFirstFiltersRender.current) {
+      isFirstFiltersRender.current = false;
       return;
     }
-    writeSelectedProjectsToUrl(selectedProjects);
-  }, [selectedProjects]);
+    filterStore.write({ spaces: [...spaceFilter].sort(), workFrom: [...workFilter].sort() });
+  }, [filterStore, spaceFilter, workFilter]);
   const [adding, setAdding] = useState<{ node: TimelineNodeDto; date: string } | null>(null);
   const [editing, setEditing] = useState<{ node: TimelineNodeDto; reading: TimelineReadingDto } | null>(
     null,
   );
-  const [creating, setCreating] = useState<{
-    presetParent: { kpiId: string; name: string } | null;
-  } | null>(null);
-  const [editingKpi, setEditingKpi] = useState<TimelineNodeDto | null>(null);
+  const [creating, setCreating] = useState<{ presetParent: ParentOption | null } | null>(null);
+  const [createdFlag, setCreatedFlag] = useState<CreatedKpi | null>(null);
+  const [editingKpi, setEditingKpi] = useState<{ node: TimelineNodeDto; mode: 'definition' | 'move' } | null>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const [addingTarget, setAddingTarget] = useState<{ node: TimelineNodeDto; date: string } | null>(
     null,
   );
@@ -255,20 +281,54 @@ export function Timeline({
     };
   }, [loadSiteUrl]);
 
-  // Project filter — contributing issues can live in any Jira project.
-  // `availableProjects` lists every project key seen anywhere in the tree;
-  // `filteredRoots` is the subtree-filtered tree (unchanged when "All").
-  const availableProjects = useMemo(
-    () => (data ? collectContributingProjects(data.roots) : []),
+  const centralSpaceKey = data?.centralSpace?.key ?? null;
+  // The KPI space filter's options: the loaded KPIs' spaces (no request, overview Q5).
+  const kpiSpaces = useMemo(() => (data ? kpiSpacesOf(data.roots) : []), [data]);
+  const spaceOptions = useMemo(
+    () =>
+      kpiSpaces
+        .map((s) => ({ key: s.key, name: kpiSpaceName(s, centralSpaceKey) }))
+        .sort((a, b) => (a.key === centralSpaceKey ? -1 : b.key === centralSpaceKey ? 1 : a.name.localeCompare(b.name))),
+    [kpiSpaces, centralSpaceKey],
+  );
+  // A remembered space with no KPIs any more is ignored (so the page doesn't open empty).
+  const effectiveSpaces = useMemo(
+    () => new Set([...spaceFilter].filter((k) => kpiSpaces.some((s) => s.key === k))),
+    [spaceFilter, kpiSpaces],
+  );
+  // Work from: the projects of the work items that set targets.
+  const workOptions = useMemo(
+    () => (data ? collectContributingProjects(data.roots).map((key) => ({ key, name: key })) : []),
     [data],
   );
-  // The filter matches on the projects of each KPI's targets, which don't exist
-  // until Phase 2 lands — so until then every KPI shows (shimmering) and the
-  // saved selection is applied the moment targets arrive.
-  const filteredRoots = useMemo(
-    () => (data ? filterTimelineByProjects(data.roots, targetsPending ? null : selectedProjects) : []),
-    [data, selectedProjects, targetsPending],
+  // Work from matches on targets, which don't exist until Phase 2 lands — so
+  // until then it doesn't narrow, and the saved choice applies once they arrive.
+  const scoped = useMemo(
+    () =>
+      scopeTimeline(data?.roots ?? [], {
+        spaces: effectiveSpaces,
+        workFrom: targetsPending ? null : workFilter,
+      }),
+    [data, effectiveSpaces, workFilter, targetsPending],
   );
+
+  // Readings load only for full rows (spec 11 · 08); context rows need none.
+  const pendingReadingIds = useMemo(() => {
+    const full = new Set(fullRowKpiIds(scoped));
+    const out: string[] = [];
+    const walk = (nodes: readonly TimelineNodeDto[]) => {
+      for (const n of nodes) {
+        if (n.readingsPending && full.has(n.kpiId)) out.push(n.kpiId);
+        walk(n.children);
+      }
+    };
+    walk(scoped.roots);
+    return out;
+  }, [scoped]);
+  const pendingReadingKey = pendingReadingIds.join(',');
+  useEffect(() => {
+    if (pendingReadingKey) loadReadings(pendingReadingKey.split(','));
+  }, [pendingReadingKey, loadReadings]);
 
   const flat = useMemo(() => {
     if (!data) return [];
@@ -276,41 +336,47 @@ export function Timeline({
     const walk = (nodes: TimelineNodeDto[]) => {
       for (const node of nodes) {
         const hasChildren = node.children.length > 0;
-        rows.push({ node, hasChildren });
+        rows.push({ node, hasChildren, context: scoped.context.has(node.id) });
         if (hasChildren && !collapsed.has(node.id)) walk(node.children);
       }
     };
-    walk(filteredRoots);
+    walk(scoped.roots);
     return rows;
-  }, [data, filteredRoots, collapsed]);
+  }, [data, scoped, collapsed]);
+  // Full rows, collapsed ones included: what the axis and the key count.
+  const fullNodes = useMemo(() => {
+    const out: TimelineNodeDto[] = [];
+    const walk = (nodes: readonly TimelineNodeDto[]) => {
+      for (const n of nodes) {
+        if (!scoped.context.has(n.id)) out.push(n);
+        walk(n.children);
+      }
+    };
+    walk(scoped.roots);
+    return out;
+  }, [scoped]);
+  // Each row shows its space when the rows span more than one.
+  const showSpaces = useMemo(() => kpiSpacesOf(scoped.roots).length > 1, [scoped]);
 
   // Only show the right-pinned Undated lane when at least one KPI actually has
   // undated (pending) targets — otherwise it's just dead space.
-  const hasUndated = flat.some(({ node }) => node.undated.length > 0);
+  const hasUndated = flat.some(({ node, context }) => !context && node.undated.length > 0);
   // The scroll box also holds the sticky KPI column and Undated lane; the
   // quarter columns get what's left.
   const plotViewportWidth = scrollWidth > 0 ? scrollWidth - LABEL_W - (hasUndated ? UNDATED_W : 0) : 0;
 
   // Fit-to-data-range date axis (Feature 04, §4a): the domain is the union of
-  // every visible KPI's readings + dated targets (always including today),
-  // snapped outward to whole quarters, then padded with future quarters to fill
-  // the visible plot width. Built from the project-filtered tree (not
-  // collapse state) so expanding/collapsing rows never reflows the axis.
+  // every full row's readings + dated targets (always including today), snapped
+  // outward to whole quarters, then padded with future quarters to fill the
+  // visible plot width. Built from the scoped tree (not collapse state) so
+  // expanding/collapsing rows never reflows the axis.
   const axis = useMemo(() => {
     const today = data?.today ?? new Date().toISOString().slice(0, 10);
-    const dates: string[] = [];
-    const walk = (nodes: TimelineNodeDto[]) => {
-      for (const node of nodes) {
-        dates.push(...axisDatesOf(node));
-        walk(node.children);
-      }
-    };
-    walk(filteredRoots);
-    return buildAxis(dates, today, {
+    return buildAxis(fullNodes.flatMap(axisDatesOf), today, {
       minWidth: plotViewportWidth - PAD_R,
       viewStart: initialViewQuarterStart(today),
     });
-  }, [data, filteredRoots, plotViewportWidth]);
+  }, [data, fullNodes, plotViewportWidth]);
 
   // Scroll behavior (spec 06 P4). Once per page load, open with the current
   // quarter at the left edge (the previous one during its first month). After
@@ -337,35 +403,23 @@ export function Timeline({
     prevDomainStart.current = axis.domainStart;
   }, [data, axis, scrollWidth]);
 
-  // Full flattened KPI list (ignores `collapsed`) for the "Add KPI" parent
-  // picker — every existing KPI is a valid parent, not just the visible ones.
-  const kpiOptions = useMemo(() => {
-    if (!data) return [];
-    const options: { kpiId: string; name: string; depth: number }[] = [];
-    const walk = (nodes: TimelineNodeDto[]) => {
-      for (const node of nodes) {
-        options.push({ kpiId: node.kpiId, name: node.name, depth: node.depth });
-        walk(node.children);
-      }
-    };
-    walk(data.roots);
-    return options;
-  }, [data]);
+  // Every loaded KPI is a valid parent (any space), not just the visible ones.
+  const parentOptions = useMemo(() => (data ? parentOptionsOf(data.roots, centralSpaceKey) : []), [data, centralSpaceKey]);
 
-  // "Edit KPI": its current parent, and the parents it may move under (not itself or its descendants).
-  const editKpiParents = useMemo(() => {
+  // "Move under another KPI": its current parent, and the parents it may move under (not itself or its descendants).
+  const moveParents = useMemo(() => {
     if (!data || !editingKpi) return null;
-    const blocked = kpiSubtreeIds(data.roots, editingKpi.kpiId);
-    const parentId = parentKpiIdOf(data.roots, editingKpi.kpiId);
+    const blocked = kpiSubtreeIds(data.roots, editingKpi.node.kpiId);
+    const parentId = parentKpiIdOf(data.roots, editingKpi.node.kpiId);
     return {
-      options: kpiOptions.filter((o) => !blocked.has(o.kpiId)),
-      parent: kpiOptions.find((o) => o.kpiId === parentId) ?? null,
+      options: parentOptions.filter((o) => !blocked.has(o.kpiId)),
+      parent: parentOptions.find((o) => o.kpiId === parentId) ?? null,
     };
-  }, [data, editingKpi, kpiOptions]);
+  }, [data, editingKpi, parentOptions]);
 
-  // Key bar (spec 08): counts follow the project filter and include collapsed
-  // descendants, so expanding/collapsing rows never changes them.
-  const keySummary = useMemo(() => summarizeKey(flattenNodes(filteredRoots)), [filteredRoots]);
+  // Key bar (spec 08): counts follow the filters and include collapsed
+  // descendants, so expanding/collapsing rows never changes them. Context rows don't count.
+  const keySummary = useMemo(() => summarizeKey(fullNodes), [fullNodes]);
   const highlight = useKeyHighlight(keySummary);
 
   const toggleCollapse = (id: string) =>
@@ -387,41 +441,35 @@ export function Timeline({
     setAddingTarget(null);
   };
 
-  // Until 08's space chooser, Add KPI creates in the central space, or the one space every KPI is in.
-  const createSpace = useMemo(
-    () => (data ? defaultKpiCreateSpace(data.roots, data.centralSpace) : null),
-    [data],
-  );
-  const createSpaceRef: KpiSpaceRef | null = createSpace && 'space' in createSpace ? createSpace.space : null;
-  const createKpiIn = async (input: Omit<CreateKpiInput, 'projectId'>) => {
-    if (!createSpace || 'error' in createSpace) throw new Error(createSpace?.error ?? 'Choose a space for the new KPI.');
-    await createKpi({ ...input, projectId: createSpace.space.id });
-  };
-  const createReasons = (access: KpiSpaceAccess | null) =>
-    blockedReasons(access, { label: createSpaceRef?.name ?? '' });
-
   /** Run a KPI row action once its space's access allows it (spec 11 · 06). */
   const guardRecord = (node: TimelineNodeDto, actionId: string, proceed: () => void) => {
     const space = spaceOf(node);
     kpiAccess.guard(actionId, space.key, (a) => blockedReasons(a, space, node.issueKey).record, proceed);
   };
-  const guardEdit = (node: TimelineNodeDto) => {
-    const space = spaceOf(node);
-    kpiAccess.guard(`edit:${node.id}`, space.key, (a) => blockedReasons(a, space, node.issueKey).edit, () =>
-      setEditingKpi(node),
-    );
+  /** The … menu opens once the KPI's space access is known; refused items then show why. */
+  const toggleMenu = (node: TimelineNodeDto) => {
+    if (menuFor === node.id) return setMenuFor(null);
+    setMenuFor(null);
+    kpiAccess.guard(`menu:${node.id}`, spaceOf(node).key, () => null, () => setMenuFor(node.id));
   };
-  const guardAddChild = (node: TimelineNodeDto) => {
-    // The child is created in the create space; nesting needs Link Issues there too (Q2).
+  const addChild = (node: TimelineNodeDto) => {
+    kpiAccess.dismissRefusal();
+    setCreating({ presetParent: parentOptions.find((o) => o.kpiId === node.kpiId) ?? null });
+  };
+  /** Add KPI: creating needs Create Issues in the chosen space, and Link Issues there with a parent (Q2). */
+  const guardCreate = (space: KpiSpaceRef, nesting: boolean, proceed: () => void) =>
     kpiAccess.guard(
-      `child:${node.id}`,
-      createSpaceRef?.key ?? null,
-      (a) => {
-        const r = createReasons(a);
-        return r.add ?? r.nest;
-      },
-      () => setCreating({ presetParent: { kpiId: node.kpiId, name: node.name } }),
+      'create',
+      space.key,
+      (a) => kpiActionBlockedReason('add', a, space.name) ?? (nesting ? kpiActionBlockedReason('nest', a, space.name) : null),
+      proceed,
     );
+  const showCreated = (kpi: CreatedKpi) => {
+    setCreatedFlag(kpi);
+    if (kpi.parentKpiId) {
+      const parentNodeId = parentOptions.find((o) => o.kpiId === kpi.parentKpiId)?.kpiId;
+      if (parentNodeId) setCollapsed((s) => new Set([...s].filter((id) => id !== parentNodeId)));
+    }
   };
 
   if (error)
@@ -454,8 +502,9 @@ export function Timeline({
     const space = spaceOf(node);
     return blockedReasons(kpiAccess.accessOf(space.key), space, node.issueKey);
   };
-  const createBlocked = createReasons(kpiAccess.accessOf(createSpaceRef?.key));
-  const editingBlocked = editingKpi ? rowBlocked(editingKpi) : null;
+  const editingBlocked = editingKpi ? rowBlocked(editingKpi.node) : null;
+  const filtered = effectiveSpaces.size > 0 || (!targetsPending && workFilter.size > 0);
+  const flagSpace = createdFlag?.space;
 
   return (
     <div className={PAGE_CLASS}>
@@ -470,18 +519,26 @@ export function Timeline({
         </div>
         {/* min-h reserves the filter control's height so the table doesn't jump when it appears with the targets */}
         <div className="mt-1 flex min-h-[40px] max-w-full flex-wrap items-center justify-end gap-2">
-          <ProjectFilterControl
-            projects={availableProjects}
-            selected={selectedProjects}
-            onChange={setSelectedProjects}
-          />
-          <Button appearance="primary" iconBefore={AddIcon} onClick={() => setCreating({ presetParent: null })}>
+          {spaceOptions.length > 0 && (
+            <ScopeFilter label="KPI space" options={spaceOptions} selected={effectiveSpaces} onChange={setSpaceFilter} />
+          )}
+          {workOptions.length > 0 && (
+            <ScopeFilter label="Work from" options={workOptions} selected={workFilter} onChange={setWorkFilter} />
+          )}
+          <Button
+            appearance="primary"
+            iconBefore={AddIcon}
+            onClick={() => {
+              kpiAccess.dismissRefusal();
+              setCreating({ presetParent: null });
+            }}
+          >
             Add KPI
           </Button>
         </div>
       </div>
 
-      {kpiAccess.refusal && (
+      {kpiAccess.refusal && !creating && (
         <div className="mt-4 flex-none">
           <AccessRefusal message={kpiAccess.refusal} onDismiss={kpiAccess.dismissRefusal} />
         </div>
@@ -489,7 +546,20 @@ export function Timeline({
 
       {targetsError && (
         <div className="flex-none">
-          <TargetsErrorBanner message={targetsError} onRetry={retryTargets} />
+          <LoadErrorBanner
+            title="Couldn’t load targets"
+            body={`Your KPIs and values are shown, but their targets are missing. ${targetsError}`}
+            onRetry={retryTargets}
+          />
+        </div>
+      )}
+      {readingsError && (
+        <div className="flex-none">
+          <LoadErrorBanner
+            title="Couldn’t load values"
+            body={`Some KPIs’ recorded values are missing. ${readingsError}`}
+            onRetry={retryReadings}
+          />
         </div>
       )}
 
@@ -503,7 +573,7 @@ export function Timeline({
         </div>
         {/* The one scroll box (both axes). Layering inside it: plot markers
             z-10/20 < quarter header z-[25] < KPI column / Undated lane z-30;
-            `isolate` keeps all of that below the toolbar's project menu. A stable
+            `isolate` keeps all of that below the toolbar's filter menus. A stable
             scrollbar gutter keeps its width (and so the axis) from changing when
             expanding rows brings in a vertical scrollbar. */}
         <div
@@ -543,32 +613,60 @@ export function Timeline({
                     </div>
                   ) : (
                     <>
-                      No KPIs match the selected project filter — try{' '}
-                      <Button appearance="subtle" spacing="compact" onClick={() => setSelectedProjects(null)}>
-                        clearing it
+                      No KPIs match the filters —{' '}
+                      <Button
+                        appearance="subtle"
+                        spacing="compact"
+                        onClick={() => {
+                          setSpaceFilter(new Set());
+                          setWorkFilter(new Set());
+                        }}
+                      >
+                        show all
                       </Button>
                       .
                     </>
                   )}
                 </div>
               ) : (
-                flat.map(({ node, hasChildren }) => {
+                flat.map(({ node, hasChildren, context }) => {
                   const blocked = rowBlocked(node);
+                  const busy = busyAction === `menu:${node.id}` ? 'menu' : null;
                   return (
                     <TimelineRowLabel
                       key={node.id}
                       node={node}
+                      context={context}
+                      showSpace={showSpaces}
+                      centralSpaceKey={centralSpaceKey}
+                      typeIconUrl={data.kpiTypeIconUrl ?? null}
                       hasChildren={hasChildren}
                       collapsed={collapsed.has(node.id)}
                       onToggleCollapse={() => toggleCollapse(node.id)}
-                      onRecord={() => guardRecord(node, `record:${node.id}`, () => setAdding({ node, date: data.today }))}
-                      recordBlocked={blocked.record}
-                      addChildBlocked={createBlocked.add ?? createBlocked.nest}
-                      onAddTarget={() => setAddingTarget({ node, date: data.today })}
-                      onAddChild={() => guardAddChild(node)}
-                      onEdit={() => guardEdit(node)}
-                      editBlocked={blocked.edit}
-                      busy={busyAction?.endsWith(`:${node.id}`) ? busyAction.split(':')[0] : null}
+                      actions={
+                        <RowActions
+                          kpiKey={node.issueKey}
+                          compact={context}
+                          busy={busy}
+                          menuOpen={menuFor === node.id}
+                          onAddChild={() => addChild(node)}
+                          onToggleMenu={() => toggleMenu(node)}
+                          onCloseMenu={() => setMenuFor(null)}
+                          items={[
+                            {
+                              label: 'Edit name, unit, direction',
+                              disabledReason: blocked.edit,
+                              onSelect: () => setEditingKpi({ node, mode: 'definition' }),
+                            },
+                            {
+                              label: 'Move under another KPI…',
+                              disabledReason: blocked.nest,
+                              onSelect: () => setEditingKpi({ node, mode: 'move' }),
+                            },
+                            { label: 'Open in Jira', onSelect: () => void onOpenIssue(node.issueKey) },
+                          ]}
+                        />
+                      }
                       onOpenIssue={onOpenIssue}
                       siteUrl={siteUrl}
                     />
@@ -596,22 +694,26 @@ export function Timeline({
                 ))}
               </div>
 
-              {/* Data rows */}
-              {flat.map(({ node }) => (
-                <TimelineRowTrack
-                  key={node.id}
-                  node={node}
-                  axis={axis}
-                  today={data.today}
-                  recordBlocked={rowBlocked(node).record}
-                  busy={busyAction === `track:${node.id}`}
-                  onAddValue={(date) => guardRecord(node, `track:${node.id}`, () => setAdding({ node, date }))}
-                  onAddTarget={(date) => setAddingTarget({ node, date })}
-                  onEditReading={(reading) => guardRecord(node, `track:${node.id}`, () => setEditing({ node, reading }))}
-                  onOpenIssueNewTab={onOpenIssueNewTab}
-                  siteUrl={siteUrl}
-                />
-              ))}
+              {/* Data rows (context rows: a short empty strip, no track) */}
+              {flat.map(({ node, context }) =>
+                context ? (
+                  <ContextStrip key={node.id} width={axis.plotWidth + PAD_R} />
+                ) : (
+                  <TimelineRowTrack
+                    key={node.id}
+                    node={node}
+                    axis={axis}
+                    today={data.today}
+                    recordBlocked={rowBlocked(node).record}
+                    busy={busyAction === `track:${node.id}`}
+                    onAddValue={(date) => guardRecord(node, `track:${node.id}`, () => setAdding({ node, date }))}
+                    onAddTarget={(date) => setAddingTarget({ node, date })}
+                    onEditReading={(reading) => guardRecord(node, `track:${node.id}`, () => setEditing({ node, reading }))}
+                    onOpenIssueNewTab={onOpenIssueNewTab}
+                    siteUrl={siteUrl}
+                  />
+                ),
+              )}
             </div>
 
             {/* Right-pinned "Undated" lane — pending targets that can't sit on the
@@ -628,13 +730,17 @@ export function Timeline({
                 >
                   Undated
                 </div>
-                {flat.map(({ node }) => (
-                  <UndatedLane
-                    key={node.id}
-                    node={node}
-                    onOpenProjection={(target) => setProjecting({ node, target })}
-                  />
-                ))}
+                {flat.map(({ node, context }) =>
+                  context ? (
+                    <ContextStrip key={node.id} />
+                  ) : (
+                    <UndatedLane
+                      key={node.id}
+                      node={node}
+                      onOpenProjection={(target) => setProjecting({ node, target })}
+                    />
+                  ),
+                )}
               </div>
             )}
           </div>
@@ -674,37 +780,48 @@ export function Timeline({
 
       <ModalTransition>
         {creating && (
-          <CreateKpiModal
+          <AddKpiDialog
             presetParent={creating.presetParent}
-            kpiOptions={kpiOptions}
-            nestBlocked={createBlocked.nest}
-            onCancel={() => setCreating(null)}
-            onOpenSettings={onOpenSettings}
-            onSave={async (input) => {
-              await createKpiIn(input);
+            parentOptions={parentOptions}
+            typeIconUrl={data.kpiTypeIconUrl ?? null}
+            centralSpaceKey={centralSpaceKey}
+            loadSpaces={() => getKpiCreateSpaces(kpiSpaces.map((s) => s.key))}
+            lookupKpiRef={lookupKpiRef}
+            guardCreate={guardCreate}
+            checking={busyAction === 'create'}
+            refusal={kpiAccess.refusal}
+            onCreate={createKpi}
+            onCreated={showCreated}
+            onClose={() => {
+              kpiAccess.dismissRefusal();
               setCreating(null);
             }}
+            onOpenSettings={onOpenSettings}
           />
         )}
       </ModalTransition>
 
       <ModalTransition>
-        {editingKpi && editKpiParents && (
-          <CreateKpiModal
-            presetParent={null}
-            editing={{ node: editingKpi, parent: editKpiParents.parent }}
-            kpiOptions={editKpiParents.options}
+        {editingKpi && moveParents && (
+          <EditKpiModal
+            mode={editingKpi.mode}
+            node={editingKpi.node}
+            parent={moveParents.parent}
+            parentOptions={moveParents.options}
+            typeIconUrl={data.kpiTypeIconUrl ?? null}
+            lookupKpiRef={lookupKpiRef}
             nestBlocked={editingBlocked?.nest ?? null}
             onCancel={() => setEditingKpi(null)}
             onOpenSettings={onOpenSettings}
             onSave={async (input) => {
+              const node = editingKpi.node;
               const before = {
-                name: editingKpi.name,
-                unit: editingKpi.unit,
-                direction: editingKpi.direction,
-                parentKpiId: editKpiParents.parent?.kpiId ?? null,
+                name: node.name,
+                unit: node.unit,
+                direction: node.direction,
+                parentKpiId: moveParents.parent?.kpiId ?? null,
               };
-              await updateKpi(kpiEditChanges(editingKpi.kpiId, before, input));
+              await updateKpi(kpiEditChanges(node.kpiId, before, input));
               setEditingKpi(null);
             }}
           />
@@ -746,124 +863,81 @@ export function Timeline({
           />
         )}
       </ModalTransition>
+
+      {createdFlag && (
+        <CreatedFlag
+          kpiKey={createdFlag.issueKey}
+          name={createdFlag.name}
+          spaceLabel={flagSpace ? `${kpiSpaceName(flagSpace, centralSpaceKey)} (${flagSpace.key})` : null}
+          hidden={filtered && !scopeShowsKpi(scoped, createdFlag.kpiId)}
+          onShow={() => {
+            if (flagSpace && effectiveSpaces.size > 0) setSpaceFilter(new Set([...effectiveSpaces, flagSpace.key]));
+            if (workFilter.size > 0) setWorkFilter(new Set());
+          }}
+          onOpen={() => void onOpenIssue(createdFlag.issueKey)}
+          onDismiss={() => setCreatedFlag(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/** A context row's cell in the plot and Undated lane: as tall as the row, empty. */
+function ContextStrip({ width }: { width?: number }) {
+  return (
+    <div
+      aria-hidden
+      className="border-b border-border bg-surface-sunken last:border-b-0"
+      style={{ height: CONTEXT_ROW_H, ...(width !== undefined ? { width } : {}) }}
+    />
   );
 }
 
 /**
- * Multi-select popover for the project filter — contributing issues can live
- * in any Jira project, so this lists every project key found in the current
- * tree (`availableProjects`) and lets the user narrow the timeline to a
- * subset. "All" (nothing selected) leaves the tree unchanged.
+ * A KPI's label cell: `{KPI icon} {name}` with the name as the link (no key,
+ * spec 11 · 08), its space when the rows span several, unit and direction, and
+ * the Plans-style row actions on hover. A context row (an ancestor outside the
+ * KPI space filter) is one faded 32px line: name and space.
  */
-type ProjectOption = { label: string; value: string };
-const ALL_PROJECTS = '__all__';
-
-function ProjectFilterControl({
-  projects,
-  selected,
-  onChange,
-}: {
-  projects: string[];
-  selected: Set<string> | null;
-  onChange: (next: Set<string> | null) => void;
-}) {
-  if (projects.length === 0) return null;
-
-  // List the selected project keys directly (rather than just a count) so the
-  // active filter is legible at a glance; past a few selections, truncate to
-  // keep the control from growing unbounded.
-  const selectedKeys = projects.filter((key) => selected?.has(key));
-  const label =
-    selectedKeys.length === 0
-      ? 'Project: All'
-      : selectedKeys.length <= 3
-        ? `Project: ${selectedKeys.join(', ')}`
-        : `Project: ${selectedKeys.slice(0, 3).join(', ')} +${selectedKeys.length - 3} more`;
-
-  const options: ProjectOption[] = [
-    { label: 'All', value: ALL_PROJECTS },
-    ...projects.map((key) => ({ label: key, value: key })),
-  ];
-  // "All" shows as checked exactly when nothing is selected.
-  const value = selectedKeys.length === 0 ? [options[0]] : options.filter((o) => selected?.has(o.value));
-
-  return (
-    <div className="w-[220px] flex-none">
-      <CheckboxSelect<ProjectOption>
-        aria-label="Filter by Jira project"
-        isSearchable={false}
-        isClearable={false}
-        options={options}
-        value={value}
-        controlShouldRenderValue={false}
-        hideSelectedOptions={false}
-        placeholder={label}
-        styles={{
-          menu: (base) => ({ ...base, zIndex: 30 }),
-          placeholder: (base) => ({ ...base, color: 'var(--ds-text, #172B4D)' }),
-        }}
-        onChange={(next, meta) => {
-          if (meta.option?.value === ALL_PROJECTS) return onChange(null);
-          const keys = next.map((o) => o.value).filter((v) => v !== ALL_PROJECTS);
-          onChange(keys.length === 0 ? null : new Set(keys));
-        }}
-      />
-    </div>
-  );
-}
-
 function TimelineRowLabel({
   node,
+  context,
+  showSpace,
+  centralSpaceKey,
+  typeIconUrl,
   hasChildren,
   collapsed,
   onToggleCollapse,
-  onRecord,
-  recordBlocked = null,
-  addChildBlocked = null,
-  onAddTarget,
-  onAddChild,
-  onEdit,
-  editBlocked = null,
-  busy = null,
+  actions,
   onOpenIssue,
   siteUrl,
 }: {
   node: TimelineNodeDto;
+  context: boolean;
+  showSpace: boolean;
+  centralSpaceKey: string | null;
+  typeIconUrl: string | null;
   hasChildren: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
-  onRecord: () => void;
-  /** why recording a value is disabled (spec 10), or null */
-  recordBlocked?: string | null;
-  /** why adding a child KPI is disabled (spec 10), or null */
-  addChildBlocked?: string | null;
-  onAddTarget: () => void;
-  onAddChild: () => void;
-  onEdit: () => void;
-  /** why editing the KPI is disabled (spec 10), or null */
-  editBlocked?: string | null;
-  /** the action (`edit` / `child` / `record`) waiting on its space's access, or null */
-  busy?: string | null;
+  actions: React.ReactNode;
   onOpenIssue: (issueKey: string) => void | Promise<void>;
   siteUrl: string;
 }) {
-  // Hover-revealed actions in a 2×2 grid: the KPI itself (edit, add child) on the
-  // name line, its data (record, target) on the unit line. Overlaid (not in flow)
-  // so long names/units get the full width at rest; on hover/focus they cover the tail.
-  const actionsClass = `absolute inset-y-0 right-0 flex items-center gap-2 bg-surface pl-2 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 ${
-    busy ? 'opacity-100' : 'opacity-0'
-  }`;
+  const spaceKey = kpiSpaceKeyOf(node);
+  const spaceName = kpiSpaceName({ key: spaceKey, name: node.space?.name ?? spaceKey }, centralSpaceKey);
   return (
     <div
-      className="group flex flex-col justify-center gap-1 border-b border-r border-border bg-surface px-3 py-1.5 last:border-b-0"
-      style={{ height: ROW_H }}
+      className={`group relative flex flex-col justify-center gap-1 border-b border-r border-border px-3 last:border-b-0 hover:bg-[var(--ds-surface-hovered,#f1f2f4)] ${
+        context ? 'bg-surface-sunken' : 'bg-surface py-1.5'
+      }`}
+      style={{ height: context ? CONTEXT_ROW_H : ROW_H }}
+      title={context ? 'Outside the KPI space filter: shown for context' : undefined}
+      data-context-row={context || undefined}
     >
-      <div className="relative flex min-w-0 items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP }}>
+      <div className="flex min-w-0 items-center gap-1.5" style={{ paddingLeft: node.depth * INDENT_STEP }}>
         <button
-          className={`grid h-4 w-4 flex-none place-items-center text-text-subtle ${
-            hasChildren ? '' : 'invisible'
-          }`}
+          className={`grid h-4 w-4 flex-none place-items-center text-text-subtle ${hasChildren ? '' : 'invisible'}`}
           onClick={onToggleCollapse}
           aria-label={hasChildren ? (collapsed ? 'Expand children' : 'Collapse children') : undefined}
           aria-expanded={hasChildren ? !collapsed : undefined}
@@ -872,119 +946,54 @@ function TimelineRowLabel({
         >
           {collapsed ? <ChevronRightIcon label="" size="small" /> : <ChevronDownIcon label="" size="small" />}
         </button>
-        {node.issueKey ? (
-          <Tooltip content={`Open ${node.name} (${node.issueKey}) in Jira`}>
-            {(tooltipProps) => (
-              <a
-                {...tooltipProps}
-                href={siteUrl ? `${siteUrl}/browse/${node.issueKey}` : `/browse/${node.issueKey}`}
-                className="truncate text-sm font-semibold text-brand hover:underline"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  void onOpenIssue(node.issueKey);
-                }}
-              >
-                {node.name}
-              </a>
-            )}
-          </Tooltip>
-        ) : (
-          <span className="truncate text-sm font-semibold">{node.name}</span>
-        )}
-        <div className={actionsClass}>
-          <RowAction
-            tooltip="Edit KPI"
-            label="Edit KPI"
-            glyph="✎"
-            glyphClass="text-[13px]"
-            onClick={onEdit}
-            disabledReason={editBlocked}
-            busy={busy === 'edit'}
-          />
-          <RowAction
-            tooltip="Create child KPI"
-            label="Add child KPI"
-            glyph="+"
-            glyphClass="text-[13px]"
-            onClick={onAddChild}
-            disabledReason={addChildBlocked}
-            busy={busy === 'child'}
-          />
-        </div>
-      </div>
-      <div className="relative flex min-w-0 items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP + 24 }}>
-        <span className="min-w-0 truncate text-xs text-text-subtle" title={node.unit || 'No unit'}>
-          {node.unit || '—'}
+        <span className={context ? 'opacity-60' : ''}>
+          <TypeIcon typeIconUrl={typeIconUrl} typeName="KPI" />
         </span>
-        {node.direction && (
-          <span
-            className={`flex-none ${node.direction === 'increase' ? 'text-success' : 'text-danger'}`}
-            title={node.direction === 'increase' ? 'Higher is better' : 'Lower is better'}
-          >
-            {node.direction === 'increase' ? (
-              <ArrowUpIcon label="Higher is better" size="small" />
-            ) : (
-              <ArrowDownIcon label="Lower is better" size="small" />
-            )}
+        <Tooltip content={`Open ${node.name} in Jira`}>
+          {(tooltipProps) => (
+            <a
+              {...tooltipProps}
+              href={siteUrl ? `${siteUrl}/browse/${node.issueKey}` : `/browse/${node.issueKey}`}
+              className={`min-w-0 truncate hover:underline ${
+                context ? 'text-[13px] font-medium text-text-subtlest' : 'text-sm font-medium text-text'
+              }`}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                void onOpenIssue(node.issueKey);
+              }}
+            >
+              {node.name}
+            </a>
+          )}
+        </Tooltip>
+        {showSpace && (
+          <span title={spaceName} className={context ? 'opacity-60' : ''}>
+            <SpaceKey spaceKey={spaceKey} />
           </span>
         )}
-        <div className={actionsClass}>
-          <RowAction
-            tooltip="Record a value"
-            label="Record a value"
-            glyph="●"
-            glyphClass="text-[13px]"
-            onClick={onRecord}
-            disabledReason={recordBlocked}
-            busy={busy === 'record'}
-          />
-          <RowAction tooltip="Add a target" label="Add a target" glyph="◇" glyphClass="text-[11px]" onClick={onAddTarget} />
-        </div>
       </div>
-    </div>
-  );
-}
-
-/** Hover-revealed text-glyph action in a row label (glyphs are part of the design, so no icon set). */
-function RowAction({
-  tooltip,
-  label,
-  glyph,
-  glyphClass,
-  onClick,
-  disabledReason = null,
-  busy = false,
-}: {
-  tooltip: string;
-  label: string;
-  glyph: string;
-  glyphClass: string;
-  onClick: () => void;
-  /** when set, the action is disabled and its tooltip says why (spec 10) */
-  disabledReason?: string | null;
-  /** true while the KPI's space access is looked up for this action (spec 11 · 06) */
-  busy?: boolean;
-}) {
-  const disabled = disabledReason !== null;
-  return (
-    // aria-disabled (not `disabled`) keeps the button focusable and hoverable so the reason can show.
-    <Tooltip content={busy ? 'Checking your permissions…' : (disabledReason ?? tooltip)}>
-      {(tooltipProps) => (
-        <button
-          {...tooltipProps}
-          className={`grid h-[22px] w-[22px] flex-none place-items-center rounded text-text-subtle ${
-            busy ? 'cursor-progress' : disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-surface-sunken hover:text-brand'
-          }`}
-          onClick={disabled || busy ? undefined : onClick}
-          aria-label={label}
-          aria-disabled={disabled || undefined}
-          aria-busy={busy || undefined}
-        >
-          <span className={`${glyphClass} leading-none ${busy ? 'animate-pulse' : ''}`}>{glyph}</span>
-        </button>
+      {!context && (
+        <div className="flex min-w-0 items-center gap-2" style={{ paddingLeft: node.depth * INDENT_STEP + 44 }}>
+          <span className="min-w-0 truncate text-xs text-text-subtle" title={node.unit || 'No unit'}>
+            {node.unit || '—'}
+          </span>
+          {node.direction && (
+            <span
+              className={`flex-none ${node.direction === 'increase' ? 'text-success' : 'text-danger'}`}
+              title={node.direction === 'increase' ? 'Higher is better' : 'Lower is better'}
+            >
+              {node.direction === 'increase' ? (
+                <ArrowUpIcon label="Higher is better" size="small" />
+              ) : (
+                <ArrowDownIcon label="Lower is better" size="small" />
+              )}
+            </span>
+          )}
+        </div>
       )}
-    </Tooltip>
+      {actions}
+    </div>
   );
 }
 
@@ -1062,6 +1071,7 @@ function TimelineRowTrack({
     <div
       aria-busy={resolving || busy || undefined}
       data-access-pending={busy || undefined}
+      data-kpi-track={node.issueKey}
       className={`group relative border-b border-border last:border-b-0 ${busy ? 'cursor-progress' : 'cursor-pointer'}`}
       style={{ width: axis.plotWidth + PAD_R, height: ROW_H }}
       onClick={onTrackClick}
@@ -1091,8 +1101,12 @@ function TimelineRowTrack({
         />
       )}
 
-      {/* sparkline */}
-      {node.readings.length === 0 ? (
+      {/* sparkline (values still loading: the KPI just came into scope, spec 11 · 08) */}
+      {node.readingsPending ? (
+        <span role="status" className="absolute left-12 top-1/2 -translate-y-1/2 animate-pulse text-[11px] text-text-subtle">
+          Loading values…
+        </span>
+      ) : node.readings.length === 0 ? (
         <span className="absolute left-12 top-1/2 -translate-y-1/2 text-[11px] text-text-subtle">
           {recordBlocked ? 'No values yet' : 'No values yet — click a past date to add'}
         </span>
@@ -1169,66 +1183,21 @@ function UndatedLane({
   );
 }
 
-/** Errors a Jira admin fixes in Settings: shown with an "Open Settings" button instead of the raw message. */
-const SETUP_ERRORS = {
-  'type-not-set-up': {
-    title: 'No KPI work type configured yet',
-    body: 'Choose the work type KPIs use in Settings (KPI building blocks), then try again.',
-  },
-  'hierarchy-not-set-up': {
-    title: 'KPI nesting isn’t set up',
-    body: 'Choose the Jira issue link type that nests KPIs in Settings, then try again — or leave the parent empty.',
-  },
-} as const;
-
-function ActionErrorBanner({
-  error,
-  onDismiss,
-  onOpenSettings,
-}: {
-  error: TimelineActionError;
-  onDismiss: () => void;
-  onOpenSettings: () => void | Promise<void>;
-}) {
-  const setup = error.kind === 'generic' ? null : SETUP_ERRORS[error.kind];
-  return (
-    <div
-      role="alert"
-      className="mt-4 flex items-start gap-3 rounded-lg border border-danger bg-surface px-4 py-3 text-sm"
-    >
-      <div className="flex-1">
-        <p className="font-semibold text-danger">{setup ? setup.title : 'Couldn’t save your change'}</p>
-        <p className="mt-0.5 text-text-subtle">{setup ? setup.body : error.message}</p>
-        {setup && (
-          <div className="mt-2">
-            <Button appearance="primary" onClick={() => void onOpenSettings()}>
-              Open Settings
-            </Button>
-          </div>
-        )}
-      </div>
-      <Button appearance="subtle" spacing="compact" aria-label="Dismiss" onClick={onDismiss}>
-        <CrossIcon label="" size="small" />
-      </Button>
-    </div>
-  );
-}
 
 /**
- * Phase 2 (targets) failed: the KPIs and readings are still on screen, so this
- * is an inline, retryable banner rather than the full-screen error.
+ * A later part of the load failed (targets, or values for KPIs that came into
+ * scope): the KPIs stay on screen, so this is an inline, retryable banner
+ * rather than the full-screen error.
  */
-function TargetsErrorBanner({ message, onRetry }: { message: string; onRetry: () => void }) {
+function LoadErrorBanner({ title, body, onRetry }: { title: string; body: string; onRetry: () => void }) {
   return (
     <div
       role="alert"
       className="mt-4 flex items-start gap-3 rounded-lg border border-danger bg-surface px-4 py-3 text-sm"
     >
       <div className="flex-1">
-        <p className="font-semibold text-danger">Couldn’t load targets</p>
-        <p className="mt-0.5 text-text-subtle">
-          Your KPIs and values are shown, but their targets are missing. {message}
-        </p>
+        <p className="font-semibold text-danger">{title}</p>
+        <p className="mt-0.5 text-text-subtle">{body}</p>
         <div className="mt-2">
           <Button appearance="primary" onClick={onRetry}>
             Retry
@@ -1237,13 +1206,6 @@ function TargetsErrorBanner({ message, onRetry }: { message: string; onRetry: ()
       </div>
     </div>
   );
-}
-
-/** A KPI candidate for the "Add KPI" parent picker — every existing KPI. */
-interface KpiParentOption {
-  kpiId: string;
-  name: string;
-  depth: number;
 }
 
 /** Clear affordance for the pickers, drawn with the Atlassian cross icon. */
@@ -1276,47 +1238,51 @@ const DIRECTION_OPTIONS: DirectionOption[] = [
   { label: 'No direction', value: 'none' },
 ];
 
-function CreateKpiModal({
-  presetParent,
-  editing = null,
-  kpiOptions,
+
+/**
+ * A KPI's … menu dialogs: **Edit name, unit, direction** (`definition`) or
+ * **Move under another KPI…** (`move`, the Parent field, any space).
+ */
+function EditKpiModal({
+  mode,
+  node,
+  parent: initialParent,
+  parentOptions,
+  typeIconUrl,
+  lookupKpiRef,
   nestBlocked = null,
   onCancel,
   onSave,
   onOpenSettings,
 }: {
-  /** Fixed parent from the row-level "add child" (+) trigger — no picker shown. Create only. */
-  presetParent: { kpiId: string; name: string } | null;
-  /**
-   * Set to edit an existing KPI instead of creating one: the fields start from it
-   * and the parent picker starts on its current parent.
-   */
-  editing?: { node: TimelineNodeDto; parent: KpiParentOption | null } | null;
-  /** The KPIs the parent picker offers (when editing, without the KPI itself and its descendants). */
-  kpiOptions: KpiParentOption[];
-  /** why nesting is disabled (no Link Issues, spec 10): the parent picker is disabled with this reason */
+  mode: 'definition' | 'move';
+  node: TimelineNodeDto;
+  /** its current parent */
+  parent: ParentOption | null;
+  /** the KPIs it may move under (not itself or its descendants) */
+  parentOptions: ParentOption[];
+  typeIconUrl: string | null;
+  lookupKpiRef?: (ref: string) => Promise<KpiRefLookup>;
+  /** why moving is disabled (no Link Issues, spec 10) */
   nestBlocked?: string | null;
   onCancel: () => void;
-  /** Resolves once the KPI is saved; rejects with the failure (shown in the modal). The caller picks the space. */
+  /** Resolves once saved; rejects with the failure (shown in the modal). */
   onSave: (input: Omit<CreateKpiInput, 'projectId'> & { parentKpiId: string | null }) => Promise<void>;
   onOpenSettings: () => void | Promise<void>;
 }) {
   const { saving, error, clearError, run } = useModalSave();
-  const initialDirection =
-    DIRECTION_OPTIONS.find((o) => o.value === (editing ? (editing.node.direction ?? 'none') : 'increase')) ??
-    DIRECTION_OPTIONS[0];
-  const [name, setName] = useState(editing?.node.name ?? '');
-  const [unit, setUnit] = useState(editing?.node.unit ?? '');
+  const initialDirection = DIRECTION_OPTIONS.find((o) => o.value === (node.direction ?? 'none')) ?? DIRECTION_OPTIONS[0];
+  const [name, setName] = useState(node.name);
+  const [unit, setUnit] = useState(node.unit);
   const [direction, setDirection] = useState<DirectionOption>(initialDirection);
-  const [parent, setParent] = useState<KpiParentOption | null>(editing?.parent ?? null);
+  const [parent, setParent] = useState<ParentOption | null>(initialParent);
   const nameRef = useRef<HTMLInputElement>(null);
-  const parentKpiId = presetParent ? presetParent.kpiId : (parent?.kpiId ?? null);
+  const parentKpiId = parent?.kpiId ?? null;
   const unchanged =
-    editing !== null &&
-    name.trim() === editing.node.name &&
-    unit.trim() === editing.node.unit &&
+    name.trim() === node.name &&
+    unit.trim() === node.unit &&
     direction === initialDirection &&
-    parentKpiId === (editing.parent?.kpiId ?? null);
+    parentKpiId === (initialParent?.kpiId ?? null);
   const canSave = name.trim() !== '' && !unchanged;
   const submit = () => {
     if (!canSave || saving) return;
@@ -1333,148 +1299,92 @@ function CreateKpiModal({
   return (
     <Modal
       onClose={onCancel}
-      width={380}
-      autoFocus={nameRef}
+      width={mode === 'move' ? 560 : 380}
+      autoFocus={mode === 'definition' ? nameRef : undefined}
       shouldCloseOnEscapePress={!saving}
       shouldCloseOnOverlayClick={!saving}
     >
       <ModalHeader>
-        <ModalTitle>{editing ? 'Edit KPI' : 'New KPI'}</ModalTitle>
+        <ModalTitle>{mode === 'move' ? 'Move under another KPI' : 'Edit KPI'}</ModalTitle>
       </ModalHeader>
       <ModalBody>
         <ModalSubtitle>
-          {editing ? (
+          {mode === 'move' ? (
             <>
-              Changes apply everywhere <strong className="text-text">{editing.node.issueKey}</strong> is used
-            </>
-          ) : presetParent ? (
-            <>
-              Nested under <strong className="text-text">{presetParent.name}</strong>
+              Choose the parent for <strong className="text-text">{node.name}</strong>, or clear it for a top-level KPI
             </>
           ) : (
-            'A new top-level KPI, or choose a parent below'
+            <>
+              Changes apply everywhere <strong className="text-text">{node.name}</strong> is used
+            </>
           )}
         </ModalSubtitle>
         {error !== null && (
           <div className="-mt-2 mb-4">
-            <ActionErrorBanner
-              error={toActionError(error)}
-              onDismiss={clearError}
-              onOpenSettings={onOpenSettings}
-            />
+            <ActionErrorBanner error={toActionError(error)} onDismiss={clearError} onOpenSettings={onOpenSettings} />
           </div>
         )}
-        <div className="flex flex-col gap-3">
-          <ModalField label="Name" htmlFor="kpi-name">
-            <Textfield
-              id="kpi-name"
-              ref={nameRef}
-              value={name}
-              placeholder="e.g. Revenue"
-              aria-label="KPI name"
-              isDisabled={saving}
-              onChange={(e: FormEvent<HTMLInputElement>) => setName(e.currentTarget.value)}
-            />
-          </ModalField>
-          <ModalField label="Unit" htmlFor="kpi-unit">
-            <Textfield
-              id="kpi-unit"
-              value={unit}
-              placeholder="e.g. USD"
-              aria-label="KPI unit"
-              isDisabled={saving}
-              onChange={(e: FormEvent<HTMLInputElement>) => setUnit(e.currentTarget.value)}
-            />
-          </ModalField>
-          <ModalField label="Direction" htmlFor="kpi-direction">
-            <Select<DirectionOption>
-              inputId="kpi-direction"
-              aria-label="KPI direction"
-              options={DIRECTION_OPTIONS}
-              value={direction}
-              isSearchable={false}
-              isDisabled={saving}
-              {...MODAL_MENU_PROPS}
-              onChange={(o) => o && setDirection(o)}
-            />
-          </ModalField>
-          {!presetParent && (
-            <ModalField
-              label={
-                editing ? (
-                  'Parent KPI'
-                ) : (
-                  <>
-                    Parent KPI <span className="text-text-subtle">(optional)</span>
-                  </>
-                )
-              }
-              htmlFor="kpi-parent"
-            >
-              <DisabledReason reason={nestBlocked}>
-                <div className="w-full">
-                  <KpiParentSelect
-                    options={kpiOptions}
-                    value={parent}
-                    onChange={setParent}
-                    isDisabled={saving || nestBlocked !== null}
-                    placeholder={editing ? 'None (top-level KPI)' : undefined}
-                  />
-                </div>
-              </DisabledReason>
+        {mode === 'definition' ? (
+          <div className="flex flex-col gap-3">
+            <ModalField label="Name" htmlFor="kpi-name">
+              <Textfield
+                id="kpi-name"
+                ref={nameRef}
+                value={name}
+                placeholder="e.g. Revenue"
+                aria-label="KPI name"
+                isDisabled={saving}
+                onChange={(e: FormEvent<HTMLInputElement>) => setName(e.currentTarget.value)}
+              />
             </ModalField>
-          )}
-        </div>
+            <ModalField label="Unit" htmlFor="kpi-unit">
+              <Textfield
+                id="kpi-unit"
+                value={unit}
+                placeholder="e.g. USD"
+                aria-label="KPI unit"
+                isDisabled={saving}
+                onChange={(e: FormEvent<HTMLInputElement>) => setUnit(e.currentTarget.value)}
+              />
+            </ModalField>
+            <ModalField label="Direction" htmlFor="kpi-direction">
+              <Select<DirectionOption>
+                inputId="kpi-direction"
+                aria-label="KPI direction"
+                options={DIRECTION_OPTIONS}
+                value={direction}
+                isSearchable={false}
+                isDisabled={saving}
+                {...MODAL_MENU_PROPS}
+                onChange={(o) => o && setDirection(o)}
+              />
+            </ModalField>
+          </div>
+        ) : (
+          <DisabledReason reason={nestBlocked}>
+            <div className="w-full pb-48">
+              <ParentField
+                options={parentOptions}
+                value={parent}
+                onChange={setParent}
+                typeIconUrl={typeIconUrl}
+                lookupKpiRef={lookupKpiRef}
+                disabled={saving || nestBlocked !== null}
+                label="Parent KPI"
+              />
+            </div>
+          </DisabledReason>
+        )}
       </ModalBody>
       <ModalFooter>
         <Button appearance="subtle" onClick={onCancel} isDisabled={saving}>
           Cancel
         </Button>
         <Button appearance="primary" onClick={submit} isDisabled={!canSave} isLoading={saving}>
-          {editing ? 'Save' : 'Create KPI'}
+          {mode === 'move' ? 'Move' : 'Save'}
         </Button>
       </ModalFooter>
     </Modal>
-  );
-}
-
-/**
- * Optional "Parent KPI" picker on "Add KPI" — a searchable Select over the
- * already-loaded KPI tree (local filtering, unlike the async issue picker).
- * Options are indented by `depth` in the menu so the hierarchy stays visible.
- */
-function KpiParentSelect({
-  options,
-  value,
-  onChange,
-  isDisabled = false,
-  placeholder = 'Search KPIs…',
-}: {
-  options: KpiParentOption[];
-  value: KpiParentOption | null;
-  onChange: (option: KpiParentOption | null) => void;
-  isDisabled?: boolean;
-  placeholder?: string;
-}) {
-  return (
-    <Select<KpiParentOption>
-      inputId="kpi-parent"
-      aria-label="Search for a parent KPI"
-      placeholder={placeholder}
-      options={options}
-      value={value}
-      isClearable
-      isDisabled={isDisabled}
-      {...MODAL_MENU_PROPS}
-      components={{ ClearIndicator }}
-      getOptionValue={(o) => o.kpiId}
-      getOptionLabel={(o) => o.name}
-      formatOptionLabel={(o, { context }) => (
-        <span style={context === 'menu' ? { paddingLeft: o.depth * 12 } : undefined}>{o.name}</span>
-      )}
-      noOptionsMessage={() => 'No matching KPIs'}
-      onChange={(o) => onChange(o ?? null)}
-    />
   );
 }
 

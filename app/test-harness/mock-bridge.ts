@@ -16,7 +16,9 @@ import {
   createKpiHierarchyLinkType,
   getTimelineData,
   getTimelineSkeleton,
+  getTimelineReadings,
   getTimelineTargets,
+  getKpiCreateSpaces,
   recordValue,
   createKpi,
   kpiEditTouches,
@@ -41,6 +43,7 @@ import {
   applyAccessToSearch,
   applyAccessToPanelValues,
   applyAccessToTimeline,
+  accessFor,
   assertKpiWriteAllowed,
   kpiAccessResult,
 } from './access-modes.js';
@@ -144,7 +147,20 @@ const resolvers: Record<string, Handler> = {
   retryMigration: (p) => retryMigration(p?.id),
   // Timeline
   getTimelineData: () => applyAccessToTimeline(getTimelineData(), accessMode(), hiddenKpiId()),
-  getTimelineSkeleton: () => applyAccessToTimeline(getTimelineSkeleton(), accessMode(), hiddenKpiId()),
+  // Spec 11 · 08: readings only for `readingSpaces`; the rest via `getTimelineReadings`.
+  // `?readingsDelayMs=` (default 300) slows that load so "Loading values…" is visible.
+  getTimelineSkeleton: (p) => applyAccessToTimeline(getTimelineSkeleton(p?.readingSpaces ?? []), accessMode(), hiddenKpiId()),
+  getTimelineReadings: async (p) => {
+    const delay = Number(new URLSearchParams(globalThis.location?.search ?? '').get('readingsDelayMs') ?? 300);
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (accessMode() === 'none') return { readings: {} };
+    return getTimelineReadings((p?.kpiIds ?? []).filter((id: string) => id !== hiddenKpiId()));
+  },
+  // Add KPI's spaces: those where `?access=` lets the user create.
+  getKpiCreateSpaces: async (p) => {
+    await new Promise((resolve) => setTimeout(resolve, pickerDelay()));
+    return getKpiCreateSpaces(p?.kpiSpaceKeys ?? [], (key) => accessFor(key, accessMode())?.create !== false);
+  },
   // `?targetsDelayMs=3000` slows Phase 2 so the progressive load is visible in
   // the harness (rows shimmer first); `?targetsFail=1` makes it reject.
   getTimelineTargets: async () => {

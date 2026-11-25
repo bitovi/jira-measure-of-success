@@ -112,7 +112,8 @@ describe('getTimelineData at scale', () => {
       'GET /rest/api/3/search/jql [id in]': ceil(o.initiatives, 40) + walkBatches,
       'GET /rest/api/3/search/jql [parent in]': walkBatches,
       'POST /rest/api/3/changelog/bulkfetch': 1,
-      'GET /rest/api/2/universal_avatar/view/type/issuetype/avatar/{id}': 1,
+      // the epics' type icon (Phase 2), and spec 11 · 08's KPI type icon (Phase 1, a KPI row is `{icon} {name}`)
+      'GET /rest/api/2/universal_avatar/view/type/issuetype/avatar/{id}': 2,
     };
     expect(summary.byEndpoint).toEqual(BUDGET);
     expect(jira.unhandled).toEqual([]);
@@ -144,7 +145,7 @@ describe('getTimelineData at scale', () => {
     // Spec 11 · 03: a node's kpiId is its issue id. Read on the migrated fixture, the
     // output with kpiId mapped back to the key matches the digest of the key-based code.
     // Spec 11 · 06 removed `access` and added each KPI's `space` and the `centralSpace`;
-    // left out, the single-space output is unchanged.
+    // left out, the single-space output is unchanged. Spec 11 · 08 added `kpiTypeIconUrl`, left out too.
     expect(data).not.toHaveProperty('access');
     expect(data.centralSpace).toEqual({ id: '10000', key: 'KPI', name: 'KPIs (KPI)' });
     expect(nodes.every((n) => n.space?.key === 'KPI')).toBe(true);
@@ -153,7 +154,7 @@ describe('getTimelineData at scale', () => {
     const digest = createHash('sha256')
       .update(
         JSON.stringify({ ...data, roots: data.roots.map(asBefore) }, (key, value) =>
-          key === 'detail' || key === 'space' || key === 'centralSpace' ? undefined : value,
+          key === 'detail' || key === 'space' || key === 'centralSpace' || key === 'kpiTypeIconUrl' ? undefined : value,
         ),
       )
       .digest('hex');
@@ -187,8 +188,10 @@ describe('getTimelineData at scale', () => {
         'GET /rest/api/3/issuetype': 1,
         'GET /rest/api/3/search/jql [issuetype]': 1,
         'POST /rest/api/3/changelog/bulkfetch': 1,
+        // spec 11 · 08: the KPI type's icon, fetched with the readings
+        'GET /rest/api/2/universal_avatar/view/type/issuetype/avatar/{id}': 1,
       });
-      expect(summary.totalRequests).toBe(4);
+      expect(summary.totalRequests).toBe(5);
       expect(Object.keys(summary.stages)).toEqual(expect.arrayContaining(['config', 'fields', 'kpis', 'readings']));
       expect(jira.unhandled).toEqual([]);
 

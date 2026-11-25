@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyAddedTarget,
+  applyLoadedReadings,
   applyKpiEdit,
   applyTargetContributions,
   clearResolving,
@@ -121,6 +122,23 @@ describe('applyTargetContributions', () => {
 
   it('is deterministic: applying twice gives the same result', () => {
     expect(applyTargetContributions(skeleton, contributions)).toEqual(merged);
+  });
+});
+
+describe('applyLoadedReadings', () => {
+  it('fills in only the KPIs the load left out, and clears their flag', () => {
+    const data: TimelineData = {
+      today: '2026-07-10',
+      roots: [
+        node({ readings: [], readingsPending: true, children: [node({ id: 'n2', kpiId: 'KPI-2', issueKey: 'KPI-2', depth: 1 })] }),
+      ],
+    };
+    const loaded = [{ date: '2026-05-01', value: 7 }];
+    const out = applyLoadedReadings(data, { 'KPI-1': loaded, 'KPI-2': loaded });
+    expect(out.roots[0].readings).toEqual(loaded);
+    expect(out.roots[0]).not.toHaveProperty('readingsPending');
+    expect(out.roots[0].children[0].readings).toEqual(skeleton.roots[0].children[0].readings);
+    expect(applyLoadedReadings(data, {})).toBe(data);
   });
 });
 

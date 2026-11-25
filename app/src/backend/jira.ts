@@ -508,61 +508,89 @@ export async function fetchKpiIssueRef(
   };
 }
 
+/** Jira's bulk changelog caps: 1,000 issues per request, 1,000 histories per page (R4). */
+export const CHANGELOG_BULK_ISSUES = 1000;
+export const CHANGELOG_BULK_PAGE = 1000;
+/** A runaway guard on one batch's pages (1,000 issues × 100 readings each). */
+const CHANGELOG_MAX_PAGES = 100;
+
+type BulkChangelogPage = {
+  nextPageToken?: string;
+  issueChangeLogs?: Array<{
+    issueId: string;
+    changeHistories?: Array<{
+      created: number | string;
+      author?: { accountId?: string };
+      items?: Array<{ fieldId?: string; field?: string; to?: string | null; toString?: string | null }>;
+    }>;
+  }>;
+};
+
 /**
  * Fetch the reading-field changelog for KPI issues via the bulk endpoint
- * (`POST /rest/api/3/changelog/bulkfetch`, filtered to the reading field). Up to
- * 1000 issues/request — one call covers every KPI loaded. Returns the raw
- * changes for `readingsFromChangelog` to reduce into series.
+ * (`POST /rest/api/3/changelog/bulkfetch`, filtered to the reading field).
+ * Batches of 1,000 issues, run together, each paged by `nextPageToken` past
+ * 1,000 histories (spec 11 · 08, R4): an issue's histories may span pages, so
+ * they're appended. Returns the raw changes for `readingsFromChangelog`.
  */
 export async function fetchReadingChangelog(kpiIssueIds: string[]): Promise<Map<string, ReadingChange[]>> {
   const byIssue = new Map<string, ReadingChange[]>();
-  if (kpiIssueIds.length === 0) return byIssue;
+  const ids = [...new Set(kpiIssueIds)];
+  if (ids.length === 0) return byIssue;
   const fieldId = await getReadingFieldId();
-  // As the USER (spec 10): the changelog of the (now editable) reading field is
-  // readable as the user, and Jira leaves out issues they may not see. Step 0 of
-  // spec 10 verified this on a live site, including history written by the app.
-  const res = await asUser().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      issueIdsOrKeys: kpiIssueIds.slice(0, 1000),
-      fieldIds: [fieldId],
-      maxResults: 1000,
-    }),
-  });
-  // Non-throwing on initial load — an empty series shouldn't crash the timeline —
-  // but warn so a failed fetch is observable in Forge logs.
-  if (!res.ok) {
-    console.warn(`fetchReadingChangelog: bulkfetch failed (${res.status})`);
-    return byIssue;
-  }
-  const data = (await res.json()) as {
-    issueChangeLogs?: Array<{
-      issueId: string;
-      changeHistories?: Array<{
-        created: number | string;
-        author?: { accountId?: string };
-        items?: Array<{ fieldId?: string; field?: string; to?: string | null; toString?: string | null }>;
-      }>;
-    }>;
-  };
-  for (const log of data.issueChangeLogs ?? []) {
-    const changes: ReadingChange[] = [];
-    for (const h of log.changeHistories ?? []) {
-      const item = (h.items ?? []).find((i) => i.fieldId === fieldId || i.field === fieldId);
-      if (!item) continue;
-      // Bulk API returns `created` as Unix seconds/ms; normalize to ms.
-      const created =
-        typeof h.created === 'number'
-          ? h.created < 1e10
-            ? h.created * 1000
-            : h.created
-          : new Date(h.created).getTime();
-      changes.push({ created, to: item.toString ?? item.to ?? null, by: h.author?.accountId });
+  const batches: string[][] = [];
+  for (let i = 0; i < ids.length; i += CHANGELOG_BULK_ISSUES) batches.push(ids.slice(i, i + CHANGELOG_BULK_ISSUES));
+  const pages = await Promise.all(batches.map((batch) => fetchChangelogBatch(batch, fieldId)));
+  for (const page of pages.flat()) {
+    for (const log of page.issueChangeLogs ?? []) {
+      const changes = byIssue.get(log.issueId) ?? [];
+      for (const h of log.changeHistories ?? []) {
+        const item = (h.items ?? []).find((i) => i.fieldId === fieldId || i.field === fieldId);
+        if (!item) continue;
+        // Bulk API returns `created` as Unix seconds/ms; normalize to ms.
+        const created =
+          typeof h.created === 'number'
+            ? h.created < 1e10
+              ? h.created * 1000
+              : h.created
+            : new Date(h.created).getTime();
+        changes.push({ created, to: item.toString ?? item.to ?? null, by: h.author?.accountId });
+      }
+      byIssue.set(log.issueId, changes);
     }
-    byIssue.set(log.issueId, changes);
   }
   return byIssue;
+}
+
+/** Every page of one batch's changelog (at most 1,000 issues). */
+async function fetchChangelogBatch(issueIds: string[], fieldId: string): Promise<BulkChangelogPage[]> {
+  const pages: BulkChangelogPage[] = [];
+  let nextPageToken: string | undefined;
+  for (let n = 0; n < CHANGELOG_MAX_PAGES; n += 1) {
+    // As the USER (spec 10): the changelog of the (now editable) reading field is
+    // readable as the user, and Jira leaves out issues they may not see.
+    const res = await asUser().requestJira(route`/rest/api/3/changelog/bulkfetch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        issueIdsOrKeys: issueIds,
+        fieldIds: [fieldId],
+        maxResults: CHANGELOG_BULK_PAGE,
+        ...(nextPageToken ? { nextPageToken } : {}),
+      }),
+    });
+    // Non-throwing on load (an empty series shouldn't crash the timeline), but
+    // warn so a failed fetch is observable in Forge logs.
+    if (!res.ok) {
+      console.warn(`fetchReadingChangelog: bulkfetch failed (${res.status})`);
+      break;
+    }
+    const page = (await res.json()) as BulkChangelogPage;
+    pages.push(page);
+    if (!page.nextPageToken || (page.issueChangeLogs ?? []).length === 0) break;
+    nextPageToken = page.nextPageToken;
+  }
+  return pages;
 }
 
 /**
@@ -1004,6 +1032,40 @@ export async function listKpiSpaces(
       .map((p) => ({ key: p.key, name: p.name })),
     nextStartAt: data.isLast === false && values.length > 0 ? startAt + values.length : null,
   };
+}
+
+/** A runaway guard on `listKpiCreateSpaces` (100 projects a page). */
+const CREATE_SPACE_MAX_PAGES = 20;
+
+/**
+ * Spaces where the user may create KPIs (spec 11 · 08, 01 B6): `GET
+ * /project/search?action=create&expand=issueTypes` as the user lists the
+ * projects they have Create Issues in, with their work types; keep those
+ * offering the KPI work type. One page on the dev site (~80 projects); paged
+ * past 100.
+ */
+export async function listKpiCreateSpaces(workTypeId: string): Promise<KpiSpaceRef[]> {
+  const out: KpiSpaceRef[] = [];
+  let startAt = 0;
+  for (let n = 0; n < CREATE_SPACE_MAX_PAGES; n += 1) {
+    const res = await asUser().requestJira(
+      route`/rest/api/3/project/search?action=create&expand=issueTypes&orderBy=name&startAt=${startAt}&maxResults=100`,
+    );
+    if (!res.ok) throw new Error(await jiraError(res, 'list the spaces you can create KPIs in'));
+    const data = (await res.json()) as {
+      isLast?: boolean;
+      values?: Array<{ id: string | number; key: string; name: string; issueTypes?: Array<{ id?: string | number }> }>;
+    };
+    const values = data.values ?? [];
+    for (const p of values) {
+      if ((p.issueTypes ?? []).some((t) => String(t.id ?? '') === workTypeId)) {
+        out.push({ id: String(p.id), key: p.key, name: p.name });
+      }
+    }
+    if (data.isLast !== false || values.length === 0) break;
+    startAt += values.length;
+  }
+  return out;
 }
 
 /** One contributing issue's KPI targets, plus the fields needed to place them. */

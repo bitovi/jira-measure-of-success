@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { call } from '@ui/bridge.js';
 import type {
   AddedTarget,
@@ -6,8 +6,13 @@ import type {
   CreatedKpi,
   CreateKpiInput,
   IssuePickerItem,
+  KpiCreateSpaces,
+  KpiRefLookup,
   RecordValueInput,
   TimelineData,
+  TimelineReadingDto,
+  TimelineReadingsData,
+  TimelineSkeletonInput,
   TimelineTargetsData,
   UpdatedKpi,
   UpdateKpiInput,
@@ -16,6 +21,7 @@ import type {
 import { KPI_HIERARCHY_NOT_SET_UP, KPI_WORK_TYPE_NOT_SET_UP } from '@domain/index.js';
 import { bridgeFetchKpiAccess, type FetchKpiAccess } from '@ui/data/useKpiAccess/index.js';
 import { deriveTimelineView } from './timelineView.js';
+import { browserTimelineFilters } from './timelineFilters.js';
 
 /**
  * A mutation failure, as the save modals show it. Mutations reject, and the
@@ -57,10 +63,10 @@ export interface TimelineController {
    */
   record(kpiId: string, date: string, value: number | null): Promise<void>;
   /**
-   * Create a KPI (root or nested under parentKpiId) in `projectId`. Resolves once it's saved
-   * and on the timeline; rejects with the failure (see `toActionError`).
+   * Create a KPI (root or nested under parentKpiId) in `projectId`. Resolves with it once it's
+   * saved and on the timeline (for the created flag); rejects with the failure (see `toActionError`).
    */
-  createKpi(input: CreateKpiInput): Promise<void>;
+  createKpi(input: CreateKpiInput): Promise<CreatedKpi>;
   /**
    * Edit a KPI: send only the fields that changed (`kpiEditChanges`). Resolves
    * once it's saved and on the timeline; rejects with the failure, like
@@ -77,6 +83,19 @@ export interface TimelineController {
    * null = Jira couldn't answer). Absent (stories): access stays unknown.
    */
   getKpiAccess?: FetchKpiAccess;
+  /**
+   * Load the readings of KPIs that are full rows but were left out of the load
+   * (`readingsPending`, spec 11 · 08). Each KPI is asked for once.
+   */
+  loadReadings(kpiIds: string[]): void;
+  /** the last `loadReadings` failure, or null */
+  readingsError: string | null;
+  /** ask again for the readings that failed */
+  retryReadings(): void;
+  /** Add KPI's spaces, and which to fill in (`kpiSpaceKeys`: the page's KPI spaces). */
+  getKpiCreateSpaces(kpiSpaceKeys: string[]): Promise<KpiCreateSpaces>;
+  /** A whole key, id or `/browse/` URL typed in the Parent search (07's lookup). */
+  lookupKpiRef(ref: string): Promise<KpiRefLookup>;
 }
 
 export type UseTimeline = () => TimelineController;
@@ -95,9 +114,12 @@ function guarded<T>(promise: Promise<T>): Promise<T> {
 /** Console timing (ms since page load) so the real-site phase gap can be read off, not guessed. */
 const mark = (what: string) => console.info(`[timeline] ${what} at ${Math.round(performance.now())}ms`);
 
+/** Readings only for the remembered KPI space filter's spaces (spec 11 · 08); none remembered = every KPI. */
 const requestSkeleton = () => {
   mark('KPIs requested');
-  return guarded(call<TimelineData>('getTimelineSkeleton'));
+  const spaces = browserTimelineFilters.read()?.spaces ?? [];
+  const input: TimelineSkeletonInput = spaces.length ? { readingSpaces: spaces } : {};
+  return guarded(call<TimelineData>('getTimelineSkeleton', input));
 };
 const requestTargets = () => {
   mark('targets requested');
@@ -134,6 +156,10 @@ export const useTimelineData: UseTimeline = () => {
   const [edited, setEdited] = useState<UpdatedKpi[]>([]);
   const [readingEdits, setReadingEdits] = useState<RecordValueInput[]>([]);
   const [addedTargets, setAddedTargets] = useState<AddedTarget[]>([]);
+  const [loadedReadings, setLoadedReadings] = useState<Record<string, TimelineReadingDto[]>>({});
+  const [readingsError, setReadingsError] = useState<string | null>(null);
+  const readingsAsked = useRef(new Set<string>());
+  const readingsFailed = useRef<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -165,9 +191,34 @@ export const useTimelineData: UseTimeline = () => {
   }, [targetsRequest]);
 
   const view = useMemo(
-    () => deriveTimelineView({ skeleton, contributions, targetsError, created, edited, readingEdits, addedTargets }),
-    [skeleton, contributions, targetsError, created, edited, readingEdits, addedTargets],
+    () => deriveTimelineView({ skeleton, contributions, targetsError, created, edited, readingEdits, addedTargets, loadedReadings }),
+    [skeleton, contributions, targetsError, created, edited, readingEdits, addedTargets, loadedReadings],
   );
+
+  const loadReadings = useCallback((kpiIds: string[]) => {
+    const wanted = [...new Set(kpiIds)].filter((id) => !readingsAsked.current.has(id));
+    if (wanted.length === 0) return;
+    wanted.forEach((id) => readingsAsked.current.add(id));
+    mark(`readings of ${wanted.length} KPIs requested`);
+    call<TimelineReadingsData>('getTimelineReadings', { kpiIds: wanted }).then(
+      ({ readings }) => {
+        // A KPI Jira left out gets an empty series, so it stops waiting.
+        setLoadedReadings((prev) => ({ ...prev, ...Object.fromEntries(wanted.map((id) => [id, readings[id] ?? []])) }));
+      },
+      (e: unknown) => {
+        wanted.forEach((id) => readingsAsked.current.delete(id));
+        readingsFailed.current = [...new Set([...readingsFailed.current, ...wanted])];
+        setReadingsError(e instanceof Error ? e.message : String(e));
+      },
+    );
+  }, []);
+
+  const retryReadings = () => {
+    const failed = readingsFailed.current;
+    readingsFailed.current = [];
+    setReadingsError(null);
+    loadReadings(failed);
+  };
 
   const retryTargets = () => {
     setTargetsError(null);
@@ -183,6 +234,7 @@ export const useTimelineData: UseTimeline = () => {
   const createKpi = async (input: CreateKpiInput) => {
     const kpi = await call<CreatedKpi>('createKpi', input);
     setCreated((prev) => [...prev, kpi]);
+    return kpi;
   };
 
   const updateKpi = async (input: UpdateKpiInput) => {
@@ -215,5 +267,10 @@ export const useTimelineData: UseTimeline = () => {
     searchIssues,
     addTarget,
     getKpiAccess: bridgeFetchKpiAccess,
+    loadReadings,
+    readingsError,
+    retryReadings,
+    getKpiCreateSpaces: (kpiSpaceKeys) => call<KpiCreateSpaces>('getKpiCreateSpaces', { kpiSpaceKeys }),
+    lookupKpiRef: (ref) => call<KpiRefLookup>('lookupKpiRef', { ref }),
   };
 };

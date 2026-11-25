@@ -51,6 +51,9 @@ import {
   type DateFieldCatalog,
   type HierarchyLevel,
   type RollupConfig,
+  kpiCreateSpacePreselect,
+  type KpiCreateSpaces,
+  type TimelineReadingsData,
 } from '@domain/index.js';
 import {
   CATALOG,
@@ -672,23 +675,52 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
 
 export function getTimelineData(): TimelineData {
   timelineIdSeq = 1;
-  return { today: TODAY, roots: kpiTree.map((n) => toTimelineNode(n, 0)), centralSpace: CENTRAL_SPACE };
+  return {
+    today: TODAY,
+    roots: kpiTree.map((n) => toTimelineNode(n, 0)),
+    centralSpace: CENTRAL_SPACE,
+    kpiTypeIconUrl: TYPE_ICONS.KPI,
+  };
 }
 
 /**
  * Phase 1 of the progressive load — mirrors the backend `getTimelineSkeleton`:
- * the KPI tree and readings, every node `resolving`, no targets yet.
+ * the KPI tree, every node `resolving`, no targets yet; readings only for KPIs
+ * in `readingSpaces` (none = every KPI, spec 11 · 08), the others `readingsPending`.
  */
-export function getTimelineSkeleton(): TimelineData {
-  const strip = (n: TimelineNodeDto): TimelineNodeDto => ({
-    ...n,
-    targets: [],
-    undated: [],
-    children: n.children.map(strip),
-    resolving: true,
-  });
+export function getTimelineSkeleton(readingSpaces: string[] = []): TimelineData {
+  const scope = new Set(readingSpaces);
+  const strip = (n: TimelineNodeDto): TimelineNodeDto => {
+    const loaded = scope.size === 0 || scope.has(spaceOfKey(n.issueKey).key);
+    return {
+      ...n,
+      targets: [],
+      undated: [],
+      children: n.children.map(strip),
+      resolving: true,
+      ...(loaded ? {} : { readings: [], readingsPending: true }),
+    };
+  };
   const full = getTimelineData();
   return { ...full, roots: full.roots.map(strip) };
+}
+
+/** Readings of KPIs that came into scope — mirrors the backend `getTimelineReadings`. */
+export function getTimelineReadings(kpiIds: string[]): TimelineReadingsData {
+  const readings: TimelineReadingsData['readings'] = {};
+  for (const id of kpiIds) {
+    if (readingChangelog.has(id)) readings[id] = readingsFor(id).map((r) => ({ date: r.date, value: r.value }));
+  }
+  return { readings };
+}
+
+/**
+ * Add KPI's spaces — mirrors the backend `getKpiCreateSpaces`: the harness KPI
+ * spaces the user can create in (`canCreate`), filled in by the preselect rule.
+ */
+export function getKpiCreateSpaces(kpiSpaceKeys: string[], canCreate: (spaceKey: string) => boolean): KpiCreateSpaces {
+  const spaces = Object.values(KPI_SPACES).filter((sp) => canCreate(sp.key));
+  return { spaces, preselect: kpiCreateSpacePreselect(spaces, kpiSpaceKeys) };
 }
 
 /**

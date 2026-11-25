@@ -1,6 +1,6 @@
 # 08 — Timeline and Add KPI across spaces
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **G4 decided by the implementer (autopilot), pending Justin's review** · Depends on: 06.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** (Steps 3–5 implemented 2026-11-25; G4 decided by the implementer, pending Justin's review) · Depends on: 06.
 
 ## Problem
 
@@ -205,3 +205,110 @@ _To be answered at gate G4._
 - The `jira:projectPage` spike is removed (module, page and board scopes); findings stay in 01.
 - (2026-11-22) Filters remembered in `localStorage`. **No space pages now.** Add KPI never defaults to
   the central space; the user picks unless there's only one possible space.
+
+## Implementation notes
+
+Done 2026-11-25 on `feat/11-scalable-data`, Steps 3–5. Step 6 (live check on dev) is pending.
+
+**Resolvers and payloads**
+
+| Resolver | Payload | Returns | Jira (as the user) |
+|---|---|---|---|
+| `getTimelineSkeleton` | `TimelineSkeletonInput { readingSpaces?: string[] }` (the remembered KPI space filter; none = all) | `TimelineData`: every KPI the user can browse (as 06), `kpiTypeIconUrl`, and readings only for KPIs in `readingSpaces`; the others `readingsPending: true` with `readings: []` | as 06 (`/field`, config, one `[issuetype]` search, **no** `mypermissions`) + the bulk changelog of the in-scope KPIs only, paged (below) + one icon fetch for the KPI type (in parallel with the readings) |
+| `getTimelineReadings` (new) | `GetTimelineReadingsInput { kpiIds }` (≤ 5,000 issue ids) | `TimelineReadingsData { readings: Record<kpiId, TimelineReadingDto[]> }` (a KPI Jira left out has no entry) | the paged bulk changelog of those ids |
+| `getKpiCreateSpaces` (new) | `GetKpiCreateSpacesInput { kpiSpaceKeys? }` (the page's KPI spaces) | `KpiCreateSpaces { spaces: KpiSpaceRef[], preselect: projectId \| null }` | one `GET /project/search?action=create&expand=issueTypes&orderBy=name&maxResults=100` (paged past 100; dev needs one), keeping projects whose work types include the KPI type id; throws `KPI_WORK_TYPE_NOT_SET_UP` without a work type |
+| `getTimelineTargets`, `getTimelineData` | unchanged | unchanged (`getTimelineData` still reads every KPI's readings) | unchanged |
+
+- **R4 (resolved):** `fetchReadingChangelog` splits ids into batches of 1,000 (`CHANGELOG_BULK_ISSUES`), runs the
+  batches together, and pages each by `nextPageToken` (`maxResults` 1,000, `CHANGELOG_BULK_PAGE`; runaway guard 100
+  pages a batch). An issue's histories may span pages, so they're appended, not overwritten.
+- **Preselect rule** (`kpiCreateSpacePreselect`, domain, shared by the resolver and stories): the one space the
+  user can create KPIs in; else, when every KPI on the page is in one space and the user can create there, that
+  space; else none. Never the central space, the filter or the parent's space just because.
+- The client's skeleton request reads the remembered filter itself (`browserTimelineFilters`), so the first load
+  already fetches only the in-scope readings. When a KPI becomes a full row without readings
+  (`readingsPending`), the Timeline calls `loadReadings(ids)`; each KPI is asked for once; a failure shows a
+  "Couldn't load values" banner with Retry.
+
+**Files**
+
+- Domain: `contracts.ts` (`TimelineNodeDto.readingsPending`, `TimelineData.kpiTypeIconUrl`, `TimelineSkeletonInput`,
+  `GetTimelineReadingsInput`, `TimelineReadingsData`, `GetKpiCreateSpacesInput`, `KpiCreateSpaces`);
+  `resolve/kpiSpaces.ts` (`kpiSpaceKeyOf`, `kpiCreateSpacePreselect`, `TimelineScope`, `scopeTimeline`,
+  `fullRowKpiIds`, `scopeShowsKpi`; **removed** 06's temporary `defaultKpiCreateSpace`); `resolve/timelineLoad.ts`
+  (`applyLoadedReadings`). Tests for each.
+- Backend: `jira.ts` (paged `fetchReadingChangelog`, `listKpiCreateSpaces`), `resolver.ts` (skeleton scope,
+  `getTimelineReadings`, `getKpiCreateSpaces`), `testing/scaleFixture.ts` (bulkfetch refuses > 1,000 ids and pages
+  1,000 histories by `nextPageToken`; `project/search?action=create` keeps projects with Create Issues;
+  `orderBy=name`), new `timelineScope.test.ts`, `timelinePerf.test.ts` (Phase 1 budget +1 icon fetch; the full
+  build's icon count 1 → 2; digest unchanged with `kpiTypeIconUrl` left out).
+- UI data: `useTimelineData` (`createKpi` resolves with the `CreatedKpi`; `loadReadings`, `readingsError`,
+  `retryReadings`, `getKpiCreateSpaces`, `lookupKpiRef`; skeleton payload), `timelineView` (`loadedReadings`
+  overlay, applied first), new `timelineFilters.ts` (`TimelineFilterStore`: `browserTimelineFilters`
+  (localStorage key `kpi-timeline:filters`, fail-safe), `noTimelineFilters`, `memoryTimelineFilters`) + tests.
+- UI surface: `Timeline.tsx` (KPI space + Work from filters, scoped tree with compact context rows, space badges,
+  `{KPI icon} {name}` rows, Plans-style row actions, Add KPI dialog, created flag, Edit/Move dialogs, readings
+  banner; `?projects=` URL state and `ProjectFilterControl`, the ✎/+/●/◇ glyph buttons, `CreateKpiModal` /
+  `KpiParentSelect` removed), `Timeline.stories.tsx` (rewritten for track clicks and the … menu; new 08 scenarios).
+- New modlets under `surfaces/Timeline/components/` (each with stories, light and dark, and a runner):
+  `ScopeFilter` (searchable checkbox list, "Show all"), `RowActions` (+ and … at 32×32 / 28×28 on context rows,
+  busy state, disabled items with reasons, menu in a body portal), `ParentField` (Jira's Parent field: collapsed
+  row → combobox, two-line `{space} {KPI icon} {key}` / name options, clear, whole key/id/URL → `lookupKpiRef`),
+  `AddKpiDialog` (+ `kpiSpaceName`: the central space reads "Global KPIs"), `CreatedFlag`,
+  `ActionErrorBanner` (moved out of `Timeline.tsx`, with `SETUP_ERRORS`).
+- Harness: `mock-resolvers.ts` (`getTimelineSkeleton(readingSpaces)`, `getTimelineReadings`,
+  `getKpiCreateSpaces`, `kpiTypeIconUrl`), `mock-bridge.ts` (the two new resolvers; `?readingsDelayMs=` (default
+  300); create spaces follow `?access=`: `none`/`readonly` offer none, `split` only KPI).
+
+**Decisions and deviations**
+
+- **Scope rule with both filters:** Work from narrows first, exactly as before (a KPI stays when it or a
+  descendant has a matching target, its own markers narrowed); then the KPI space filter keeps the chosen spaces'
+  KPIs as full rows and their ancestors outside the filter as context. The prototype made an in-space KPI kept
+  only for a descendant's match a compact row; here it stays a full row, so Work from behaves as today.
+- **A remembered space with no loaded KPIs is ignored** (the page doesn't open empty); Work from isn't intersected
+  (as today, it waits for the targets).
+- **Row actions:** the old ✎ / + / ● / ◇ buttons are gone (the prototype has only + and …). Recording and adding a
+  target are track clicks (past / future date), as the tip says; editing a value is a click on its dot. Keyboard
+  users lose the direct record / add-target buttons; worth a look at review (e.g. "Record a value…" in the … menu).
+- **Access:** the … button looks up the KPI's space access (busy: pulsing, "Checking your permissions…"), then
+  opens the menu with *Edit* (Edit Issues) and *Move* (Link Issues) disabled with the reason naming the space;
+  the same space reuses the cache. A track click is guarded as in 06 (busy, then the refusal banner). **+ opens
+  the dialog without a lookup** (the child's space isn't known yet); **Create** then checks the chosen space
+  (Create Issues, and Link Issues with a parent) through the same cache, showing the refusal in the dialog footer.
+  Add KPI's list already holds only spaces with Create Issues.
+- **Add KPI dialog:** Direction offers the prototype's two choices (Higher / Lower is better; editing keeps "No
+  direction"); there's **no description field** (`createKpi` doesn't take one). Create stays enabled except with
+  no space available or the spaces failed to load; pressed without a space it says "Choose a space.", without a
+  name "Enter a name for the KPI.". Enter in the name creates. Create another keeps space, unit, direction and
+  parent, and clears the name.
+- **Flag:** "{KEY} {name} created", "In {space} ({KEY}).", and when the filters hide it "It's hidden by the
+  filters." with **Show it** (adds its space to the KPI space filter, clears Work from). It stays until dismissed.
+- **Edit and Move** are two dialogs from the … menu (the old Edit dialog split): *Edit name, unit, direction*,
+  and *Move under another KPI…* with the Parent field (any space, keys, without the KPI's own subtree).
+- **KPI row names** are dark text, underlined on hover (spec text; the prototype draws them blue). The KPI type's
+  real icon comes with the skeleton (`kpiTypeIconUrl`, one extra icon request in Phase 1).
+- Spaces in the filter and the dialog show the SpaceKey chip instead of a project avatar (the app has no avatars).
+
+**Verification:** 903 unit tests (was 882) and 320 story tests (was 265) pass, story tests run twice; `typecheck`
+and `lint` clean. Harness (`?surface=timeline`, light and dark, 1400px): all KPIs by default with space badges; KPI
+space filter to Operations shows Revenue and # of Orders as compact context rows; the filter is remembered across
+a reload and opens with only those readings loaded, adding Finance shows "Loading values…" then the values; + on
+# of Orders opens Add KPI with the parent filled and no space; creating in Finance shows the flag with Show it;
+`?access=split&accessDelayMs=800`: … on OPS-2 is busy, then Edit/Move disabled naming Operations, OPS-3's menu
+opens at once; a past-date click on FIN-1 is busy, then refused naming Finance. Console: only the harness's
+missing favicon and Atlaskit modal-dialog's existing `defaultProps` dev warning (also on the existing Record dialog).
+
+**Live check (Step 6) should verify** on bitovi-training (dev; no manifest change, so `forge deploy` alone; KPIs in
+`KPI` (central, 14) and `KPI2` (`KPI2-1` under `KPI-1`)): the Timeline loads with no `mypermissions` (`[perf]`
+`getTimelineSkeleton`: `/field`, `[issuetype]`, one bulkfetch, one avatar icon); rows show the KPI type's bullseye
+icon, no keys, and `KPI` / `KPI2` badges; KPI space lists "Global KPIs" and KPI2's name; choosing KPI2 shows KPI-1
+as a compact context row above KPI2-1, survives a reload, and the reloaded skeleton's bulkfetch holds only
+KPI2-1's id (then choosing Global KPIs makes one `getTimelineReadings`); Add KPI makes one
+`project/search?action=create` (`getKpiCreateSpaces`) listing KPI and KPI2 (and any spike space still offering the
+type), with no space filled in; creating in KPI2 (+ on KPI-1) creates `KPI2-n` under KPI-1 with unit and direction
+in Jira's fields (05), and the flag names it; Create without a space says "Choose a space."; the … menu on a KPI
+gives Edit/Move/Open in Jira, and Move finds a parent by typing a whole key; a user with Create Issues in only one
+space is offered only that one, filled in (deferred with 06's non-admin checks if no such user is handy); Work from
+narrows targets as before.
+

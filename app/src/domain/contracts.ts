@@ -431,19 +431,55 @@ export interface TimelineNodeDto {
   resolving?: boolean;
   /** the KPI's space (always set by the backend; absent on hand-built data) */
   space?: KpiSpaceRef;
+  /**
+   * true when the load left this KPI's readings out (its space was outside the
+   * load's readings scope, spec 11 · 08): `readings` is empty until the client
+   * asks `getTimelineReadings` for it.
+   */
+  readingsPending?: boolean;
 }
 
 export interface TimelineData {
   /** ISO date treated as "today" for status classification + the axis marker */
   today: string;
   roots: TimelineNodeDto[];
-  /**
-   * The central KPI space (spec 11 · 04), when one is set up. Until 08's space
-   * chooser, Add KPI creates there by default (`defaultKpiCreateSpace`).
-   */
+  /** The central KPI space (spec 11 · 04), when one is set up: shown as "Global KPIs". */
   centralSpace?: KpiSpaceRef | null;
   /** true when no KPI work type is configured yet (Settings → KPI building blocks) */
   noWorkType?: boolean;
+  /** the KPI work type's icon, inlined (a KPI row is `{KPI icon} {name}`); null if it couldn't be fetched */
+  kpiTypeIconUrl?: string | null;
+}
+
+/**
+ * `getTimelineSkeleton` payload (spec 11 · 08): every KPI is loaded, but
+ * readings only for KPIs in `readingSpaces` (project keys, the remembered KPI
+ * space filter). Absent or empty: every KPI's readings.
+ */
+export interface TimelineSkeletonInput {
+  readingSpaces?: string[];
+}
+
+/** `getTimelineReadings`: the readings of KPIs that just came into scope. */
+export interface GetTimelineReadingsInput {
+  kpiIds: string[];
+}
+
+export interface TimelineReadingsData {
+  /** by KPI id; a KPI Jira left out (deleted, or not visible) has none */
+  readings: Record<string, TimelineReadingDto[]>;
+}
+
+/** `getKpiCreateSpaces` payload: the spaces of the KPIs on the page (for the preselect rule). */
+export interface GetKpiCreateSpacesInput {
+  kpiSpaceKeys?: string[];
+}
+
+/** Where Add KPI may create a KPI: spaces offering the KPI work type where the user has Create Issues. */
+export interface KpiCreateSpaces {
+  spaces: KpiSpaceRef[];
+  /** the space to fill in (project id) when there's no choice to make; otherwise null (spec 11 · 08) */
+  preselect: string | null;
 }
 
 /**

@@ -75,7 +75,13 @@ import {
   type TargetSourceIssue,
   type TimelineData,
   type TimelineNodeDto,
+  type TimelineReadingsData,
   type TimelineTargetsData,
+  type GetKpiCreateSpacesInput,
+  type GetTimelineReadingsInput,
+  type KpiCreateSpaces,
+  type TimelineSkeletonInput,
+  kpiCreateSpacePreselect,
 } from '../domain/index';
 import {
   fetchStoredAssignments,
@@ -108,6 +114,7 @@ import {
   inlineIssueTypeIcons,
   fetchParentChain,
   listKpiSpaces,
+  listKpiCreateSpaces,
   lookupIssueAsKpi,
   JiraForbiddenError,
   KPI_ISSUE_TYPE,
@@ -330,6 +337,7 @@ function kpiNode(
   depth: number,
   changelogByIssue: Map<string, ReadingChange[]>,
   childrenOf: Map<string, KpiIssue[]> = new Map(),
+  readingsLoaded: (issue: KpiIssue) => boolean = () => true,
 ): TimelineNodeDto {
   return {
     id: issue.id,
@@ -345,9 +353,10 @@ function kpiNode(
       date: r.date,
       value: r.value,
     })),
-    children: (childrenOf.get(issue.id) ?? []).map((c) => kpiNode(c, depth + 1, changelogByIssue, childrenOf)),
+    children: (childrenOf.get(issue.id) ?? []).map((c) => kpiNode(c, depth + 1, changelogByIssue, childrenOf, readingsLoaded)),
     resolving: true,
     ...(issue.space ? { space: issue.space } : {}),
+    ...(readingsLoaded(issue) ? {} : { readingsPending: true }),
   };
 }
 
@@ -1057,15 +1066,24 @@ defineSettingsWrite('runMigrationBatch', async ({ payload, context }) =>
 
 defineSettingsWrite('retryMigration', async ({ payload }) => retryMigration(migrationIdOf(payload)));
 
+/** Project keys from a payload: normalized, valid, distinct. */
+function projectKeysOf(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.map((k) => normalizeProjectKey(String(k))))].filter(isValidProjectKey);
+}
+
 /**
  * Phase 1 of the timeline (spec 06 P4): the KPI tree — every KPI the user can
  * browse, by work type (spec 11 · 06), in every space — each KPI's space and
- * unit/direction (in the search) and its reading series (one bulk changelog
- * call). Every node is `resolving` with no targets yet — the contributing-issue
- * search, the rollup walk and the icons are Phase 2. No permission lookup: a
- * space's access is fetched when an action needs it (`getKpiAccess`).
+ * unit/direction (in the search), the KPI work type's icon, and reading series
+ * (bulk changelog, paged, R4) for the KPIs in `readingSpaces` only (spec 11 ·
+ * 08: the remembered KPI space filter; none = every KPI). The others are
+ * `readingsPending` until the client asks `getTimelineReadings`. Every node is
+ * `resolving` with no targets yet — the contributing-issue search, the rollup
+ * walk and the target icons are Phase 2. No permission lookup: a space's
+ * access is fetched when an action needs it (`getKpiAccess`).
  */
-async function buildTimelineSkeleton(): Promise<TimelineData> {
+async function buildTimelineSkeleton(input: TimelineSkeletonInput = {}): Promise<TimelineData> {
   const today = new Date().toISOString().slice(0, 10);
   // The shared `/field` lookup (rank + reading field ids) is independent of the
   // configuration, so start both together.
@@ -1079,9 +1097,42 @@ async function buildTimelineSkeleton(): Promise<TimelineData> {
   const issues = await stage('kpis', () => fetchKpis({}, cfg));
   if (issues.length === 0) return { today, roots: [], centralSpace } satisfies TimelineData;
 
-  const changelogByIssue = await stage('readings', () => fetchReadingChangelog(issues.map((i) => i.id)));
+  const readingSpaces = new Set(projectKeysOf(input.readingSpaces));
+  const readingsLoaded = (issue: KpiIssue) =>
+    readingSpaces.size === 0 || readingSpaces.has(issue.space?.key ?? projectKeyOfIssueKey(issue.key));
+  const [changelogByIssue, kpiTypeIconUrl] = await Promise.all([
+    stage('readings', () => fetchReadingChangelog(issues.filter(readingsLoaded).map((i) => i.id))),
+    stage('icons', () => inlineIconOnce(issues[0].typeIconUrl)),
+  ]);
   const { roots, childrenOf } = kpiForest(issues);
-  return { today, roots: roots.map((r) => kpiNode(r, 0, changelogByIssue, childrenOf)), centralSpace } satisfies TimelineData;
+  return {
+    today,
+    roots: roots.map((r) => kpiNode(r, 0, changelogByIssue, childrenOf, readingsLoaded)),
+    centralSpace,
+    kpiTypeIconUrl,
+  } satisfies TimelineData;
+}
+
+/** The most KPIs one `getTimelineReadings` call takes (the KPI search's cap). */
+const TIMELINE_READINGS_LIMIT = 5000;
+
+/**
+ * Readings for KPIs that came into the Timeline's scope after the load (spec 11
+ * · 08): one paged bulk changelog fetch, as the user (Jira leaves out issues
+ * they can't see).
+ */
+async function buildTimelineReadings(input: Partial<GetTimelineReadingsInput>): Promise<TimelineReadingsData> {
+  const kpiIds = [...new Set((Array.isArray(input.kpiIds) ? input.kpiIds : []).map(String))];
+  if (!kpiIds.every(isKpiIssueId)) throw new Error('Invalid KPI id.');
+  if (kpiIds.length > TIMELINE_READINGS_LIMIT) throw new Error(`Ask for at most ${TIMELINE_READINGS_LIMIT} KPIs' readings at a time.`);
+  if (kpiIds.length === 0) return { readings: {} };
+  const changelog = await stage('readings', () => fetchReadingChangelog(kpiIds));
+  const readings: TimelineReadingsData['readings'] = {};
+  for (const id of kpiIds) {
+    const changes = changelog.get(id);
+    if (changes) readings[id] = readingsFromChangelog(changes).map((r) => ({ date: r.date, value: r.value }));
+  }
+  return { readings };
 }
 
 /**
@@ -1176,7 +1227,20 @@ async function buildTimelineData(): Promise<TimelineData> {
   return applyTargetContributions(skeleton, contributions);
 }
 
-define('getTimelineSkeleton', async () => buildTimelineSkeleton());
+define('getTimelineSkeleton', async ({ payload }) => buildTimelineSkeleton(payloadOf<TimelineSkeletonInput>(payload)));
+define('getTimelineReadings', async ({ payload }) => buildTimelineReadings(payloadOf<GetTimelineReadingsInput>(payload)));
+
+/**
+ * Add KPI's spaces (spec 11 · 08): one `project/search?action=create` as the
+ * user, kept to spaces offering the KPI work type. `preselect` follows
+ * `kpiCreateSpacePreselect` with the page's KPI spaces (`kpiSpaceKeys`).
+ */
+define('getKpiCreateSpaces', async ({ payload }) => {
+  const cfg = await requirePickerConfig();
+  const spaces = await stage('spaces', () => listKpiCreateSpaces(cfg.workTypeId));
+  const kpiSpaceKeys = projectKeysOf(payloadOf<GetKpiCreateSpacesInput>(payload).kpiSpaceKeys);
+  return { spaces, preselect: kpiCreateSpacePreselect(spaces, kpiSpaceKeys) } satisfies KpiCreateSpaces;
+});
 define('getTimelineTargets', async () => buildTargetContributionsByKpi());
 define('getTimelineData', async () => buildTimelineData());
 

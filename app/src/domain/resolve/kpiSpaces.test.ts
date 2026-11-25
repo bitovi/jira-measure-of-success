@@ -1,11 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { defaultKpiCreateSpace, kpiSpacesOf } from './kpiSpaces';
-import type { KpiSpaceRef, TimelineNodeDto } from '../contracts';
+import { fullRowKpiIds, kpiCreateSpacePreselect, kpiSpacesOf, scopeShowsKpi, scopeTimeline } from './kpiSpaces';
+import type { KpiSpaceRef, TimelineNodeDto, TimelineTargetDto } from '../contracts';
 
 const KPI: KpiSpaceRef = { id: '10000', key: 'KPI', name: 'KPIs' };
 const PORT: KpiSpaceRef = { id: '10400', key: 'PORT', name: 'Portfolio' };
+const GROW: KpiSpaceRef = { id: '10401', key: 'GROW', name: 'Growth' };
 
-const node = (id: string, space: KpiSpaceRef | undefined, children: TimelineNodeDto[] = []): TimelineNodeDto => ({
+const target = (issue: string): TimelineTargetDto => ({
+  date: '2026-09-30',
+  value: 1,
+  status: 'upcoming',
+  provisional: false,
+  relative: false,
+  source: { issue, type: 'Epic', title: issue },
+});
+
+const node = (
+  id: string,
+  space: KpiSpaceRef | undefined,
+  children: TimelineNodeDto[] = [],
+  targets: TimelineTargetDto[] = [],
+): TimelineNodeDto => ({
   id,
   kpiId: id,
   issueKey: `${space?.key ?? 'X'}-${id}`,
@@ -13,7 +28,7 @@ const node = (id: string, space: KpiSpaceRef | undefined, children: TimelineNode
   unit: '',
   direction: null,
   depth: 0,
-  targets: [],
+  targets,
   undated: [],
   readings: [],
   children,
@@ -28,18 +43,62 @@ describe('kpiSpacesOf', () => {
   });
 });
 
-describe('defaultKpiCreateSpace', () => {
-  it('uses the central space when one is set up', () => {
-    expect(defaultKpiCreateSpace([node('1', PORT)], KPI)).toEqual({ space: KPI });
+describe('kpiCreateSpacePreselect', () => {
+  it('fills in the one space the user can create KPIs in', () => {
+    expect(kpiCreateSpacePreselect([PORT], ['KPI', 'PORT', 'GROW'])).toBe(PORT.id);
   });
 
-  it('else the one space every loaded KPI is in', () => {
-    expect(defaultKpiCreateSpace([node('1', PORT, [node('2', PORT)])], null)).toEqual({ space: PORT });
+  it('fills in the space every KPI is in, when the user can create there', () => {
+    expect(kpiCreateSpacePreselect([KPI, PORT], ['KPI'])).toBe(KPI.id);
+    expect(kpiCreateSpacePreselect([PORT, GROW], ['KPI'])).toBeNull();
   });
 
-  it('else asks the user to choose a space', () => {
-    const many = defaultKpiCreateSpace([node('1', PORT), node('2', KPI)], null);
-    expect(many).toEqual({ error: expect.stringMatching(/^Choose a space for the new KPI: .*more than one space\.$/) });
-    expect(defaultKpiCreateSpace([], undefined)).toEqual({ error: expect.stringMatching(/^Choose a space for the new KPI/) });
+  it('never defaults to the central space otherwise: the user picks', () => {
+    expect(kpiCreateSpacePreselect([KPI, PORT, GROW], ['KPI', 'PORT'])).toBeNull();
+    expect(kpiCreateSpacePreselect([KPI, PORT], [])).toBeNull();
+    expect(kpiCreateSpacePreselect([], ['KPI'])).toBeNull();
+  });
+});
+
+describe('scopeTimeline', () => {
+  // KPI-1 → PORT-2 → GROW-3, KPI-1 → KPI-4, PORT-5 (a root)
+  const tree = () => [
+    node('1', KPI, [node('2', PORT, [node('3', GROW, [], [target('APP-1')])]), node('4', KPI, [], [target('WEB-1')])]),
+    node('5', PORT),
+  ];
+
+  it('shows every KPI as a full row with no filter', () => {
+    const scoped = scopeTimeline(tree(), { spaces: null, workFrom: null });
+    expect(scoped.context.size).toBe(0);
+    expect(fullRowKpiIds(scoped)).toEqual(['1', '2', '3', '4', '5']);
+  });
+
+  it('keeps the chosen spaces as full rows with their ancestors as context, no unrelated siblings', () => {
+    const scoped = scopeTimeline(tree(), { spaces: new Set(['GROW']), workFrom: null });
+    expect([...scoped.context]).toEqual(['2', '1']);
+    expect(fullRowKpiIds(scoped)).toEqual(['3']);
+    expect(scoped.roots.map((r) => r.id)).toEqual(['1']);
+    expect(scoped.roots[0].children.map((c) => c.id)).toEqual(['2']);
+    expect(scopeShowsKpi(scoped, '4')).toBe(false);
+    expect(scopeShowsKpi(scoped, '1')).toBe(true);
+  });
+
+  it('several spaces: an ancestor in a chosen space is a full row', () => {
+    const scoped = scopeTimeline(tree(), { spaces: new Set(['PORT', 'GROW']), workFrom: null });
+    expect([...scoped.context]).toEqual(['1']);
+    expect(fullRowKpiIds(scoped)).toEqual(['2', '3', '5']);
+  });
+
+  it('Work from narrows first, as before (a KPI with a matching descendant stays)', () => {
+    const scoped = scopeTimeline(tree(), { spaces: null, workFrom: new Set(['APP']) });
+    expect(fullRowKpiIds(scoped)).toEqual(['1', '2', '3']);
+    const both = scopeTimeline(tree(), { spaces: new Set(['KPI']), workFrom: new Set(['WEB']) });
+    expect(fullRowKpiIds(both)).toEqual(['1', '4']);
+    expect(both.context.size).toBe(0);
+  });
+
+  it('a KPI on no hand-built space is scoped by its key', () => {
+    const scoped = scopeTimeline([node('7', undefined)], { spaces: new Set(['X']), workFrom: null });
+    expect(fullRowKpiIds(scoped)).toEqual(['7']);
   });
 });
