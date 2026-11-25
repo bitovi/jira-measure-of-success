@@ -1293,7 +1293,8 @@ export async function updateKpiDefinition(
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      ...(change.name !== undefined ? { fields: { summary: change.name } } : {}),
+      // Jira rejects an edit without `fields` or `update`, even when it only sets properties.
+      fields: change.name !== undefined ? { summary: change.name } : {},
       ...(change.meta !== undefined ? { properties: [{ key: KPI_META_PROPERTY_KEY, value: change.meta }] } : {}),
     }),
   });
