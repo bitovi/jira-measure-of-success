@@ -20,6 +20,8 @@ function Harness({
   const items: RowMenuItem[] = [
     { label: 'Edit name, unit, direction', onSelect: edit, disabledReason: refused },
     { label: 'Move under another KPI…', onSelect: () => {}, disabledReason: refused },
+    { label: 'Record a value…', onSelect: () => {}, disabledReason: refused },
+    { label: 'Add a target…', onSelect: () => {} },
     { label: 'Open in Jira', onSelect: open },
   ];
   return (
@@ -43,7 +45,7 @@ const meta: Meta<typeof Harness> = { component: Harness, title: 'Timeline/RowAct
 export default meta;
 type Story = StoryObj<typeof Harness>;
 
-/** + creates a child; … opens Edit · Move · Open in Jira; Esc closes it. */
+/** + creates a child; … opens Edit · Move · Record · Add a target · Open in Jira; Esc closes it. */
 export const Actions: Story = {
   play: async ({ canvasElement }) => {
     addChild.mockClear();
@@ -57,6 +59,8 @@ export const Actions: Story = {
     await expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
       'Edit name, unit, direction',
       'Move under another KPI…',
+      'Record a value…',
+      'Add a target…',
       'Open in Jira',
     ]);
     await userEvent.click(within(menu).getByRole('menuitem', { name: 'Open in Jira' }));

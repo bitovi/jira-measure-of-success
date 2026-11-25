@@ -64,6 +64,7 @@ import {
   kpiSpacesOf,
   kpiSubtreeIds,
   NO_KPIS_MESSAGE,
+  nextQuarterEndISO,
   parentKpiIdOf,
   projectSeries,
   scopeShowsKpi,
@@ -662,6 +663,17 @@ export function Timeline({
                               label: 'Move under another KPI…',
                               disabledReason: blocked.nest,
                               onSelect: () => setEditingKpi({ node, mode: 'move' }),
+                            },
+                            // The keyboard path to the track clicks (past date → record, future → target).
+                            {
+                              label: 'Record a value…',
+                              disabledReason: blocked.record,
+                              onSelect: () =>
+                                guardRecord(node, `track:${node.id}`, () => setAdding({ node, date: data.today })),
+                            },
+                            {
+                              label: 'Add a target…',
+                              onSelect: () => setAddingTarget({ node, date: nextQuarterEndISO(data.today) }),
                             },
                             { label: 'Open in Jira', onSelect: () => void onOpenIssue(node.issueKey) },
                           ]}

@@ -795,6 +795,15 @@ export const RefusedInAnotherSpace: Story = {
     await expect(screen.getByRole('menuitem', { name: /Move under another KPI/ })).toHaveTextContent(
       'Nesting a KPI under another needs Link Issues permission on the Portfolio space',
     );
+    // Record a value… (the track click's keyboard path) is disabled with the same reason; Add a target… isn't.
+    const recordItem = screen.getByRole('menuitem', { name: /Record a value…/ });
+    await expect(recordItem).toHaveAttribute('aria-disabled', 'true');
+    await expect(recordItem).toHaveTextContent(
+      'Recording a value on PORT-2 needs Edit Issues permission on the Portfolio space',
+    );
+    await userEvent.click(recordItem);
+    await expect(screen.queryByRole('dialog')).toBeNull();
+    await expect(screen.getByRole('menuitem', { name: 'Add a target…' })).not.toHaveAttribute('aria-disabled');
     await expect(refusedLookups.mock.calls.map(([key]) => key)).toEqual(['PORT']);
     await userEvent.keyboard('{Escape}');
 
@@ -839,6 +848,12 @@ export const AccessLookupFails: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     await clickPast(canvasElement, 'PORT-1');
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(c.queryByRole('alert')).toBeNull();
+    await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Cancel/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // … → Record a value… goes ahead the same way.
+    await userEvent.click(await menuItem(c, 'PORT-2', 'Record a value…'));
     await expect(await screen.findByRole('dialog')).toBeInTheDocument();
     await expect(c.queryByRole('alert')).toBeNull();
   },
@@ -1294,6 +1309,91 @@ export const ExcludeExistingTarget: Story = {
     await expect(await screen.findByRole('option', { name: /INIT-48/ })).not.toHaveAttribute(
       'aria-disabled',
       'true',
+    );
+  },
+};
+
+// ── The … menu's keyboard path to recording and adding targets ──────────────
+
+/**
+ * The … menu: the prototype's Edit · Move · Open in Jira, plus the keyboard path
+ * to what the track clicks do — Record a value… and Add a target….
+ */
+export const RowMenu: Story = {
+  args: { useData: stub({ data: POPULATED }) },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await menuItem(c, 'KPI-1', 'Open in Jira');
+    const menu = screen.getByRole('menu', { name: 'More actions for KPI-1' });
+    await expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent)).toEqual([
+      'Edit name, unit, direction',
+      'Move under another KPI…',
+      'Record a value…',
+      'Add a target…',
+      'Open in Jira',
+    ]);
+    await expect(within(menu).getByRole('menuitem', { name: 'Record a value…' })).not.toHaveAttribute('aria-disabled');
+    await userEvent.keyboard('{Escape}');
+  },
+};
+export const RowMenuDark: Story = { ...RowMenu, globals: { theme: 'dark' } };
+
+/** Focus a row's … button and pick `item` with the keyboard alone (Enter, arrows, Enter). */
+async function pickWithKeyboard(c: Canvas, issueKey: string, item: string) {
+  c.getByRole('button', { name: `More actions for ${issueKey}` }).focus();
+  await userEvent.keyboard('{Enter}');
+  const menu = await screen.findByRole('menu', { name: `More actions for ${issueKey}` });
+  await waitFor(() => expect(menu.contains(document.activeElement)).toBe(true));
+  for (let i = 0; i < 5 && document.activeElement?.textContent !== item; i++) await userEvent.keyboard('{ArrowDown}');
+  await expect(document.activeElement).toHaveTextContent(item);
+  await userEvent.keyboard('{Enter}');
+}
+
+/** Keyboard only: … → Record a value… opens the record dialog dated today (as a past-date click would). */
+const keyboardRecordSpy = fn();
+const keyboardLookups = fn(async (_projectKey: string) => FULL);
+export const RecordValueWithKeyboard: Story = {
+  args: { useData: stub({ data: POPULATED, record: keyboardRecordSpy, getKpiAccess: keyboardLookups }) },
+  play: async ({ canvasElement }) => {
+    keyboardRecordSpy.mockClear();
+    keyboardLookups.mockClear();
+    const c = within(canvasElement);
+    await pickWithKeyboard(c, 'KPI-2', 'Record a value…');
+    const dialog = within(await screen.findByRole('dialog'));
+    await expect(dialog.getByRole('heading', { name: 'Record a value' })).toBeInTheDocument();
+    await expect(dialog.getByLabelText('Date')).toHaveValue('2026-07-10');
+    await expect(keyboardLookups.mock.calls.map(([key]) => key)).toEqual(['KPI']);
+    // The dialog focuses Value; type it and Tab past Cancel to Record.
+    await waitFor(() => expect(dialog.getByLabelText('Value')).toHaveFocus());
+    await userEvent.keyboard('11000');
+    await userEvent.tab();
+    await userEvent.tab();
+    await expect(document.activeElement).toHaveTextContent('Record');
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(keyboardRecordSpy).toHaveBeenCalledWith('20002', '2026-07-10', 11_000));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  },
+};
+
+/** Keyboard only: … → Add a target… opens Add target, due by default at the end of the next quarter. */
+const keyboardTargetSpy = fn();
+export const AddTargetWithKeyboard: Story = {
+  args: { useData: stub({ data: POPULATED, addTarget: keyboardTargetSpy, searchIssues: searchIssuesStub }) },
+  play: async ({ canvasElement }) => {
+    keyboardTargetSpy.mockClear();
+    const c = within(canvasElement);
+    await pickWithKeyboard(c, 'KPI-1', 'Add a target…');
+    const dialog = within(await screen.findByRole('dialog'));
+    await expect(dialog.getByRole('heading', { name: 'Add target' })).toBeInTheDocument();
+    await expect(dialog.getByLabelText('Date')).toHaveValue('2026-12-31');
+    await userEvent.click(dialog.getByRole('combobox', { name: 'Search for an issue' }));
+    await userEvent.click(await screen.findByText('Multi-store support'));
+    await userEvent.type(dialog.getByLabelText('Target value'), '2000000');
+    await userEvent.click(dialog.getByRole('button', { name: 'Add target' }));
+    await waitFor(() =>
+      expect(keyboardTargetSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ kpiId: '20001', issueKey: 'INIT-48', date: '2026-12-31', value: 2_000_000 }),
+      ),
     );
   },
 };

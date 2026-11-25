@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { timelineWindow, quarterStartMs, fracOf, isVisible } from './timelineAxis.js';
+import { timelineWindow, quarterStartMs, fracOf, isVisible, nextQuarterEndISO } from './timelineAxis.js';
 
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
@@ -39,5 +39,12 @@ describe('timelineAxis', () => {
     const w = timelineWindow(Date.UTC(2026, 6, 10));
     expect(isVisible(w, Date.UTC(2026, 5, 1))).toBe(true);
     expect(isVisible(w, Date.UTC(2025, 0, 1))).toBe(false);
+  });
+
+  it('nextQuarterEndISO is the last day of the next quarter, across year ends', () => {
+    expect(nextQuarterEndISO('2026-11-25')).toBe('2027-03-31');
+    expect(nextQuarterEndISO('2026-01-01')).toBe('2026-06-30');
+    expect(nextQuarterEndISO('2026-06-30')).toBe('2026-09-30');
+    expect(nextQuarterEndISO('2026-07-01')).toBe('2026-12-31');
   });
 });

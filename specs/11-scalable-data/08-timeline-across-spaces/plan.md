@@ -236,7 +236,7 @@ Done 2026-11-25 on `feat/11-scalable-data`, Steps 3–5. Step 6 (live check on d
   `GetTimelineReadingsInput`, `TimelineReadingsData`, `GetKpiCreateSpacesInput`, `KpiCreateSpaces`);
   `resolve/kpiSpaces.ts` (`kpiSpaceKeyOf`, `kpiCreateSpacePreselect`, `TimelineScope`, `scopeTimeline`,
   `fullRowKpiIds`, `scopeShowsKpi`; **removed** 06's temporary `defaultKpiCreateSpace`); `resolve/timelineLoad.ts`
-  (`applyLoadedReadings`). Tests for each.
+  (`applyLoadedReadings`); `resolve/timelineAxis.ts` (`nextQuarterEndISO`, the … menu's target date). Tests for each.
 - Backend: `jira.ts` (paged `fetchReadingChangelog`, `listKpiCreateSpaces`), `resolver.ts` (skeleton scope,
   `getTimelineReadings`, `getKpiCreateSpaces`), `testing/scaleFixture.ts` (bulkfetch refuses > 1,000 ids and pages
   1,000 histories by `nextPageToken`; `project/search?action=create` keeps projects with Create Issues;
@@ -269,8 +269,13 @@ Done 2026-11-25 on `feat/11-scalable-data`, Steps 3–5. Step 6 (live check on d
 - **A remembered space with no loaded KPIs is ignored** (the page doesn't open empty); Work from isn't intersected
   (as today, it waits for the targets).
 - **Row actions:** the old ✎ / + / ● / ◇ buttons are gone (the prototype has only + and …). Recording and adding a
-  target are track clicks (past / future date), as the tip says; editing a value is a click on its dot. Keyboard
-  users lose the direct record / add-target buttons; worth a look at review (e.g. "Record a value…" in the … menu).
+  target are track clicks (past / future date), as the tip says; editing a value is a click on its dot. For
+  keyboard users (live-check fix) the … menu also has **Record a value…** (the record dialog dated today, through
+  the same access guard as a past-date click; disabled with the reason naming the space once access is known) and
+  **Add a target…** (the Add target dialog due at the end of the next quarter, `nextQuarterEndISO`), before Open
+  in Jira: Edit name, unit, direction · Move under another KPI… · Record a value… · Add a target… · Open in Jira.
+  Stories: `RowMenu`, `RecordValueWithKeyboard`, `AddTargetWithKeyboard`, `RefusedInAnotherSpace`,
+  `AccessLookupFails`.
 - **Access:** the … button looks up the KPI's space access (busy: pulsing, "Checking your permissions…"), then
   opens the menu with *Edit* (Edit Issues) and *Move* (Link Issues) disabled with the reason naming the space;
   the same space reuses the cache. A track click is guarded as in 06 (busy, then the refusal banner). **+ opens
@@ -291,7 +296,7 @@ Done 2026-11-25 on `feat/11-scalable-data`, Steps 3–5. Step 6 (live check on d
 - Spaces in the filter and the dialog show the SpaceKey chip instead of a project avatar (the app has no avatars).
 
 **Verification:** 903 unit tests (was 882) and 320 story tests (was 265) pass, story tests run twice; `typecheck`
-and `lint` clean. Harness (`?surface=timeline`, light and dark, 1400px): all KPIs by default with space badges; KPI
+and `lint` clean (with the live-check fixes, 904 unit and 325 story tests). Harness (`?surface=timeline`, light and dark, 1400px): all KPIs by default with space badges; KPI
 space filter to Operations shows Revenue and # of Orders as compact context rows; the filter is remembered across
 a reload and opens with only those readings loaded, adding Finance shows "Loading values…" then the values; + on
 # of Orders opens Add KPI with the parent filled and no space; creating in Finance shows the flag with Show it;
@@ -308,7 +313,7 @@ KPI2-1's id (then choosing Global KPIs makes one `getTimelineReadings`); Add KPI
 `project/search?action=create` (`getKpiCreateSpaces`) listing KPI and KPI2 (and any spike space still offering the
 type), with no space filled in; creating in KPI2 (+ on KPI-1) creates `KPI2-n` under KPI-1 with unit and direction
 in Jira's fields (05), and the flag names it; Create without a space says "Choose a space."; the … menu on a KPI
-gives Edit/Move/Open in Jira, and Move finds a parent by typing a whole key; a user with Create Issues in only one
+gives Edit/Move/Record a value…/Add a target…/Open in Jira (the two new ones reachable by keyboard alone), and Move finds a parent by typing a whole key; a user with Create Issues in only one
 space is offered only that one, filled in (deferred with 06's non-admin checks if no such user is handy); Work from
 narrows targets as before.
 

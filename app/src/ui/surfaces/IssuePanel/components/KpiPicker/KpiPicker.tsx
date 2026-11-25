@@ -255,6 +255,8 @@ export function KpiPicker({
               const groups = groupBySpace(notTracked(options));
               const drawn = groups.map((g) => ({ g, rows: listRows(g.options, `all|${g.space.key}`, expanded, Array.isArray(result) ? searchText : '') }));
               if (drawn.every((d) => d.rows.length === 0)) {
+                // A whole key the direct lookup found: that result answers the search, so no "No KPIs match".
+                if (searchText && ref && lookup.status === 'ready' && lookup.value.kind === 'kpi') return null;
                 return <Message>{searchText ? `No KPIs match “${searchText}”.` : `No KPIs in ${spaceFilter?.name ?? 'this space'}.`}</Message>;
               }
               return (

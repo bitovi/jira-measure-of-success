@@ -350,6 +350,33 @@ export const PasteKeyFromAnotherSpace: Story = {
 };
 export const PasteKeyFromAnotherSpaceDark: Story = { ...PasteKeyFromAnotherSpace, globals: { theme: 'dark' } };
 
+/**
+ * In All KPIs, a whole key found by the direct lookup answers the search: no
+ * "No KPIs match" under it (the summary search finds nothing for a key). A key
+ * the lookup can't find still says nothing matches.
+ */
+export const PasteKeyInAllKpis: Story = {
+  play: async ({ canvasElement }) => {
+    await userEvent.click(field(canvasElement));
+    await userEvent.click(nav(canvasElement).getByRole('button', { name: 'All KPIs' }));
+    await userEvent.paste('PORT-14');
+    const pasted = within(await within(canvasElement).findByRole('group', { name: 'Pasted key' }));
+    await waitFor(() => expect(pasted.getByRole('option', { name: /PORT-14/ })).toBeInTheDocument());
+    await waitFor(() => expect(within(canvasElement).queryByText(/Searching every space/)).toBeNull());
+    await expect(within(canvasElement).queryByText(/No KPIs match/)).toBeNull();
+    await expect(optionKeys(canvasElement)).toHaveLength(1);
+
+    await userEvent.clear(field(canvasElement));
+    await userEvent.paste('FIN-2');
+    await waitFor(() =>
+      expect(within(canvasElement).getByRole('group', { name: 'Pasted key' })).toHaveTextContent(
+        'You don’t have access to FIN-2, or it doesn’t exist.',
+      ),
+    );
+    await waitFor(() => expect(within(canvasElement).getByText('No KPIs match “FIN-2”.')).toBeInTheDocument());
+  },
+};
+
 /** A pasted /browse/ URL is looked up (no search). */
 export const PasteUrl: Story = {
   play: async ({ canvasElement }) => {

@@ -503,7 +503,9 @@ the harness `PickerWorld` fixtures.
 - **UI:** the browser opens on Tracked by parents each time it opens (Q1). Typing re-searches the view and
   runs one every-space search (250 ms debounce) that feeds All KPIs and every view's "N more in other
   spaces" (`50+` when capped); with the Space filter set and text typed, All KPIs adds that space's
-  search. A typed whole key or id runs the lookup alongside; a URL only the lookup. The empty This space
+  search. A typed whole key or id runs the lookup alongside; a URL only the lookup. In All KPIs, when the
+  lookup finds a KPI and the summary search finds nothing, "No KPIs match" isn't shown under the Pasted
+  key result (live-check fix, `PasteKeyInAllKpis`); summary matches, if any, still list. The empty This space
   says "No KPIs in {space} yet. Find one in All KPIs." (Q3). All KPIs without text or space says "Type to
   search every KPI you can access, or choose a space." Narrow (< 620px, a container query on the
   picker) swaps the menu for a `KPI view` select (Q5). The browser also collapses when focus leaves it
