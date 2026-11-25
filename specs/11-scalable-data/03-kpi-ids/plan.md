@@ -275,12 +275,16 @@ Registered on 02's framework.
 
 1. **Field names.** `kpiIssueId` (per assignment) and `kpiIssueIds` (index), OK? After cleanup, these
    become the only reference, so the names are permanent.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): yes**, `kpiIssueId` / `kpiIssueIds`.
 2. **Key-only references read as deleted.** After the migration, the only key-only references are
    deleted KPIs, so reads treat any key-only reference as deleted, without asking Jira. Before an admin
    runs the migration, every target reads that way. OK? Saving a target still refreshes the stored keys
    of the issue's other references (for the customer's app); values and authorship don't change.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): yes**, as drafted.
 3. **Stale keys for old readers.** After a KPI moves, `kpiId` keeps its old key until that issue's
    targets are saved again. Fine for the customer (they only report on the original KPI project, and
    Jira resolves old keys), or should moving be detected and the keys refreshed in bulk?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): fine as drafted**; no bulk refresh.
 4. **Live run before 04.** Step 6 runs the migration without the Settings UI. OK to use a temporary
    script for that, or should the live check wait until 04's card exists?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): wait for 04's card.** Step 6 runs as part of 04 Step 7 (R7).
