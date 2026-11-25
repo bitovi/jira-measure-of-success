@@ -1,6 +1,6 @@
 # 06 — KPIs by work type, in many spaces
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** · Depends on: 03, 04, 05.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done** (non-admin checks deferred) · Depends on: 03, 04, 05.
 
 ## Problem
 
@@ -208,6 +208,26 @@ Today's text assumes one KPI space. Reword it (decided 2026-11-24, overview Q9):
    Default: (a), which reveals nothing and costs no extra request.
    - **Answered (2026-11-24): (a).** Tell people it may be either: no KPIs yet, or none in spaces they
      can access. *Incorporated: Step 6.*
+
+## Live check (2026-11-24, dev, as Justin, a Jira admin)
+
+- **Second space:** created company-managed project `KPI2` ("Team KPIs (spec 11 check)") and enabled
+  it from Settings' guide (**Do it for KPI2**: work type added; the field scheme step was already
+  done because KPI2 uses the shared *Default Field Scheme*; screens left off, so it's partly set up).
+- A KPI created **in Jira** in KPI2 (`KPI2-1`, unit `%`, direction Increase) and nested under KPI-1
+  with the configured hierarchy link shows in dev's Timeline as one tree, under Revenue, with its unit.
+  Its Edit dialog opens with the field values and the parent.
+- **Lazy access:** Timeline loads made **no** `mypermissions` request; the first action on KPI2-1 made
+  one `getKpiAccess` (1 request).
+- **KPI View** (KPI-1): no search over all KPIs; one `kpi-assignments` id search, one readings fetch
+  (one KPI), one `mypermissions`. KPI-1 has three parent links in Jira, so it shows "Linked under 3 KPIs
+  in Jira; showing KPI-6", the oldest link (one-parent rule).
+- `project = KPI` still returns exactly the 14 central-space KPIs (the customer's search).
+- Note: dev's hierarchy setting reads the *Parent* link type the opposite way to staging's older build
+  (staging, on an older `main`, has no hierarchy setting), so the two show KPI-1 / KPI-6 nested
+  differently; dev showed the same tree before this stage.
+- **Deferred (non-admin, per Justin):** a user without Browse on KPI2, and a user with Edit in one space
+  only.
 
 ## Implementation notes
 
