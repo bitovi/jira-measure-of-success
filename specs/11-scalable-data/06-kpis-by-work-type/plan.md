@@ -190,11 +190,14 @@ Today's text assumes one KPI space. Reword it (decided 2026-11-24, overview Q9):
 1. **Temporary panel catalog.** Between 06 and 07 (on the branch only, never released), the panel's
    "Set a KPI target" list is every KPI the user can browse, capped (e.g. 500). OK, or should 06 and 07
    be one stage?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** the temporary capped catalog (500), as drafted.
 2. **Nesting permission across spaces.** Creating a hierarchy link needs Link Issues. Check it on the
    **child's** project only (draft), or on both?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** the child's project only, as drafted.
 3. **KPIs above story level.** The earlier multi-space draft let admins put the KPI type at another hierarchy level (e.g.
    Epic level). Anything in the app that assumes KPIs are story-level (e.g. the parent-chain walk in
    07, or Timeline rollups) that we should guard against?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** no guard now. KPIs stay standard work types on both sites; 07's parent walk follows the work item's parents and never assumes a KPI's level. Revisit if a site moves the KPI type.
 4. **An empty Timeline: "none exist" or "you can't see them"?** With one KPI space, the app asked
    whether the user could browse it. With KPIs in many spaces, a search as the user that returns
    nothing means either no KPIs exist yet or the user can't see any, and only an `asApp` count can tell
