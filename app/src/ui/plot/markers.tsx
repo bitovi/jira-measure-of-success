@@ -13,7 +13,7 @@ import type { HoverState } from './hover.js';
 import { dimStyle, useIsDimmed } from './useKeyHighlight.js';
 import { targetKeyKinds } from './keyKinds.js';
 import { TargetTooltipBody } from './targetTooltip.js';
-import { tooltipPlacement, type TooltipPlacement } from './tooltipPlacement.js';
+import { tooltipPlacement, useTooltipTop, type TooltipPlacement } from './tooltipPlacement.js';
 
 /**
  * Recorded values + the projected trend are drawn in a neutral color so green
@@ -310,15 +310,26 @@ export function TargetMarker({
         </span>
       </a>
       {tip && (
-        <div
-          className="pointer-events-none fixed z-50 w-max whitespace-normal rounded border border-border bg-surface px-2.5 py-2 text-xs text-text shadow-md"
-          style={{ ...tip.place, top: tip.clientY + 14 }}
-          role="tooltip"
-        >
+        <TargetTip clientY={tip.clientY} place={tip.place}>
           <TargetTooltipBody target={target} node={node} />
-        </div>
+        </TargetTip>
       )}
     </>
+  );
+}
+
+/** A target marker's hover card: beside the cursor, opening upward near the bottom of the viewport. */
+function TargetTip({ clientY, place, children }: { clientY: number; place: TooltipPlacement; children: React.ReactNode }) {
+  const ref = useTooltipTop<HTMLDivElement>(clientY);
+  return (
+    <div
+      ref={ref}
+      className="pointer-events-none fixed z-50 w-max whitespace-normal rounded border border-border bg-surface px-2.5 py-2 text-xs text-text shadow-md"
+      style={place}
+      role="tooltip"
+    >
+      {children}
+    </div>
   );
 }
 
@@ -332,15 +343,16 @@ export function PlotCrosshair({ x, height }: { x: number; height?: number }) {
   );
 }
 
-/** The floating value tooltip shown while hovering a plot track. */
+/** The floating value tooltip shown while hovering a plot track; opens upward near the bottom of the viewport. */
 export function PlotTooltip({ hover }: { hover: HoverState }) {
+  const ref = useTooltipTop<HTMLDivElement>(hover.clientY);
   return (
     <div
+      ref={ref}
       className="pointer-events-none fixed z-50 whitespace-nowrap rounded border border-border bg-surface px-2 py-1 text-[11px] text-text shadow-md"
       style={{
         left: hover.flipX ? undefined : hover.clientX + 14,
         right: hover.flipX ? window.innerWidth - hover.clientX + 14 : undefined,
-        top: hover.clientY + 14,
       }}
       role="tooltip"
     >

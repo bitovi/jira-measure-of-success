@@ -12,7 +12,7 @@ import {
   worldSuggestions,
   type PickerWorld,
 } from '@harness/fixtures/kpiPicker.js';
-import { KpiPicker, type CurrentValueState } from './KpiPicker.js';
+import { KpiPicker } from './KpiPicker.js';
 
 /**
  * The two-pane KPI browser (spec 11 · 07), on the prototype's site
@@ -42,7 +42,6 @@ function PickerHarness({ world, itemKey, api, width = 820, defaultOpen = true, o
     [world, itemKey],
   );
   const [value, setValue] = useState<KpiOptionDto | null>(initial);
-  const [current, setCurrent] = useState<CurrentValueState>(null);
   return (
     <div style={{ width }} className="rounded-md border border-dashed border-border p-3">
       <label htmlFor="kpi-field" className="mb-0.5 block text-xs leading-4 text-text-subtle">
@@ -57,12 +56,8 @@ function PickerHarness({ world, itemKey, api, width = 820, defaultOpen = true, o
         onChange={(o) => {
           setValue(o);
           onChange?.(o);
-          if (!o) return setCurrent(null);
-          setCurrent({ pending: true });
-          void loads.getKpiCurrentValue(o.id).then((v) => setCurrent({ pending: false, value: v.value }));
         }}
         api={loads}
-        currentValue={current}
         defaultOpen={defaultOpen}
       />
       <input aria-label="Next field" className="mt-2 h-8 w-full rounded border border-border bg-[var(--ds-surface-sunken,#f7f8f9)]" />
@@ -296,7 +291,7 @@ export const SearchInFlight: Story = {
 export const SpaceFilterNarrowsAllKpis: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.click(nav(canvasElement).getByRole('button', { name: 'All KPIs' }));
-    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Space: Any space' }));
+    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Space: Select space' }));
     const find = within(canvasElement).getByRole('textbox', { name: 'Find a space' });
     await expect(find).toHaveFocus();
     // No counts in the space list; the hidden FIN space isn't offered.
@@ -305,13 +300,20 @@ export const SpaceFilterNarrowsAllKpis: Story = {
     // Enter right after typing picks the first match once it arrives.
     await userEvent.type(find, 'platform ops{Enter}');
     await expect(await within(canvasElement).findByRole('button', { name: 'Space: OPS Platform Ops' })).toBeInTheDocument();
-    await waitFor(() => expect(optionKeys(canvasElement)).toEqual([expect.stringMatching(/^OPS-40/), expect.stringMatching(/^OPS-42/)]));
+    // All KPIs' results start expanded: OPS-40's sub-KPI OPS-41 shows without a click.
+    await waitFor(() =>
+      expect(optionKeys(canvasElement)).toEqual([
+        expect.stringMatching(/^OPS-40/),
+        expect.stringMatching(/^OPS-41/),
+        expect.stringMatching(/^OPS-42/),
+      ]),
+    );
     // With a space chosen: that space only, and the footer offers every space.
     await userEvent.type(field(canvasElement), 'u');
     await waitFor(() => expect(optionKeys(canvasElement)).toEqual([expect.stringMatching(/^OPS-40Uptime/)]));
     await waitFor(() => expect(within(canvasElement).getByText(/more in other spaces/)).toHaveTextContent('Search every space'));
-    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Any space' }));
-    await expect(within(canvasElement).getByRole('button', { name: 'Space: Any space' })).toBeInTheDocument();
+    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Clear space' }));
+    await expect(within(canvasElement).getByRole('button', { name: 'Space: Select space' })).toBeInTheDocument();
   },
 };
 export const SpaceFilterNarrowsAllKpisDark: Story = { ...SpaceFilterNarrowsAllKpis, globals: { theme: 'dark' } };
@@ -320,10 +322,10 @@ export const SpaceFilterNarrowsAllKpisDark: Story = { ...SpaceFilterNarrowsAllKp
 export const SpaceFilterOpen: Story = {
   play: async ({ canvasElement }) => {
     await userEvent.click(nav(canvasElement).getByRole('button', { name: 'All KPIs' }));
-    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Space: Any space' }));
+    await userEvent.click(within(canvasElement).getByRole('button', { name: 'Space: Select space' }));
     await userEvent.type(within(canvasElement).getByRole('textbox', { name: 'Find a space' }), 'm');
     await waitFor(() => expect(within(canvasElement).getByRole('option', { name: /Marketing/ })).toBeInTheDocument());
-    await expect(within(canvasElement).queryByRole('option', { name: 'Any space' })).toBeNull();
+    await expect(within(canvasElement).queryByRole('option', { name: 'Select space' })).toBeNull();
     // Esc closes just the list.
     await userEvent.keyboard('{Escape}');
     await expect(within(canvasElement).queryByRole('textbox', { name: 'Find a space' })).toBeNull();
@@ -470,10 +472,8 @@ export const KeyboardPick: Story = {
     await expect(keyboardPick).toHaveBeenCalledWith(expect.objectContaining({ key: 'PROG-210' }));
     await expect(within(canvasElement).queryByTestId('kpi-browser')).toBeNull();
     await expect(input).toHaveValue('PROG-210 Conversion rate (%)');
-    const picked = within(within(canvasElement).getByTestId('picked-kpi'));
-    await expect(picked.getByText('Growth Program')).toBeInTheDocument();
-    await expect(picked.getByText('Tracked by parents')).toBeInTheDocument();
-    await waitFor(() => expect(picked.getByText(/Current:/)).toBeInTheDocument());
+    // the form's preview shows the picked KPI's details, so nothing is repeated under the field
+    await expect(within(canvasElement).queryByTestId('picked-kpi')).toBeNull();
   },
 };
 export const KeyboardPickDark: Story = { ...KeyboardPick, globals: { theme: 'dark' } };

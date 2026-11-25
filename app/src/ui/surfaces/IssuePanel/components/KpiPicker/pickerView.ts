@@ -59,9 +59,15 @@ export function menuEntries(s: KpiSuggestionsDto): MenuEntry[] {
   ];
 }
 
-/** Opens on Tracked by parents, or This space when Tracked by parents is empty (Q1: always). */
+/**
+ * Opens on the first view with KPIs: Tracked by parents, then This space, then
+ * Global KPIs. Both of the first two arrive with the panel (loaded side by
+ * side), so this needs no request. With no Global KPIs space, This space.
+ */
 export function defaultView(s: KpiSuggestionsDto): PickerViewId {
-  return s.trackedByParents.length > 0 ? 'tracked' : 'thisSpace';
+  if (s.trackedByParents.length > 0) return 'tracked';
+  if (s.inThisSpace.length > 0 || !s.globalSpace) return 'thisSpace';
+  return 'global';
 }
 
 /** The space a lazily loaded view lists, or null for the views that aren't one space. */
@@ -86,7 +92,23 @@ export interface PickerRow {
   target?: TargetSummaryDto | null;
 }
 
-/** A list's rows: collapsed sub-KPIs, or the matches and their opened ancestors while searching. */
+/**
+ * Do this row's sub-KPIs start open? All KPIs' results do; every other list
+ * starts collapsed. A toggle id in the picker's expand set flips its default.
+ */
+export function startsOpen(toggleId: string): boolean {
+  return toggleId.startsWith('all|');
+}
+
+/** Is a row's sub-KPI list open, given the toggled ids? */
+export function isOpen(toggled: ReadonlySet<string>, toggleId: string): boolean {
+  return toggled.has(toggleId) !== startsOpen(toggleId);
+}
+
+/**
+ * A list's rows: sub-KPIs as toggled (All KPIs' start open, the rest collapsed),
+ * or the matches and their opened ancestors while searching.
+ */
 export function listRows(
   options: readonly KpiOptionDto[],
   place: string,
@@ -94,7 +116,7 @@ export function listRows(
   text: string,
 ): PickerRow[] {
   const tree = kpiTree(options);
-  const open = new Set(tree.filter((r) => expanded.has(`${place}|${r.option.id}`)).map((r) => r.option.id));
+  const open = new Set(tree.filter((r) => isOpen(expanded, `${place}|${r.option.id}`)).map((r) => r.option.id));
   return visibleRows(tree, open, text).map((r) => ({
     option: r.option,
     depth: r.depth,
