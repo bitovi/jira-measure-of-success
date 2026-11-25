@@ -1,6 +1,6 @@
 # 07 — KPI picker: a two-pane KPI browser
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** (design reviewed at
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done** (design reviewed at
 gate G3, 2026-11-20; questions decided 2026-11-24) · Depends on: 06.
 
 Prototype: [kpi-picker.html](./kpi-picker.html). Open it in a browser; nothing talks to Jira. Its
@@ -412,6 +412,19 @@ _Still open after the G3 review._
 - **Type labels** ("Epic", "Initiative") and **connector glyphs** (`└`): Plans shows neither.
 - **Counts** in the menu and the Space filter: a request per lazy view on every open.
 - **Listing every space** in the menu: a site can have hundreds.
+
+## Live check (2026-11-24, dev, as Justin)
+
+- On CLAIMS-3 the panel showed its targets; opening the KPI field showed the two-pane browser.
+  *Tracked by parents* said "No parent of CLAIMS-3 has a KPI target that isn't already tracked here"
+  (correct: the parent's one target is tracked here too), so the browser started on *This space*.
+- *All KPIs* search "Team" found KPI2-1 and KPI2-2 in the second space; pasting `KPI2-1` found it
+  directly ("In another space · KPI2"). The "No KPIs match" line that also showed under a pasted key
+  was removed (`2eb78bf`).
+- Request budgets (Forge `[perf]`): `getPanelList` 7 requests (issue, This space, the parent chain,
+  targeted KPIs, two icons), **no** `mypermissions`, **no** `project/search`; `searchKpis` 1 (+ an
+  icon once); `lookupKpiRef` 1 (+ an icon once).
+- Not checked live: the narrow layout (stories cover it); non-admin visibility (deferred).
 
 ## Implementation notes
 

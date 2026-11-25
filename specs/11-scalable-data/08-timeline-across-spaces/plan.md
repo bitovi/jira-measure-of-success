@@ -1,6 +1,6 @@
 # 08 — Timeline and Add KPI across spaces
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** (Steps 3–5 implemented 2026-11-25; G4 decided by the implementer, pending Justin's review) · Depends on: 06.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done** (Steps 3–5 implemented 2026-11-25; G4 decided by the implementer, pending Justin's review) · Depends on: 06.
 
 ## Problem
 
@@ -205,6 +205,20 @@ _To be answered at gate G4._
 - The `jira:projectPage` spike is removed (module, page and board scopes); findings stay in 01.
 - (2026-11-22) Filters remembered in `localStorage`. **No space pages now.** Add KPI never defaults to
   the central space; the user picks unless there's only one possible space.
+
+## Live check (2026-11-24, dev, as Justin)
+
+- Timeline: rows show the KPI icon and name (no key) with `KPI` / `KPI2` badges; "KPI space: All",
+  "Work from: All". `getTimelineSkeleton`: `/field`, one `[issuetype]` search, one bulkfetch, one icon;
+  **no** `mypermissions`.
+- KPI space → *Team KPIs (spec 11 check)*: Num Orders and Revenue as compact, faded ancestor rows
+  above Team conversion rate (KPI2).
+- **+** on Revenue (an ancestor row): the Add KPI dialog with *Choose a space*, *Type: KPI*, Parent
+  `KPI-1 Revenue` filled in; one `getKpiCreateSpaces` (one `project/search`) offering Global KPIs and
+  KPI2, nothing preselected; Create without a space said "Choose a space."; choosing KPI2 created
+  **KPI2-2** under Revenue, with KPI Unit / KPI Direction set, marked `kpi-meta`, and the Parent link;
+  the flag read "KPI2-2 Team signups (live check) created · In Team KPIs (spec 11 check) (KPI2)".
+- Not checked live: a user who can create in only one space (deferred with the non-admin checks).
 
 ## Implementation notes
 
