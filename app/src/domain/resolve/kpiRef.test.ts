@@ -7,6 +7,8 @@ import {
   shouldStampRefs,
   storedKeysById,
   toStoredAssignments,
+  withoutTarget,
+  withTarget,
 } from './kpiRef';
 
 const base = {
@@ -70,9 +72,61 @@ describe('readStoredAssignments', () => {
     expect(out.deletedKeys).toEqual(['revenue', 'KPI-5']);
   });
 
-  it('keeps the first of two references to the same KPI', () => {
+  it('keeps the first of two references to the same KPI with the same updatedAt', () => {
     const out = readStoredAssignments(prop([stored('KPI-5', '10234', { target: 1 }), stored('PORT-20', '10234', { target: 2 })]));
     expect(out.assignments).toEqual([target('10234', { target: 1 })]);
+  });
+
+  it.each([
+    ['the later one is newer', [1, 2], 2],
+    ['the earlier one is newer', [2, 1], 1],
+  ])('keeps the newer of two references to the same KPI (%s), in the first place', (_name, [t1, t2], kept) => {
+    const out = readStoredAssignments(
+      prop([
+        stored('KPI-5', '10234', { target: 1, updatedAt: base.updatedAt + t1 }),
+        stored('KPI-6', '10235'),
+        stored('KPI-5', '10234', { target: 2, updatedAt: base.updatedAt + t2 }),
+      ]),
+    );
+    expect(out.assignments.map((a) => [a.kpiId, a.target])).toEqual([
+      ['10234', kept],
+      ['10235', 10],
+    ]);
+  });
+
+  it('a migrated key-only target and a newer one saved by id: the newer is kept', () => {
+    // As the migration leaves an issue whose key-only KPI-5 target was duplicated by a save by id.
+    const out = readStoredAssignments(
+      prop([stored('KPI-5', '10234', { target: 1 }), stored('KPI-5', '10234', { target: 9, updatedAt: base.updatedAt + 1 })]),
+    );
+    expect(out.assignments).toEqual([target('10234', { target: 9, updatedAt: base.updatedAt + 1 })]);
+  });
+});
+
+describe('withTarget', () => {
+  const edit = target('10234', { target: 99, updatedAt: base.updatedAt + 1 });
+
+  it.each([
+    ['replaces the target by id in place', [target('10235'), target('10234')], [target('10235'), edit]],
+    ['replaces a key-only target on the KPI (not yet migrated) in place', [target('KPI-5'), target('10235')], [edit, target('10235')]],
+    ['matches the key in any case', [target('kpi-5')], [edit]],
+    ['drops every other copy of the same KPI', [target('KPI-5'), target('10235'), target('10234')], [edit, target('10235')]],
+    ['adds it when the KPI has no target', [target('10235'), target('KPI-404')], [target('10235'), target('KPI-404'), edit]],
+    ["leaves another KPI's key-only target alone", [target('KPI-50')], [target('KPI-50'), edit]],
+  ])('%s', (_name, existing, expected) => {
+    expect(withTarget(existing, edit, 'KPI-5')).toEqual(expected);
+  });
+});
+
+describe('withoutTarget', () => {
+  const keys = new Map([['10234', 'KPI-5']]);
+
+  it.each([
+    ['by id, with a key-only copy of the same KPI', [target('KPI-5'), target('10234'), target('10235')], '10234', [target('10235')]],
+    ['by id, with no key known: only the id', [target('KPI-5'), target('10236')], '10236', [target('KPI-5')]],
+    ["by a deleted KPI's key", [target('KPI-404'), target('10234')], 'KPI-404', [target('10234')]],
+  ])('%s', (_name, existing, kpiId, expected) => {
+    expect(withoutTarget(existing, kpiId, keys)).toEqual(expected);
   });
 });
 

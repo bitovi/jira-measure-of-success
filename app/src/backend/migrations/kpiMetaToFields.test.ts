@@ -197,6 +197,21 @@ describe('kpi-meta-to-fields', () => {
     vi.restoreAllMocks();
   });
 
+  it("a malformed kpi-meta is copied part by part; one that isn't an object is a failure, left untouched", async () => {
+    jira.fixture.issues.get('1001')!.properties['kpi-meta'] = { unit: 'count', direction: 'Decrease', note: 'keep' };
+    jira.fixture.issues.get('1002')!.properties['kpi-meta'] = { unit: '%' };
+    jira.fixture.issues.get('1003')!.properties['kpi-meta'] = 'percent';
+    const last = await runToEnd();
+    expect(last).toMatchObject({ state: 'failed', counts: { migrated: FIXTURE.kpis - 1, failed: 1 } });
+    expect(last.failures).toEqual([{ issueId: '1003', issueKey: 'KPI-4', message: expect.stringMatching(/kpi-meta isn't an object/) }]);
+    expect(fieldsOf('1001')).toEqual({ unit: 'count', direction: 'decrease' });
+    expect(meta('1001')).toEqual({ unit: 'count', direction: 'decrease', note: 'keep', fields: true });
+    expect(fieldsOf('1002')).toEqual({ unit: '%', direction: null });
+    expect(meta('1002')).toEqual({ unit: '%', fields: true });
+    expect(jira.fixture.issues.get('1003')!.properties['kpi-meta']).toBe('percent');
+    expect(issueWrites()).not.toContain('PUT /rest/api/3/issue/1003');
+  });
+
   it("a KPI the admin can't edit is a failure naming its space, and the run ends failed", async () => {
     jira.fixture.userView.hidden.add('1004');
     const last = await runToEnd();

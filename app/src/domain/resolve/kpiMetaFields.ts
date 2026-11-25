@@ -224,12 +224,32 @@ export type KpiMetaToFieldsPlan =
     };
 
 /**
+ * An unmarked `kpi-meta`, read part by part for the migration, which mustn't
+ * lose a value because the other part is malformed. `unit`: a string, else
+ * unreadable (`undefined`). `direction`: any case of increase/decrease; absent
+ * or null is no direction; anything else is unreadable (`undefined`).
+ */
+function parseLegacyParts(raw: Record<string, unknown>): { unit?: string; direction?: KpiDirection | null } {
+  const out: { unit?: string; direction?: KpiDirection | null } = {};
+  if (typeof raw.unit === 'string') out.unit = raw.unit;
+  if (raw.direction === undefined || raw.direction === null) out.direction = null;
+  else if (typeof raw.direction === 'string') {
+    const text = raw.direction.trim().toLowerCase();
+    if (text === 'increase' || text === 'decrease') out.direction = text;
+  }
+  return out;
+}
+
+/**
  * One KPI of the `kpi-meta-to-fields` migration. Absent `kpi-meta`: nothing to
- * do. Marked: already done. Unmarked: unit and direction are reconciled
+ * do. Marked: already done. Not an object: throws (reported as a failure;
+ * nothing is written). Unmarked: unit and direction are read and reconciled
  * separately: an empty field gets `kpi-meta`'s value; an equal one is left
  * alone; a different one **wins** (it was set in Jira after the fields were
  * chosen, and it's what the app shows) and `kpi-meta` is rewritten to match.
- * Then `kpi-meta` is marked.
+ * The written `kpi-meta` is the stored one with only the reconciled parts
+ * changed (normalized to what the fields now hold), plus the marker; unknown
+ * keys, and a part that's unreadable with its field empty, stay as stored.
  */
 export function planKpiMetaToFields(
   cfg: KpiFieldsConfig,
@@ -237,33 +257,36 @@ export function planKpiMetaToFields(
 ): KpiMetaToFieldsPlan {
   if (current.legacy === undefined || current.legacy === null) return { action: 'none', reason: 'absent' };
   if (isMarkedKpiMeta(current.legacy)) return { action: 'none', reason: 'marked' };
+  if (!isObject(current.legacy)) {
+    throw new Error("its kpi-meta isn't an object, so its unit and direction can't be read; it was left as it is");
+  }
 
-  const legacy: KpiMeta = parseKpiMeta(current.legacy) ?? { unit: '', direction: null };
+  const raw = current.legacy;
+  const legacy = parseLegacyParts(raw);
   const field = resolveKpiMeta(cfg, { legacy: null, fields: current.fields ?? {} })!;
   const copy: KpiMetaChange = {};
   const differences: KpiMetaFieldDifference[] = [];
+  const meta: Record<string, unknown> = { ...raw };
 
-  let unit = legacy.unit;
   if (field.unit === '') {
-    if (legacy.unit !== '') copy.unit = legacy.unit;
+    if (legacy.unit !== undefined && legacy.unit !== '') copy.unit = legacy.unit;
   } else if (field.unit !== legacy.unit) {
-    unit = field.unit;
+    meta.unit = field.unit;
     differences.push({ part: 'unit', field: field.unit, legacy: legacy.unit || null });
   }
 
-  let direction = legacy.direction;
   // A field holding something that isn't a direction (e.g. an unmapped option) reads as empty.
   if (field.direction === null) {
-    if (legacy.direction !== null) copy.direction = legacy.direction;
+    if (legacy.direction !== undefined && legacy.direction !== null) {
+      copy.direction = legacy.direction;
+      meta.direction = legacy.direction;
+    }
   } else if (field.direction !== legacy.direction) {
-    direction = field.direction;
-    differences.push({ part: 'direction', field: field.direction, legacy: legacy.direction });
+    meta.direction = field.direction;
+    differences.push({ part: 'direction', field: field.direction, legacy: legacy.direction ?? null });
+  } else {
+    meta.direction = field.direction;
   }
 
-  return {
-    action: 'write',
-    fields: encodeKpiMetaFields(cfg, copy),
-    meta: kpiMetaToStore(current.legacy, { unit, direction }, true),
-    differences,
-  };
+  return { action: 'write', fields: encodeKpiMetaFields(cfg, copy), meta: { ...meta, fields: true }, differences };
 }

@@ -264,6 +264,7 @@ Throwaway objects: fields `customfield_10907` *SPIKE KPI Unit* (short text) and 
   each through Forge (68 KPIs in 3 spaces). The scale fixture covers size; nothing here suggests a problem.
 - **C4 — yes.** `issuetype = 10436 AND id in (…50 ids…)` → one request, all 18 KPIs among them, `isLast:
   true`, 275 ms.
+- **C5 (2026-11-25, while checking a review finding) — `id in (…)` with a missing or deleted id doesn't fail.** `issuetype = 10436 AND id in (14521, 99999999)` and `… id in (14521, 14954)` (14954 deleted) → 200 with just KPI-1, as Justin (admin). A hidden issue (non-admin) is assumed to behave the same; deferred with the non-admin checks.
 
 
 ### D. Ids, keys and the targets index (partial: D1 in Step 3)

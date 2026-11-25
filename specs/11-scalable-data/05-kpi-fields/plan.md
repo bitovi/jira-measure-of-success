@@ -301,8 +301,13 @@ Done 2026-11-25 on `feat/11-scalable-data`, Steps 1–5 and 7. Step 6 (live chec
     `kpi-meta` value): 02's record has no separate count or list for it, so Settings doesn't show them
     (deviation from Q2's "counted separately"). A 403/404 on the write is a failure naming the space
     ("…you need Edit Issues in space KPI"); other Jira errors also name the space.
-  - An unparseable but present `kpi-meta` is treated as empty: the fields are kept and `kpi-meta` is
-    rewritten from them, marked (otherwise the migration could never finish).
+  - ~~An unparseable but present `kpi-meta` is treated as empty: the fields are kept and `kpi-meta` is
+    rewritten from them, marked (otherwise the migration could never finish).~~ Changed after the code
+    review (2026-11-25, see 09): unit and direction are read **separately and leniently** (a string unit;
+    any-case increase/decrease; no direction = none), so a malformed `kpi-meta` still has its readable
+    part copied. The written `kpi-meta` is the stored object with only the reconciled parts changed, plus
+    the marker (unknown keys and an unreadable part with an empty field are kept). A `kpi-meta` that
+    isn't an object is a **failure** (listed, left untouched).
   - Not applicable while `fields` (or the work type) is null, with the harness's wording: "Choose the
     KPI fields in Settings first (KPI building blocks)." No `dependsOn` 03 (the harness keeps its
     harness-only dependency).

@@ -259,6 +259,71 @@ describe('planKpiMetaToFields', () => {
     expect(planKpiMetaToFields(SELECT, { legacy, fields })).toEqual({ action: 'write', fields: writeFields, meta, differences });
   });
 
+  // Each part is read on its own, so a kpi-meta the strict schema rejects still has its values copied.
+  it.each([
+    [
+      'missing direction: unit copied, direction left out',
+      { unit: '%' },
+      fieldsOf(null, null),
+      { [UNIT]: '%' },
+      { unit: '%', fields: true },
+      [],
+    ],
+    [
+      'capitalized direction: copied, normalized',
+      { unit: '%', direction: 'Increase' },
+      fieldsOf(null, null),
+      { [UNIT]: '%', [DIR]: { id: '10652' } },
+      { unit: '%', direction: 'increase', fields: true },
+      [],
+    ],
+    [
+      'capitalized direction equal to the field: normalized',
+      { unit: '%', direction: 'DECREASE' },
+      fieldsOf('%', 'decrease'),
+      {},
+      { unit: '%', direction: 'decrease', fields: true },
+      [],
+    ],
+    [
+      'extra unknown keys preserved alongside a malformed part',
+      { unit: '%', direction: 'sideways', note: 'x', nested: { a: 1 } },
+      fieldsOf(null, null),
+      { [UNIT]: '%' },
+      { unit: '%', direction: 'sideways', note: 'x', nested: { a: 1 }, fields: true },
+      [],
+    ],
+    [
+      'unreadable unit kept; direction copied',
+      { unit: 5, direction: 'decrease' },
+      fieldsOf(null, null),
+      { [DIR]: { id: '10653' } },
+      { unit: 5, direction: 'decrease', fields: true },
+      [],
+    ],
+    [
+      'unreadable parts the fields hold values for: the fields win',
+      { unit: 5, direction: 'sideways' },
+      fieldsOf('$', 'increase'),
+      {},
+      { unit: '$', direction: 'increase', fields: true },
+      [
+        { part: 'unit', field: '$', legacy: null },
+        { part: 'direction', field: 'increase', legacy: null },
+      ],
+    ],
+  ])('lenient, %s', (_name, legacy, fields, writeFields, meta, differences) => {
+    expect(planKpiMetaToFields(SELECT, { legacy, fields })).toEqual({ action: 'write', fields: writeFields, meta, differences });
+  });
+
+  it.each([
+    ['a string', 'percent'],
+    ['a number', 5],
+    ['an array', ['%', 'increase']],
+  ])("throws (nothing written) when kpi-meta is %s", (_name, legacy) => {
+    expect(() => planKpiMetaToFields(SELECT, { legacy, fields: fieldsOf(null, null) })).toThrow(/kpi-meta isn't an object/);
+  });
+
   it('a text direction field, and an unmapped option is overwritten from kpi-meta', () => {
     expect(planKpiMetaToFields(TEXT, { legacy: { unit: '%', direction: 'increase' }, fields: { [UNIT]: null, [DIR]: null } })).toMatchObject({
       fields: { [UNIT]: '%', [DIR]: 'increase' },

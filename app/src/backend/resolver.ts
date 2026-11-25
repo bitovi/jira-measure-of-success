@@ -15,6 +15,9 @@ import {
   normalizeProjectKey,
   readingsFromChangelog,
   readStoredAssignments,
+  storedKeysById,
+  withoutTarget,
+  withTarget,
   type AddedTarget,
   type AddTargetInput,
   type Assignment,
@@ -786,20 +789,11 @@ async function requireTargetableKpi(kpiId: string): Promise<{ id: string; key: s
   return { id: kpi.id, key: kpi.key };
 }
 
-/** `assignment` replacing the target on the same KPI, or added. */
-function withAssignment(existing: Assignment[], assignment: Assignment): Assignment[] {
-  const idx = existing.findIndex((a) => a.kpiId === assignment.kpiId);
-  const next = [...existing];
-  if (idx >= 0) next[idx] = assignment;
-  else next.push(assignment);
-  return next;
-}
-
 define('saveAssignment', async ({ payload }) => {
   const { issueId, assignment } = payload as { issueId: string; assignment: Assignment };
   const [stored, kpi] = await Promise.all([fetchStoredAssignments(issueId), requireTargetableKpi(assignment.kpiId)]);
   const existing = stored ? readStoredAssignments(stored).assignments : [];
-  const next = withAssignment(existing, { ...assignment, kpiId: kpi.id });
+  const next = withTarget(existing, { ...assignment, kpiId: kpi.id }, kpi.key);
   await writeAssignments(issueId, next, stored, new Map([[kpi.id, kpi.key]]));
   return buildPanelParts(issueId);
 });
@@ -808,7 +802,7 @@ define('removeAssignment', async ({ payload }) => {
   const { issueId, kpiId } = payload as { issueId: string; kpiId: string };
   const stored = await fetchStoredAssignments(issueId);
   const existing = stored ? readStoredAssignments(stored).assignments : [];
-  await writeAssignments(issueId, existing.filter((a) => a.kpiId !== kpiId), stored);
+  await writeAssignments(issueId, withoutTarget(existing, kpiId, storedKeysById(stored)), stored);
   return buildPanelParts(issueId);
 });
 
@@ -1297,7 +1291,7 @@ define('addTarget', async ({ payload, context }) => {
     updatedBy: (context as { accountId?: string })?.accountId ?? 'app',
     updatedAt: Date.now(),
   };
-  const next = withAssignment(issue.assignments, assignment);
+  const next = withTarget(issue.assignments, assignment, kpi.key);
   // The marker's icon is inlined (see buildTargetContributionsByKpi) alongside the write.
   const [, iconByUrl] = await Promise.all([
     writeAssignments(input.issueId, next, issue.stored, new Map([[kpi.id, kpi.key]])),
@@ -1330,21 +1324,25 @@ define('createKpi', async ({ payload }) => {
   // own space; nesting needs Link Issues there too (Q2: the child's space).
   const accessP = observed(stage('access', () => fetchKpiAccess(projectId)));
   const parentP = observed(input.parentKpiId ? fetchKpiIssueRef(input.parentKpiId) : Promise.resolve(null));
+  // The space is looked up as the app, so nothing about it (not even its name)
+  // is said until the user is known to be able to browse it.
   const [site, project] = await Promise.all([readKpiSiteConfig(), findProject(projectId)]);
   if (!site.workType) throw new Error(`${KPI_WORK_TYPE_NOT_SET_UP} — choose one in Settings first.`);
-  if (!project) throw new Error(`There's no space with id "${projectId}".`);
+  const noSuchSpace = `There's no space with id "${projectId}" that you can see.`;
+  if (!project) throw new Error(noSuchSpace);
+  // If Jira can't answer, refuse without blaming permissions.
+  const access = await accessP.catch((error: unknown) => {
+    if (error instanceof PermissionLookupError) {
+      throw new Error(`Couldn't check your permissions on that space, so the KPI wasn't created. Try again.`);
+    }
+    throw error;
+  });
+  if (!access.browse) throw new Error(noSuchSpace);
   if (!project.issueTypeIds.includes(site.workType.id)) {
     throw new Error(
       `KPIs can't be created in ${project.name}: its work types don't include ${site.workType.name}. A Jira admin can add it (Settings → Using KPIs in other spaces).`,
     );
   }
-  // If Jira can't answer, refuse without blaming permissions.
-  const access = await accessP.catch((error: unknown) => {
-    if (error instanceof PermissionLookupError) {
-      throw new Error(`Couldn't check your permissions on the ${project.name} space, so the KPI wasn't created. Try again.`);
-    }
-    throw error;
-  });
   if (!access.create) throw new Error(kpiPermissionMessage('add', project.name));
   if (input.parentKpiId) {
     if (!access.link) throw new Error(kpiPermissionMessage('nest', project.name));

@@ -146,6 +146,7 @@ describe('site configuration (Step 3)', () => {
     const loaded = await traced('test', () => loadKpiSiteConfig());
     expect(loaded).toEqual({
       saved: true,
+      workTypesUnread: false,
       config: {
         workType: { id: STORY_TYPE, name: 'Story' },
         fields: null,
@@ -175,6 +176,35 @@ describe('site configuration (Step 3)', () => {
     expect(before.timeline.byEndpoint('GET /rest/api/3/field')).toBe(1);
     expect(after.timeline.byEndpoint('GET /rest/api/3/field')).toBe(1);
     expect(after.timeline.byEndpoint('GET /rest/api/3/issuetype')).toBe(0);
+  });
+
+  it("a Jira error reading the work types doesn't save \"no work type\": the write is refused, and a retry saves the type named KPI", async () => {
+    let failures = 1;
+    jira.intercept = (method, path) => {
+      if (method === 'GET' && path === '/rest/api/3/issuetype' && failures > 0) {
+        failures -= 1;
+        return { status: 503, body: { errorMessages: ['Service unavailable'] } };
+      }
+      return undefined;
+    };
+    const refused = await call('setUpKpiFields', { unit: { mode: 'create' }, direction: { mode: 'create' } });
+    expect(refused.error?.message).toBe("Couldn't read the site's work types, so the configuration wasn't saved; try again.");
+    expect(stored()).toBeUndefined();
+    // Reads still degrade as before (no work type), without saving anything.
+    expect((await call('getTimelineSkeleton', undefined, {})).error).toBeUndefined();
+    vi.resetModules();
+    const retried = await call('setUpKpiFields', { unit: { mode: 'create' }, direction: { mode: 'create' } });
+    expect(retried.error).toBeUndefined();
+    expect(stored()).toMatchObject({ workType: { id: KPI_TYPE, name: 'KPI' }, fields: expect.objectContaining({}) });
+  });
+
+  it('choosing the work type itself is saved even when the work types could not be read for the derived one', async () => {
+    const { traced } = await import('./requestLog');
+    const { writeKpiSiteConfig } = await import('./kpiConfig');
+    jira.intercept = (method, path) =>
+      method === 'GET' && path === '/rest/api/3/issuetype' ? { status: 503, body: { errorMessages: ['Service unavailable'] } } : undefined;
+    await traced('test', () => writeKpiSiteConfig({ workType: { id: STORY_TYPE, name: 'Story' } }));
+    expect(stored()).toMatchObject({ workType: { id: STORY_TYPE, name: 'Story' } });
   });
 
   it('createKpi creates the configured work type by id: the derived type named KPI, or the saved one', async () => {

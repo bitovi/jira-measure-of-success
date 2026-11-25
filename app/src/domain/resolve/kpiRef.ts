@@ -50,21 +50,55 @@ const unique = (values: string[]): string[] => [...new Set(values)];
  * Stored → domain, for reads. Uses `kpiIssueId` only; a reference without one is
  * a deleted KPI, kept by its stored `kpiId` (so it shows as "deleted" and can be
  * removed) and listed in `deletedKeys`. When two references point at the same
- * KPI, the first wins.
+ * KPI (e.g. a key-only target and a later one by id, after the migration gave
+ * the first its id), the one with the latest `updatedAt` wins, in the first's
+ * place; on a tie, the first.
  */
 export function readStoredAssignments(stored: StoredAssignments): { assignments: Assignment[]; deletedKeys: string[] } {
   const assignments: Assignment[] = [];
   const deletedKeys: string[] = [];
-  const seen = new Set<string>();
+  const indexOf = new Map<string, number>();
   for (const s of stored.assignments) {
     const id = storedId(s);
     const kpiId = id ?? s.kpiId;
-    if (seen.has(kpiId)) continue;
-    seen.add(kpiId);
+    const at = indexOf.get(kpiId);
+    if (at !== undefined) {
+      if (s.updatedAt > assignments[at].updatedAt) assignments[at] = toAssignment(s, kpiId);
+      continue;
+    }
+    indexOf.set(kpiId, assignments.length);
     assignments.push(toAssignment(s, kpiId));
     if (id === null) deletedKeys.push(s.kpiId);
   }
   return { assignments, deletedKeys };
+}
+
+/** A key-only reference (not yet migrated, or a deleted KPI) to the KPI whose key is `key`. */
+const isKeyOnlyRefTo = (a: Assignment, key: string | undefined): boolean =>
+  key !== undefined && !isKpiIssueId(a.kpiId) && a.kpiId.trim().toUpperCase() === key.trim().toUpperCase();
+
+/**
+ * `assignment` (by KPI id) written onto an issue's targets: it replaces the
+ * target on the same KPI, which before the `kpi-target-refs-to-ids` migration
+ * may still be held by the KPI's current `key` only (the same target, the one
+ * being edited). The new one takes the first match's place; other matches are
+ * dropped. Added at the end when there's none.
+ */
+export function withTarget(existing: Assignment[], assignment: Assignment, key: string): Assignment[] {
+  const matches = (a: Assignment) => a.kpiId === assignment.kpiId || isKeyOnlyRefTo(a, key);
+  const at = existing.findIndex(matches);
+  if (at < 0) return [...existing, assignment];
+  return existing.flatMap((a, i) => (i === at ? [assignment] : matches(a) ? [] : [a]));
+}
+
+/**
+ * An issue's targets without the one on `kpiId`. For an id, a key-only
+ * reference to the same KPI (its key from `keyOfId`, e.g. `storedKeysById`)
+ * goes too, so no stale copy is left to reappear after the migration.
+ */
+export function withoutTarget(existing: Assignment[], kpiId: string, keyOfId: ReadonlyMap<string, string>): Assignment[] {
+  const key = isKpiIssueId(kpiId) ? keyOfId.get(kpiId) : undefined;
+  return existing.filter((a) => a.kpiId !== kpiId && !isKeyOnlyRefTo(a, key));
 }
 
 /** The `kpiIssueId` → stored key pairs of a stored property: the keys last written for each id. */

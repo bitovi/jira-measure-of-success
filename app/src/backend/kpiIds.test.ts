@@ -336,6 +336,48 @@ describe('writes store ids and keys', () => {
     expect(stored(edge.mixedIssueId)).toMatchObject({ kpiIssueIds: ['1000'], kpiIds: ['KPI-1'], refsVersion: 2 });
   });
 
+  describe('before the migration, a key-only target on the same KPI is the one being edited', () => {
+    const onKpi1 = (issueId: string) => stored(issueId).assignments.filter((a) => a.kpiIssueId === '1000' || a.kpiId === 'KPI-1');
+
+    it('saveAssignment replaces it: exactly one entry, with id + key and the new values', async () => {
+      load('keys');
+      expect(onKpi1('200000')).toEqual([expect.not.objectContaining({ kpiIssueId: expect.anything() })]);
+      await call('saveAssignment', { issueId: '200000', assignment: newTarget('1000') });
+      expect(onKpi1('200000')).toEqual([{ ...newTarget('1000'), kpiIssueId: '1000', kpiId: 'KPI-1' }]);
+      expect(stored('200000').kpiIds!.filter((k) => k === 'KPI-1')).toHaveLength(1);
+      const list = await call<PanelListData>('getPanelList', { issueId: '200000' });
+      expect(list.basis!.own.filter((a) => a.kpiId === '1000' || a.kpiId === 'KPI-1')).toEqual([
+        expect.objectContaining({ kpiId: '1000', target: 7 }),
+      ]);
+    });
+
+    it('addTarget replaces it too', async () => {
+      load('keys');
+      await call('addTarget', {
+        kpiId: '1000',
+        issueId: '200000',
+        issueKey: jira.fixture.issues.get('200000')!.key,
+        issueType: 'Epic',
+        issueTypeIconUrl: null,
+        issueSummary: 'Epic 1',
+        date: '2026-12-31',
+        value: 5,
+      });
+      expect(onKpi1('200000')).toEqual([expect.objectContaining({ kpiIssueId: '1000', kpiId: 'KPI-1', target: 5 })]);
+    });
+
+    it('removeAssignment by id also drops a key-only copy of the same KPI', async () => {
+      load('keys', (j) => {
+        j.fixture.issues.get('200004')!.properties['kpi-assignments'] = storedTargets(
+          [fixtureTarget('KPI-1'), fixtureTarget('KPI-1', { kpiIssueId: '1000' }), fixtureTarget('KPI-5')],
+          false,
+        );
+      });
+      await call('removeAssignment', { issueId: '200004', kpiId: '1000' });
+      expect(stored('200004').assignments.map((a) => [a.kpiIssueId, a.kpiId])).toEqual([[undefined, 'KPI-5']]);
+    });
+  });
+
   it('addTarget stores the id even when given a key, and writes the current key', async () => {
     load();
     const added = await call<{ assignment: Assignment }>('addTarget', {

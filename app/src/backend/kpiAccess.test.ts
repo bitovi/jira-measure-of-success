@@ -254,9 +254,16 @@ describe('writes follow the user’s permissions in the KPI’s space', () => {
     const { error, jira } = await invoke('createKpi', kpiInput(), (j) => {
       j.intercept = (_method, path) => (path === '/rest/api/3/mypermissions' ? { status: 503 } : undefined);
     });
-    expect(error?.message).toBe(
-      "Couldn't check your permissions on the KPIs (KPI) space, so the KPI wasn't created. Try again.",
-    );
+    expect(error?.message).toBe("Couldn't check your permissions on that space, so the KPI wasn't created. Try again.");
+    expect(jira.writes).toEqual([]);
+  });
+
+  it("createKpi in a space the user can't browse: doesn't name it, creates nothing", async () => {
+    const { error, jira } = await invoke('createKpi', kpiInput(), (j) => {
+      j.fixture.userView.access[KPI_PROJECT.key] = { browse: false, create: false, edit: false, link: false };
+    });
+    expect(error?.message).toBe(`There's no space with id "${KPI_PROJECT.id}" that you can see.`);
+    expect(error?.message).not.toContain(KPI_PROJECT.name);
     expect(jira.writes).toEqual([]);
   });
 

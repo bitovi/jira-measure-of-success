@@ -341,6 +341,15 @@ describe('Step 4: Timeline, panel and create across spaces', () => {
     expect([...tmp.writes, ...port.writes]).toEqual([]);
   });
 
+  it("createKpi in a space the user can't browse says nothing about it (not its name or work types)", async () => {
+    load(null, (j) => {
+      j.fixture.userView.access[TEAM_MANAGED_PROJECT.key] = { browse: false, create: false, edit: false, link: false };
+    });
+    const hidden = await call('createKpi', { projectId: TEAM_MANAGED_PROJECT.id, name: 'X', unit: '', direction: null });
+    expect(hidden.error?.message).toBe(`There's no space with id "${TEAM_MANAGED_PROJECT.id}" that you can see.`);
+    expect(hidden.writes).toEqual([]);
+  });
+
   it('createKpi refuses a parent that isn’t a KPI', async () => {
     load();
     const { error, writes } = await call('createKpi', {

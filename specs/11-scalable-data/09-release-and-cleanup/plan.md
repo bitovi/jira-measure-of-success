@@ -165,6 +165,33 @@ Nothing has been merged, pushed, or deployed to staging or production. For the r
 > minutes, best outside working hours). Once your report reads the new fields, let us know and we'll
 > schedule a cleanup release that stops writing the old formats.
 
+### Code review (2026-11-25)
+
+A code review of the branch found these; each was fixed with tests (commit "Spec 11: fixes from code
+review …"):
+
+- **`kpi-meta-to-fields` could blank a malformed `kpi-meta`.** One the strict schema rejected (e.g.
+  `{ unit: '%' }` with no direction, or `direction: 'Increase'`) read as empty, so nothing was copied and
+  `kpi-meta` was rewritten blank and marked done. Now each part is read on its own (any-case direction;
+  no direction = none), the written `kpi-meta` is the stored one with only the reconciled parts changed
+  (unknown keys kept), and a `kpi-meta` that isn't an object is a listed failure, left untouched.
+- **A target saved before the 03 migration was duplicated, and the newer one later lost.** Saving by id
+  appended a second entry next to the key-only one; after the migration gave both the same id, reads kept
+  the first (older). Now `saveAssignment` / `addTarget` replace a key-only entry on the KPI's current key
+  (the same target), `removeAssignment` by id drops a key-only copy too, and reads keep the entry with
+  the latest `updatedAt` when two point at the same KPI.
+- **A transient Jira error could save `workType: null` for good.** On an install with nothing saved, a
+  failed work-type list derived no work type, and a Settings write in the same call saved it. Now
+  `writeKpiSiteConfig` refuses ("Couldn't read the site's work types …; try again"); reads degrade as
+  before.
+- **`createKpi` named a space before checking the user could see it.** The space is looked up as the app;
+  its name was in the "no KPI work type" and "couldn't check your permissions" messages. Now nothing
+  about the space is said until the user is known to have Browse on it ("There's no space with id … that
+  you can see.").
+- **Not changed:** the panel 400 concern (an `id in (…)` naming a deleted KPI) didn't reproduce: Jira
+  returns 200 with the rest (01 C5). The migration's field-wins rewriting of `kpi-meta` stays as decided
+  in 05 Q2, pending Justin's review.
+
 ## Questions
 
 1. **Where the legacy script lives.** `app/scripts/` (kept until cleanup), or this spec folder (not
