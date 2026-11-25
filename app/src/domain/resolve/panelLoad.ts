@@ -70,7 +70,7 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
   );
 
   const rows: PanelRowDto[] = [];
-  const push = (kpiId: string, relationship: PanelRowDto['relationship'], a?: Assignment) => {
+  const push = (kpiId: string, relationship: PanelRowDto['relationship'], a: Assignment) => {
     const def = defOf(kpiId);
     const kpiKey = def?.key ?? basis.kpiKeys?.[kpiId] ?? kpiId;
     const head = {
@@ -89,13 +89,6 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
       dueDateRolledUp: false,
       actual: null,
     } satisfies Partial<PanelRowDto>;
-    if (!a) {
-      // Don't offer to track a parent's target on a KPI that no longer exists or
-      // that the user may not see.
-      if (deleted.has(kpiId) || noAccess.has(kpiId)) return;
-      rows.push({ ...head, target: null, targetType: null, targetDate: null, dueTiming: null, start: null, relationship, ...empty });
-      return;
-    }
     const bet = { target: a.target, targetType: a.targetType, dueTiming: a.timing.due, start: a.timing.start, relationship };
     if (deleted.has(kpiId)) {
       // A deleted KPI has no readings, so Phase 2 can't resolve anything for it.
@@ -141,7 +134,6 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
   };
   for (const r of grouped.sharedWithParent) push(r.kpiId, 'shared', r.assignment);
   for (const r of grouped.onlyHere) push(r.kpiId, 'onlyHere', r.assignment);
-  for (const r of grouped.onParentNotTracked) push(r.kpiId, 'onParentNotTracked');
 
   const data: PanelData = {
     issueKey: basis.issueKey,

@@ -218,8 +218,11 @@ describe('same output as the key-based code', () => {
         : {}),
     }));
     const digest = createHash('sha256').update(JSON.stringify(asBefore)).digest('hex');
-    // The digest of the code before spec 11 · 07 on these nine issues (catalog left out).
-    expect(digest).toBe('c9c1f1e0075a53804449b7a78d89bcf7201347b67d2389afd7e4a633a949ce3d');
+    // The digest of the code before spec 11 · 07 on these nine issues (catalog left
+    // out), without its "On parent, not tracked here" rows: that section was dropped
+    // for the KPI browser's Tracked by parents (the only change — checked against
+    // the previous code with those rows filtered out).
+    expect(digest).toBe('386141da5d7f294c63bfa59a2a5a1759eafa83b8757de93f4c0ba2e760082eae');
   });
 });
 

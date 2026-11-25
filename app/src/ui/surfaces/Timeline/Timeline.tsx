@@ -82,6 +82,7 @@ import {
 } from '@domain/index.js';
 import { ActionErrorBanner, SETUP_ERRORS } from './components/ActionErrorBanner/index.js';
 import { AddKpiDialog, kpiSpaceName } from './components/AddKpiDialog/index.js';
+import { ColumnResizer, useColumnWidth } from './components/ColumnResizer/index.js';
 import { CreatedFlag } from './components/CreatedFlag/index.js';
 import { ParentField, type ParentOption } from './components/ParentField/index.js';
 import { RowActions } from './components/RowActions/index.js';
@@ -107,7 +108,13 @@ import { ScopeFilter } from './components/ScopeFilter/index.js';
  *
  * Data comes from an INJECTABLE loader hook (`useData`) — see usePanelData.ts.
  */
+// KPI column width: draggable from its right edge, remembered in the browser.
 const LABEL_W = 300;
+const LABEL_MIN_W = 200;
+const LABEL_MAX_W = 720;
+const LABEL_W_STORAGE_KEY = 'mos.timeline.kpiColumnWidth';
+// Room always left for the quarter columns when the KPI column is widened.
+const MIN_PLOT_W = 240;
 const ROW_H = 60;
 /** A context row: an ancestor outside the KPI space filter, one short line with no track. */
 const CONTEXT_ROW_H = 32;
@@ -362,9 +369,19 @@ export function Timeline({
   // Only show the right-pinned Undated lane when at least one KPI actually has
   // undated (pending) targets — otherwise it's just dead space.
   const hasUndated = flat.some(({ node, context }) => !context && node.undated.length > 0);
+  const undatedW = hasUndated ? UNDATED_W : 0;
+  const labelMaxW =
+    scrollWidth > 0 ? Math.min(LABEL_MAX_W, scrollWidth - undatedW - MIN_PLOT_W) : LABEL_MAX_W;
+  const labelColumn = useColumnWidth({
+    storageKey: LABEL_W_STORAGE_KEY,
+    defaultWidth: LABEL_W,
+    min: LABEL_MIN_W,
+    max: labelMaxW,
+  });
+  const labelW = labelColumn.width;
   // The scroll box also holds the sticky KPI column and Undated lane; the
   // quarter columns get what's left.
-  const plotViewportWidth = scrollWidth > 0 ? scrollWidth - LABEL_W - (hasUndated ? UNDATED_W : 0) : 0;
+  const plotViewportWidth = scrollWidth > 0 ? scrollWidth - labelW - undatedW : 0;
 
   // Fit-to-data-range date axis (Feature 04, §4a): the domain is the union of
   // every full row's readings + dated targets (always including today), snapped
@@ -586,13 +603,21 @@ export function Timeline({
           <div className="flex w-max min-w-full">
             {/* KPI names — sticky to the left edge so only the quarter columns
                 pan horizontally. */}
-            <div className="sticky left-0 z-30 flex-none bg-surface" style={{ width: LABEL_W }}>
+            <div className="sticky left-0 z-30 flex-none bg-surface" style={{ width: labelW }}>
               <div
                 className="sticky top-0 z-10 flex items-center border-b border-r border-border bg-surface-sunken px-3 text-xs font-semibold uppercase tracking-wide text-text-subtle"
                 style={{ height: HEADER_H }}
               >
                 KPI
               </div>
+              <ColumnResizer
+                label="Resize KPI column"
+                width={labelW}
+                min={LABEL_MIN_W}
+                max={labelMaxW}
+                onResize={labelColumn.setWidth}
+                onReset={labelColumn.reset}
+              />
               {flat.length === 0 ? (
                 <div className="border-r border-border px-3 py-6 text-sm text-text-subtle">
                   {data.noWorkType ? (

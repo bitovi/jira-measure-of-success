@@ -118,7 +118,6 @@ const ALL_GROUPS: PanelData = {
       dueDate: '2026-09-30',
     }),
     row({ kpiId: '20003', name: 'Number of Stores', unit: 'count', target: 250, relationship: 'onlyHere', targetDate: { date: '2026-09-30', pending: false, source: 'absolute date' } }),
-    row({ kpiId: '20009', name: 'Costs', unit: 'USD', direction: 'decrease', target: null, targetType: null, targetDate: null, dueTiming: null, relationship: 'onParentNotTracked', resolvedValue: null, displayState: null, dueDate: null }),
   ],
 };
 
@@ -251,22 +250,18 @@ const VALUES_LOADING: PanelData = {
   issueDueDate: null,
   issueDueRolledUp: false,
   kpis: ALL_GROUPS.kpis.map((c) => ({ ...c, currentValue: null })),
-  rows: ALL_GROUPS.rows.map((r) =>
-    r.relationship === 'onParentNotTracked'
-      ? r
-      : {
-          ...r,
-          targetDate: null,
-          resolvedValue: null,
-          displayState: null,
-          warning: null,
-          frozen: false,
-          dueDate: null,
-          dueDateRolledUp: false,
-          actual: null,
-          resolving: true,
-        },
-  ),
+  rows: ALL_GROUPS.rows.map((r) => ({
+    ...r,
+    targetDate: null,
+    resolvedValue: null,
+    displayState: null,
+    warning: null,
+    frozen: false,
+    dueDate: null,
+    dueDateRolledUp: false,
+    actual: null,
+    resolving: true,
+  })),
 };
 
 const meta: Meta<typeof IssuePanel> = {
@@ -283,7 +278,8 @@ export const AllGroups: Story = {
     const c = within(canvasElement);
     await expect(c.getByText('Shared with parent')).toBeInTheDocument();
     await expect(c.getByText('Only on this issue')).toBeInTheDocument();
-    await expect(c.getByText('On parent, not tracked here')).toBeInTheDocument();
+    // KPIs on the parent but not here are offered only in the KPI browser below.
+    await expect(c.queryByText('On parent, not tracked here')).not.toBeInTheDocument();
     await expect(c.getByText('1 month after due date')).toBeInTheDocument();
     // "Set a KPI target" opens the KPI browser on Tracked by parents: the
     // parent's Costs target, with its unit and target; Revenue and Number of
@@ -310,26 +306,23 @@ export const OpenKpiIssue: Story = {
     await waitFor(() => expect(link).toHaveAttribute('href', 'https://example.atlassian.net/browse/KPI-3'));
     await userEvent.click(link);
     await expect(openKpiSpy).toHaveBeenCalledWith('KPI-3');
-    // "On parent, not tracked here" rows aren't target cards — no link
-    await expect(c.queryByRole('link', { name: 'Costs' })).not.toBeInTheDocument();
   },
 };
 
-/** "+ Track this" pre-fills the form with that KPI and focuses the value — it does NOT save. */
+/** Tracking a parent's KPI here: pick it from Tracked by parents, set a value, save. */
 const trackSaveSpy = fn();
-export const TrackThisPrefillsForm: Story = {
+export const TrackParentKpi: Story = {
   args: { usePanel: stub({ data: ALL_GROUPS, save: trackSaveSpy }) },
   play: async ({ canvasElement }) => {
     trackSaveSpy.mockClear();
     const c = within(canvasElement);
-    await userEvent.click(c.getByRole('button', { name: 'Track this' }));
-    await expect(trackSaveSpy).not.toHaveBeenCalled();
     const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
+    await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
+    await userEvent.click(within(c.getByRole('listbox', { name: 'KPIs' })).getByRole('option'));
+    await expect(trackSaveSpy).not.toHaveBeenCalled();
     // picked in the KPI field, and previewed
     await expect(form.getByRole('combobox', { name: 'KPI' })).toHaveValue('KPI-9 Costs (USD)');
-    await expect(form.getByText('Costs')).toBeInTheDocument();
     await expect(form.getByText('Preview')).toBeInTheDocument();
-    await waitFor(() => expect(form.getByLabelText('Target value')).toHaveFocus());
     await userEvent.type(form.getByLabelText('Target value'), '-5');
     await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
     await expect(trackSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ kpiId: '20009', target: -5, targetType: 'percent' }));
@@ -520,7 +513,7 @@ export const ValuesLoading: Story = {
   args: { usePanel: stub({ data: VALUES_LOADING, valuesPending: true }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    const tracked = VALUES_LOADING.rows.filter((r) => r.relationship !== 'onParentNotTracked');
+    const tracked = VALUES_LOADING.rows;
     await expect(c.getByText('Shared with parent')).toBeInTheDocument();
     await expect(c.getByText('1 month after due date')).toBeInTheDocument();
     await expect(c.getAllByTestId('estimate-shimmer')).toHaveLength(tracked.length);

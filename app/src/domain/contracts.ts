@@ -24,7 +24,7 @@ import type { IssueLinkTypeInfo } from './resolve/kpiLinks';
  */
 
 // ── Issue panel ─────────────────────────────────────────────────────────────
-export type PanelRelationship = 'shared' | 'onlyHere' | 'onParentNotTracked';
+export type PanelRelationship = 'shared' | 'onlyHere';
 
 export interface ResolvedTargetDateDto {
   date: string | null;

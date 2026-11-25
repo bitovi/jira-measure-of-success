@@ -475,7 +475,8 @@ async function buildPanelList(issueId: string, hint: PanelIssueHint | null = nul
   const known = new Set(targeted.map((k) => k.id));
   // Only check the (rare) targeted KPIs Jira's search didn't return: they may be
   // deleted, hidden from this user (spec 10), or too new for the search index.
-  const unlisted = [...ownIds, ...parentKpiIds].filter((id) => !known.has(id));
+  // Only the issue's own targets are listed in the panel, so only they need it.
+  const unlisted = ownIds.filter((id) => !known.has(id));
   const [subKpis, unlistedKinds, chainIcons] = await Promise.all([
     cfg
       ? stage('subKpis', () => fetchTargetSubKpis(chainTargets, thisSpaceKpis, cfg)).catch((error: unknown) => {

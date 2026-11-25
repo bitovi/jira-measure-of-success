@@ -41,7 +41,6 @@ import {
 const GROUP_META: Record<PanelRowDto['relationship'], { title: string; order: number }> = {
   shared: { title: 'Shared with parent', order: 0 },
   onlyHere: { title: 'Only on this issue', order: 1 },
-  onParentNotTracked: { title: 'On parent, not tracked here', order: 2 },
 };
 
 function localToday(): string {
@@ -90,8 +89,6 @@ export function IssuePanel({
     };
   }, [loadSiteUrl]);
   const [recordFor, setRecordFor] = useState<PanelRowDto | null>(null);
-  // "+ Track this" pre-selects the KPI in the form; `n` re-triggers a repeat click.
-  const [trackRequest, setTrackRequest] = useState<TrackRequest | null>(null);
   const menuRoomRef = useMenuRoom();
 
   const groups = useMemo(() => {
@@ -130,8 +127,7 @@ export function IssuePanel({
     );
   }
 
-  const tracked = data.rows.filter((r) => r.relationship !== 'onParentNotTracked');
-  const isEmpty = tracked.length === 0;
+  const isEmpty = data.rows.length === 0;
   // Spec 11 · 06 Q4 / 07: without a KPI work type there are no KPIs to pick from.
   const noKpis = !data.picker;
   const currentValueOf = (kpiId: string) => data.kpis.find((c) => c.id === kpiId)?.currentValue ?? null;
@@ -180,29 +176,21 @@ export function IssuePanel({
         <section key={rel} className="mb-4" aria-label={GROUP_META[rel].title}>
           <h3 className="mb-1 text-xs font-medium leading-4 text-text-subtle">{GROUP_META[rel].title}</h3>
           <div className="flex flex-col gap-2">
-            {rows.map((row) =>
-              row.relationship === 'onParentNotTracked' ? (
-                <TrackThisRow
-                  key={row.kpiId}
-                  row={row}
-                  onTrack={() => setTrackRequest((prev) => ({ kpiId: row.kpiId, n: (prev?.n ?? 0) + 1 }))}
-                />
-              ) : (
-                <TargetCard
-                  key={row.kpiId}
-                  row={row}
-                  currentValue={currentValueOf(row.kpiId)}
-                  busy={busy}
-                  onSave={(draft) => save(buildAssignment(row.kpiId, draft, row.start))}
-                  onRemove={() => remove(row.kpiId)}
-                  onRecord={() => recordOn(row)}
-                  recordBlocked={recordBlockedFor(row)}
-                  recordBusy={kpiAccess.pendingAction === `record:${row.kpiId}`}
-                  kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiKey}` : `/browse/${row.kpiKey}`}
-                  onOpenKpi={() => void onOpenIssue(row.kpiKey)}
-                />
-              ),
-            )}
+            {rows.map((row) => (
+              <TargetCard
+                key={row.kpiId}
+                row={row}
+                currentValue={currentValueOf(row.kpiId)}
+                busy={busy}
+                onSave={(draft) => save(buildAssignment(row.kpiId, draft, row.start))}
+                onRemove={() => remove(row.kpiId)}
+                onRecord={() => recordOn(row)}
+                recordBlocked={recordBlockedFor(row)}
+                recordBusy={kpiAccess.pendingAction === `record:${row.kpiId}`}
+                kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiKey}` : `/browse/${row.kpiKey}`}
+                onOpenKpi={() => void onOpenIssue(row.kpiKey)}
+              />
+            ))}
           </div>
         </section>
       ))}
@@ -221,13 +209,11 @@ export function IssuePanel({
         <AssociateForm
           issueKey={data.issueKey}
           suggestions={data.picker}
-          kpis={data.kpis}
           pickerApi={pickerApi}
           existing={data.rows}
           issueDueDate={data.issueDueDate}
           issueDueRolledUp={data.issueDueRolledUp}
           resolving={data.resolving === true}
-          trackRequest={trackRequest}
           onSave={save}
         />
       )}
@@ -294,79 +280,30 @@ function buildAssignment(kpiId: string, draft: TargetDraft, start: string | null
   };
 }
 
-type TrackRequest = { kpiId: string; n: number };
-
-/**
- * A KPI on the parent but not here. "+ Track this" doesn't save anything: it
- * picks the KPI in the "Set a KPI target" form and focuses its value, so the
- * user sets a real target (v1 targets are independent — nothing to inherit).
- */
-function TrackThisRow({ row, onTrack }: { row: PanelRowDto; onTrack: () => void }) {
-  return (
-    <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2">
-      <span className="text-sm text-text-subtle">{row.name}</span>
-      <div className="ml-auto">
-        <Button appearance="subtle" spacing="compact" iconBefore={AddIcon} onClick={onTrack}>
-          Track this
-        </Button>
-      </div>
-    </div>
-  );
-}
-
 const EMPTY_DRAFT: TargetDraft = { targetType: 'percent', value: '', due: DEFAULT_DUE };
-
-/** A targeted KPI's option for the picker: from the browser's lists (with its icon), else its definition. */
-function optionFor(kpiId: string, suggestions: KpiSuggestionsDto, kpis: CatalogEntryDto[]): KpiOptionDto | null {
-  const listed = [
-    ...suggestions.trackedByParents.flatMap((b) => b.targets.flatMap((t) => [t.option, ...t.subKpis])),
-    ...suggestions.inThisSpace,
-  ].find((o) => o.id === kpiId);
-  if (listed) return { ...listed, parentId: null, hasChildren: false };
-  const def = kpis.find((k) => k.id === kpiId);
-  if (!def) return null;
-  const spaceKey = def.space?.key ?? projectKeyOfIssueKey(def.key);
-  return {
-    id: def.id,
-    key: def.key,
-    name: def.name,
-    typeIconUrl: null,
-    unit: def.unit,
-    direction: def.direction,
-    space: { key: spaceKey, name: def.space?.name ?? spaceKey },
-    parentId: null,
-    hasChildren: false,
-  };
-}
 
 function AssociateForm({
   issueKey,
   suggestions,
-  kpis,
   pickerApi,
   existing,
   issueDueDate,
   issueDueRolledUp,
   resolving,
-  trackRequest,
   onSave,
 }: {
   issueKey: string;
   suggestions: KpiSuggestionsDto;
-  /** the targeted KPIs' definitions (for "+ Track this") */
-  kpis: CatalogEntryDto[];
   pickerApi?: KpiPickerApi;
   existing: PanelRowDto[];
   issueDueDate: string | null;
   issueDueRolledUp: boolean;
   /** the issue's due date is still loading */
   resolving: boolean;
-  /** a "+ Track this" click: pick this KPI and focus the target value */
-  trackRequest: TrackRequest | null;
   onSave: (a: Assignment) => void;
 }) {
   const trackedIds = useMemo(
-    () => new Set(existing.filter((r) => r.relationship !== 'onParentNotTracked').map((r) => r.kpiId)),
+    () => new Set(existing.map((r) => r.kpiId)),
     [existing],
   );
   const loads = useMemo(() => (pickerApi ? cachedKpiPickerApi(pickerApi) : undefined), [pickerApi]);
@@ -376,14 +313,6 @@ function AssociateForm({
   const kpiInputId = useId();
   const titleId = useId();
   const amountRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!trackRequest) return;
-    setPicked(optionFor(trackRequest.kpiId, suggestions, kpis));
-    amountRef.current?.focus();
-    // Only a new "+ Track this" click picks a KPI.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trackRequest]);
 
   // The picked KPI's current value (its readings): fetched for that KPI only.
   useEffect(() => {

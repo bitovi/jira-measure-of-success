@@ -49,7 +49,6 @@ describe('assemblePanel', () => {
     expect(panel.rows.map((r) => [r.kpiId, r.relationship, r.resolving])).toEqual([
       ['10002', 'shared', true],
       ['10001', 'onlyHere', true],
-      ['10003', 'onParentNotTracked', undefined],
     ]);
     const signups = panel.rows.find((r) => r.kpiId === '10001')!;
     expect(signups).toMatchObject({ kpiKey: 'KPI-1', name: 'Signups', target: 10, targetType: 'percent', dueTiming: ownDue });
@@ -104,7 +103,7 @@ describe('assemblePanel', () => {
   it('clearPanelResolving stops the shimmer and keeps the rows', () => {
     const cleared = clearPanelResolving(assemblePanel(basis, null));
     expect(cleared.resolving).toBeUndefined();
-    expect(cleared.rows).toHaveLength(3);
+    expect(cleared.rows).toHaveLength(2);
     expect(cleared.rows.every((r) => r.resolving === undefined)).toBe(true);
   });
 
@@ -203,11 +202,6 @@ describe('assemblePanel', () => {
       const row = assemblePanel(lagging, values).rows.find((r) => r.kpiId === '10009')!;
       expect(row.kpiMissing).toBeUndefined();
       expect(row).toMatchObject({ name: '10009', target: 10, relationship: 'shared' });
-    });
-
-    it("still offers to track the parent's target", () => {
-      const row = assemblePanel(lagging, values).rows.find((r) => r.kpiId === '10008');
-      expect(row).toMatchObject({ relationship: 'onParentNotTracked', target: null });
     });
   });
 });

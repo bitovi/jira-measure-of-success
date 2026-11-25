@@ -304,36 +304,10 @@ export function getPanelData(issueId: string): PanelData {
   const pushRow = (
     kpiId: string,
     relationship: PanelRowDto['relationship'],
-    assignment?: Assignment,
+    assignment: Assignment,
   ) => {
     const def = CATALOG.find((k) => k.id === kpiId);
     const kpiKey = findKpiNode(kpiTree, kpiId)?.issueKey ?? kpiId;
-    if (!assignment) {
-      // Don't offer to track a parent's target on a KPI that no longer exists.
-      if (!def) return;
-      rows.push({
-        kpiId,
-        kpiKey,
-        name: def?.name ?? kpiKey,
-        unit: def?.unit ?? '',
-        direction: def?.direction ?? null,
-        target: null,
-        targetType: null,
-        targetDate: null,
-        dueTiming: null,
-        start: null,
-        relationship,
-        resolvedValue: null,
-        displayState: null,
-        warning: null,
-        frozen: false,
-        dueDate: null,
-        dueDateRolledUp: false,
-        actual: null,
-      });
-      return;
-    }
-
     if (!def) {
       rows.push({
         kpiId,
@@ -394,7 +368,6 @@ export function getPanelData(issueId: string): PanelData {
 
   for (const r of grouped.sharedWithParent) pushRow(r.kpiId, 'shared', r.assignment);
   for (const r of grouped.onlyHere) pushRow(r.kpiId, 'onlyHere', r.assignment);
-  for (const r of grouped.onParentNotTracked) pushRow(r.kpiId, 'onParentNotTracked');
 
   return {
     issueKey: issue.key,

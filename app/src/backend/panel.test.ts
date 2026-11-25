@@ -119,9 +119,10 @@ describe('issue panel load', () => {
     expect(row.resolving).toBeUndefined();
   });
 
-  it('a story without targets lists its epic\'s KPI as "on parent" and reports its due date', async () => {
+  it('a story without targets lists no rows (its epic\'s KPI is in the browser) and reports its due date', async () => {
     const { data } = await invoke<PanelData>('getPanelData', { payload: { issueId: STORY } });
-    expect(data.rows.map((r) => [r.kpiId, r.kpiKey, r.relationship])).toEqual([['1000', 'KPI-1', 'onParentNotTracked']]);
+    expect(data.rows).toEqual([]);
+    expect(data.picker?.trackedByParents.flatMap((b) => b.targets.map((t) => t.option.id))).toContain('1000');
     expect(data.issueDueDate).not.toBeNull();
   });
 
