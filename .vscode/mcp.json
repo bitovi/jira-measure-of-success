@@ -1,0 +1,17 @@
+{
+  // Playwright MCP for live Jira checks (spec 11, 01-jira-spikes). Headed Chrome with a persistent
+  // profile per Jira user, kept outside the repo because it holds session cookies. Log in by hand once
+  // in each window; the agent never handles credentials.
+  "servers": {
+    "playwright-admin": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--user-data-dir", "${userHome}/.cache/jira-mos-spikes/admin"]
+    },
+    "playwright-user": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest", "--user-data-dir", "${userHome}/.cache/jira-mos-spikes/non-admin"]
+    }
+  }
+}
