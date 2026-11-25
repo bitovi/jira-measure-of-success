@@ -126,6 +126,107 @@ pages (2026-11-21). F2–F4 are left for when space pages are picked up.
 
 ## Findings
 
+Run 2026-11-24 on bitovi-training, as Justin (Jira admin), with REST from the logged-in browser and,
+for `asUser` / `asApp` and triggers, a temporary `spike.ts` resolver and triggers deployed to dev as
+**v10.2.0** (a minor version: no scope change). **Non-admin checks are deferred** (Justin, 2026-11-24:
+"make it work for me first; check individual users later"): B4, C2's hidden-parent half, and E3's
+"admin can't browse" half are marked *deferred* below.
+
+Throwaway objects: fields `customfield_10907` *SPIKE KPI Unit* (short text) and `customfield_10908`
+*SPIKE KPI Direction* (single select, options `10650` Increase / `10651` Decrease); projects `SPIKE`
+(11032) and `SPIKEB` (11033); field scheme `102`; issues `SPIKE-1`… (see *Clean-up*).
+
+### A. Fields
+
+- **A2 — yes, admin-style fields over REST work.** `POST /rest/api/3/field`
+  `{ name, description, type: '…customfieldtypes:textfield', searcherKey: '…:textsearcher' }` → 201
+  `{ id: 'customfield_10907', schema: { type: 'string' } }`; the select uses `type: '…:select'`,
+  `searcherKey: '…:multiselectsearcher'` → `schema.type: 'option'`. Jira creates a **default context**
+  (`isGlobalContext: true, isAnyIssueType: true`) for each. `POST /field/{id}/context/{ctx}/option`
+  `{ options: [{ value: 'Increase' }, …] }` → 200 with option ids; `GET` the same path reads them back.
+  Scope: every call is `manage:jira-configuration` (Jira's OpenAPI), which the app has.
+- **A3 — contexts no longer restrict a field; field schemes do.** Narrowing the global context to the KPI
+  type → 400 *"The global context cannot be made non-global"* (CHANGE-3019); deleting it → 400; adding a
+  second global context → 400 *"Only one global context is allowed per field"*. Jira now gives every
+  custom field one undeletable global context, used only for **options and defaults**. **Where a field
+  is available is set by the space's field scheme** (B2), per work type. So: one context per field
+  (the default) holds the direction options for every space, and 04 restricts the fields to the KPI
+  type in **field schemes**, not contexts.
+- **A4 — off-screen writes work once the field is in the space's field scheme.** Before it was (field in
+  no scheme): `POST /issue` and `PUT /issue/{id}` → 400 `errors: { customfield_10907: "Field … cannot be
+  set. It is not on the appropriate screen, or unknown." }`. After adding it to the SPIKE field scheme
+  for the KPI type only, both work with the field on **no screen** (`editmeta` doesn't list it). The
+  same field on a non-KPI type in the same space → the same 400, so the work type restriction holds.
+  **The space's field scheme is the switch; screens aren't needed for the app's writes.**
+- **A5 — select format.** `PUT` accepts both `{ id: '10650' }` and `{ value: 'Decrease' }`; `null`
+  clears the text field. `search/jql` with `fields=[cf…]` returns the select as
+  `{ self, value: 'Increase', id: '10650' }` and text as a plain string. JQL: `cf[10908] = "Increase"`,
+  `cf[10908] = 10651` (option id) and `"SPIKE KPI Direction" = Decrease` all work; text `cf[10907] ~
+  "users"` works, but **`~ "%"` finds nothing** (Jira's text search drops symbols). 05: write the
+  option by `{ id }`, read `.id`.
+- **A6 — one-request dual write works for custom fields too.** `PUT /issue/{id}`
+  `{ fields: { summary, customfield_10907, customfield_10908: { id } }, properties: [{ key: 'kpi-meta',
+  value }] }` → 204, and `POST /issue` with `fields` (both custom fields) + `properties` → 201; the
+  property reads back in both cases.
+- **A7 — not run** (only needed if G2 picks Forge-owned fields).
+- **A8 — yes.** Each `PUT` (as the user) is one changelog entry naming the user, with items
+  `{ field: 'SPIKE KPI Unit', fieldId, fromString, toString }`; the select also carries option ids in
+  `from` / `to`. Clearing the text shows `to: ''`. **Property writes don't appear in History.**
+- **A9 — the trigger design works as 05 planned.** Two triggers on `avi:jira:updated:issue`: one
+  unfiltered, one with `filter: { ignoreSelf: true, expression: "event.runtime.issue.properties['kpi-meta'].fields == true" }`.
+  Results (Forge logs and a KVS log agree):
+
+  | Write | Unfiltered | Filtered |
+  |---|---|---|
+  | `kpi-meta` property only (by a person, and by the app as the user) | not fired | not fired |
+  | Unit edited by a person (REST outside the app) on a **marked** KPI | fired | **fired** |
+  | Unit edited by a person on an **unmarked** KPI | fired | not fired |
+  | Unit edited **by the app `asUser`** on a marked KPI | fired, `atlassianId` = the user | **not fired** |
+  | Unit edited **by the app `asApp`** on a marked KPI | fired, `atlassianId` = the app's account | **not fired** |
+
+  The event's `changelog.items` name the field (`field`, `fieldId`, `fromString`, `toString`). So:
+  property writes never trigger (no loop), `ignoreSelf` covers `asUser` writes (an `asUser` event
+  otherwise looks exactly like the person's own edit), and entity-property filtering works. Entity-
+  property filtering is a Forge **preview** feature.
+
+### B. Screens, schemes and spaces (partial: Step 2 continues)
+
+- **B1 — the KPI project's work type scheme isn't shared.** Project `KPI` (10900) uses its own
+  *"KPI: Simple Issue Tracking Issue Type Scheme"* (11723: types 10005, 10006, KPI 10436) and its own
+  work type screen scheme (10816), both used by KPI only. `issuetype = 10436 AND project != KPI` → 0
+  issues; 14 KPIs in all. A project made like `createKpiProject` (`POST /project` with
+  `projectTypeKey: 'software'`, no template) gets its own *"{KEY}: Simple Issue Tracking …"* schemes.
+  **But its field scheme is the shared *Default Field Scheme* (5)**, used by ~50 projects.
+- **B2 — the dev site uses field schemes.** `GET /rest/api/3/config/fieldschemes` lists 7 (the
+  *Default Field Scheme* plus per-space ones migrated from field configurations);
+  `fieldconfigurationscheme/project?projectId=10900` returns nothing. Calls that worked (all
+  `manage:jira-configuration`, Jira admin):
+  - create: `POST /config/fieldschemes { name, description }` → `{ id: 102 }`. **A new scheme starts
+    with ~81 fields**, the system fields plus **every Forge-owned field (KPI Reading dev and
+    staging)**; admin-created fields are not added;
+  - assign: `PUT /config/fieldschemes/projects { "102": { projectIds: [11032, 11033] } }` → per-project
+    `success: true`;
+  - add a field for one work type: `PUT /config/fieldschemes/fields { customfield_10907: [{ schemeIds:
+    [102], restrictedToWorkTypes: [10436] }] }` → `success: true`; `GET
+    /config/fieldschemes/102/fields?fieldId=…` shows `restrictedToWorkTypes: ['10436']`;
+  - read: `GET /config/fieldschemes/{id}/fields` pages at `maxResults` ≤ 50 (200 → 400).
+  KPI Reading (dev and staging) is in the *Default Field Scheme* for **every** work type. (B8 follows.)
+
+### D. Ids, keys and the targets index (partial: D1 in Step 3)
+
+Index paths added to `kpi-index` in v10.2.0: `kpiIssueIds` (`string`) and `refsVersion` (`number`),
+each with a `searchAlias`. Two work items had `kpi-assignments` written **before** the deploy:
+`SPIKE-3` (`kpiIssueIds: ['14954'], refsVersion: 2`) and `SPIKE-4` (key-only, `kpiIds` only).
+
+- **D2 — properties written before the deploy are indexed under the new paths.** Right after the deploy,
+  `kpiIssueIds IS NOT EMPTY` (alias and `issue.property[kpi-assignments].kpiIssueIds`) → `SPIKE-3`.
+  **03's migration doesn't need to rewrite properties just to index them.**
+- **D3 — yes.** `kpiIssueIds = "14954"` → `SPIKE-3`; `= "1495"` → nothing (no tokenising).
+- **D4 — yes, unchanged.** `kpiIds IS NOT EMPTY` still finds the 14 real targets outside the spike
+  projects. Note it's a `text` path: `kpiIds ~ "SPIKE-2"` matches, **`kpiIds = "SPIKE-2"` doesn't**.
+- **D5 — yes.** `kpiIds IS NOT EMPTY AND refsVersion IS EMPTY` → `SPIKE-4` only, as the user and as the
+  app; `refsVersion = 2` → `SPIKE-3`.
+
 ### F1: space page context (2026-11-21, dev v9.0.0, space ECOM)
 
 - **The context names the space and a board, in the browser and in the resolver:**
@@ -157,6 +258,15 @@ pages (2026-11-21). F2–F4 are left for when space pages are picked up.
 ## Clean-up
 
 _What was created during the spikes and what happened to it._
+
+| Object | Where | Status |
+|---|---|---|
+| Fields `customfield_10907` SPIKE KPI Unit, `customfield_10908` SPIKE KPI Direction | site | to remove in Step 5 |
+| Projects `SPIKE` (11032), `SPIKEB` (11033) and their issues | site | to remove in Step 5 |
+| Field scheme 102 *SPIKE field scheme (temporary)* | site | to remove in Step 5 (after the projects) |
+| `app/src/backend/spike.ts`, its `registerSpikeResolvers` call, the `spike-trigger-*` triggers and `spike-fn-*` functions | branch, dev v10.2.0 | to remove in Step 5 |
+| `kpiIssueIds` / `refsVersion` index paths | manifest, dev v10.2.0 | kept for 03 (it adds them anyway) |
+| KVS key `spike:trigger-log` | dev install | to clear in Step 5 |
 
 ## Questions
 

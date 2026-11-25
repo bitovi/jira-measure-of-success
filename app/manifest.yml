@@ -32,6 +32,26 @@ modules:
         - path: kpiIds
           type: text
           searchAlias: kpiIds
+        # TEMPORARY (spec 11 · 01 D2–D5): stage 03 decides whether these stay.
+        - path: kpiIssueIds
+          type: string
+          searchAlias: kpiIssueIds
+        - path: refsVersion
+          type: number
+          searchAlias: refsVersion
+  # TEMPORARY (spec 11 · 01 A9): removed in 01 Step 5.
+  trigger:
+    - key: spike-trigger-all
+      function: spike-fn-all
+      events:
+        - avi:jira:updated:issue
+    - key: spike-trigger-filtered
+      function: spike-fn-filtered
+      events:
+        - avi:jira:updated:issue
+      filter:
+        ignoreSelf: true
+        expression: "event.runtime.issue.properties['kpi-meta'].fields == true"
   jira:customField:
     - key: kpi-reading
       name: KPI Reading${TITLE_SUFFIX}
@@ -49,6 +69,10 @@ modules:
   function:
     - key: resolver
       handler: index.handler
+    - key: spike-fn-all
+      handler: index.spikeTriggerAll
+    - key: spike-fn-filtered
+      handler: index.spikeTriggerFiltered
 
 resources:
   - key: issue-panel
