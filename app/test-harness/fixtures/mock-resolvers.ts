@@ -907,7 +907,7 @@ export const kpiSetup: KpiSetupSim = createKpiSetupSim(kpiSetupScenario(), {
 // ── Data migrations (spec 11 · 02) ───────────────────────────────────────────
 // In-memory stand-ins for 03's and 05's migrations (fixtures/mockMigrations).
 // `?migrations=pending|running|done|failed` picks the starting state. 05's
-// applies only once the KPI fields are chosen (as `kpi-meta-to-fields` will).
+// applies only once the KPI fields are chosen, as the real `kpi-meta-to-fields` does.
 export { migrationsMode, type MigrationsMode };
 
 let mockMigrations: MockMigrations = createMockMigrations();

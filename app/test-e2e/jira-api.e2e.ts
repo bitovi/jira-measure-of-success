@@ -18,12 +18,19 @@ import {
   fetchSubtreeTimingNodes,
   fetchTargetContributions,
   findProjectByKey,
+  updateKpiDefinition,
   writeAssignments,
   writeReading,
   KPI_ISSUE_TYPE,
 } from '../src/backend/jira';
 import { ensureKpiWorkType } from '../src/backend/kpiSetup';
-import { DEFAULT_KPI_LINK_TYPE, type Assignment, type KpiHierarchyLink } from '../src/domain/index';
+import {
+  DEFAULT_KPI_LINK_TYPE,
+  kpiMetaWrite,
+  type Assignment,
+  type KpiFieldsConfig,
+  type KpiHierarchyLink,
+} from '../src/domain/index';
 
 /**
  * API E2E — drives every Jira REST capability in `src/backend/jira.ts` against a
@@ -46,6 +53,12 @@ import { DEFAULT_KPI_LINK_TYPE, type Assignment, type KpiHierarchyLink } from '.
  * Requires in `.env`: FORGE_EMAIL, FORGE_API_TOKEN, JIRA_BASE_URL (optional),
  * E2E_PROJECT_KEY (optional, default MOSE2E). The API token needs Jira admin
  * rights (project create/delete + issue-type scheme management).
+ *
+ * Spec 11 · 05 (optional): E2E_KPI_UNIT_FIELD and E2E_KPI_DIRECTION_FIELD (the
+ * fields chosen in Settings, e.g. customfield_10910 / customfield_10911) and,
+ * for a select direction, E2E_KPI_DIRECTION_OPTIONS="{increaseId},{decreaseId}"
+ * (e.g. 10652,10653). The fields must be in the E2E space's field scheme for
+ * the KPI work type (on dev: the Default Field Scheme).
  */
 
 const BASE_URL = process.env.JIRA_BASE_URL || 'https://bitovi-training.atlassian.net';
@@ -57,6 +70,19 @@ if (!HAS_CREDS) {
     '\n[test:e2e] SKIPPED — set FORGE_EMAIL and FORGE_API_TOKEN in .env to run the live API E2E test.\n',
   );
 }
+
+/** The unit/direction fields to check, from the environment (null = skip those steps). */
+function kpiFieldsFromEnv(): KpiFieldsConfig | null {
+  const unit = process.env.E2E_KPI_UNIT_FIELD;
+  const direction = process.env.E2E_KPI_DIRECTION_FIELD;
+  if (!unit || !direction) return null;
+  const [increase, decrease] = (process.env.E2E_KPI_DIRECTION_OPTIONS ?? '').split(',').map((s) => s.trim());
+  return {
+    unit: { fieldId: unit },
+    direction: increase && decrease ? { fieldId: direction, kind: 'select', optionIds: { increase, decrease } } : { fieldId: direction, kind: 'text' },
+  };
+}
+const KPI_FIELDS = kpiFieldsFromEnv();
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -171,6 +197,36 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     const meta = await fetchKpiMeta(ctx.rootKey!);
     expect(meta).toEqual({ unit: '$', direction: 'increase' });
   });
+
+  (KPI_FIELDS ? it : it.skip)(
+    'unit/direction fields (spec 11 · 05) → create and edit write the fields + a marked kpi-meta, as the user (History)',
+    async () => {
+      expect(ctx.projectId, 'requires createKpiProject to have succeeded').toBeTruthy();
+      const fields = KPI_FIELDS!;
+      const created = await createKpiIssue(ctx.projectId!, { name: 'E2E Fields', unit: '%', direction: 'decrease' }, null, null, fields);
+      expect(await fetchKpiMeta(created.id, fields)).toEqual({ unit: '%', direction: 'decrease' });
+
+      const readProperty = async () => {
+        const res = await forgeApi.asApp().requestJira(route`/rest/api/3/issue/${created.id}/properties/kpi-meta`);
+        return ((await res.json()) as { value?: unknown }).value;
+      };
+      const stored = await readProperty();
+      expect(stored).toEqual({ unit: '%', direction: 'decrease', fields: true });
+
+      // A unit-only edit: the unit field and the whole kpi-meta, in one issue edit.
+      await updateKpiDefinition(created.id, kpiMetaWrite(fields, stored, { unit: '%', direction: 'decrease' }, { unit: 'users' }));
+      expect(await fetchKpiMeta(created.id, fields)).toEqual({ unit: 'users', direction: 'decrease' });
+      expect(await readProperty()).toEqual({ unit: 'users', direction: 'decrease', fields: true });
+
+      // History names the person for the field change.
+      const res = await forgeApi.asApp().requestJira(route`/rest/api/3/issue/${created.id}/changelog`);
+      const { values } = (await res.json()) as {
+        values: Array<{ author?: { accountId?: string }; items: Array<{ fieldId?: string; toString?: string | null }> }>;
+      };
+      const unitChange = values.find((v) => v.items.some((i) => i.fieldId === fields.unit.fieldId && i.toString === 'users'));
+      expect(unitChange?.author?.accountId).toBe(ctx.leadAccountId);
+    },
+  );
 
   it('ensureKpiHierarchyLinkType → finds or creates the global KPI Hierarchy link type', async () => {
     // Link types are site-global, so this is left in place (idempotent by name;

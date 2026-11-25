@@ -1,6 +1,7 @@
 import {
   KpiSiteConfig,
   kpiSiteConfigFrom,
+  type KpiFieldsConfig,
   parseStoredKpiSiteConfig,
   type KpiSiteConfig as KpiSiteConfigT,
 } from '../domain/index';
@@ -50,6 +51,15 @@ export function loadKpiSiteConfig(): Promise<LoadedKpiSiteConfig> {
 /** The install's KPI configuration (saved, or derived from an older install's records). */
 export async function readKpiSiteConfig(): Promise<KpiSiteConfigT> {
   return (await loadKpiSiteConfig()).config;
+}
+
+/**
+ * Just the unit/direction fields (null until chosen, spec 11 · 05). Fields are
+ * only ever set in the saved record, so this reads KVS alone: no Jira request,
+ * unlike `readKpiSiteConfig` on an install with nothing saved.
+ */
+export async function readKpiFieldsConfig(): Promise<KpiFieldsConfig | null> {
+  return parseStoredKpiSiteConfig(await readStoredKpiSiteConfig())?.fields ?? null;
 }
 
 export type KpiSiteConfigPatch = Partial<KpiSiteConfigT>;

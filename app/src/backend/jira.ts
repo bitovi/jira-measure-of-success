@@ -2,8 +2,12 @@ import { assumeTrustedRoute, getAppContext, route, routeFromAbsolute } from '@fo
 import { asApp, asUser, perInvocation, forgetPerInvocation, type RequestJira } from './requestLog';
 import {
   isKpiIssueId,
+  kpiMetaCreate,
+  kpiMetaFieldIds,
   KpiMetaProperty,
   KPI_META_PROPERTY_KEY,
+  parseKpiMeta,
+  resolveKpiMeta,
   breakParentCycles,
   DEFAULT_KPI_LINK_TYPE,
   isDirectionalLinkType,
@@ -29,6 +33,7 @@ import {
   type IssueLinkRef,
   type IssueLinkTypeInfo,
   type IssuePickerItem,
+  type KpiFieldsConfig,
   type KpiHierarchyLink,
   type KpiSpaceAccess,
   type ReadingChange,
@@ -678,7 +683,10 @@ export interface KpiSpaceIssue {
   parentId: string | null;
   /** Native LexoRank value for sibling ordering (null if the field is absent). */
   rank: string | null;
-  /** unit/direction from the `kpi-meta` property, included in the search (null if unset/invalid) */
+  /**
+   * unit/direction, included in the search: from the KPI fields once chosen,
+   * else the `kpi-meta` property (null if unset/invalid); see resolveKpiMeta
+   */
   meta: KpiMetaProperty | null;
 }
 
@@ -694,8 +702,9 @@ async function getRankFieldId(): Promise<string | null> {
 /**
  * Enumerate every KPI issue in the KPI space (JQL `project = <key>`), reading the
  * summary (KPI name), issue links (for parent nesting), native rank (for
- * sibling ordering) and the `kpi-meta` property (unit/direction — included in
- * the search so no per-KPI property GET is needed). Paginated to cover large spaces.
+ * sibling ordering) and the unit/direction (the KPI fields when `kpiFields` is
+ * set, else the `kpi-meta` property; both included in the search so no per-KPI
+ * GET is needed). Paginated to cover large spaces.
  *
  * The KPI tree is expressed with issue links of the configured hierarchy type
  * (`hierarchy`, see resolve/kpiLinks) rather than the native `parent` field (a
@@ -708,9 +717,10 @@ async function getRankFieldId(): Promise<string | null> {
 export async function fetchKpiSpaceIssues(
   projectKey: string,
   hierarchy: KpiHierarchyLink | null,
+  kpiFields: KpiFieldsConfig | null = null,
 ): Promise<KpiSpaceIssue[]> {
   const rankFieldId = await getRankFieldId();
-  const fieldList = ['summary', 'issuelinks', ...(rankFieldId ? [rankFieldId] : [])].join(',');
+  const fieldList = ['summary', 'issuelinks', ...(rankFieldId ? [rankFieldId] : []), ...kpiMetaFieldIds(kpiFields)].join(',');
   type RawIssue = {
     id: string;
     key: string;
@@ -751,7 +761,7 @@ export async function fetchKpiSpaceIssues(
         name: i.fields?.summary ?? i.key,
         links: i.fields?.issuelinks ?? [],
         rank: rankFieldId ? ((i.fields?.[rankFieldId] as string | undefined) ?? null) : null,
-        meta: parseKpiMeta(i.properties?.[KPI_META_PROPERTY_KEY]),
+        meta: resolveKpiMeta(kpiFields, { legacy: i.properties?.[KPI_META_PROPERTY_KEY], fields: i.fields }),
       });
     }
     if (data.isLast || !data.nextPageToken || batch.length === 0) break;
@@ -771,11 +781,6 @@ export async function fetchKpiSpaceIssues(
       meta: r.meta,
     })),
   );
-}
-
-function parseKpiMeta(value: unknown): KpiMetaProperty | null {
-  const parsed = KpiMetaProperty.safeParse(value);
-  return parsed.success ? parsed.data : null;
 }
 
 /** One contributing issue's KPI targets, plus the fields needed to place them. */
@@ -1257,36 +1262,39 @@ export async function ensureKpiIssueTypeOnProject(
  * issue LINK of the configured `hierarchy` type, because Jira forbids a
  * standard issue from being the native `parent` of another standard issue.
  * Nesting without a configured hierarchy throws before anything is created.
- * NOTE: unit/direction persist to the `kpi-meta` entity property (the summary
- * carries the KPI name) — set in the create request itself, so there's no
- * separate property write.
+ * Unit/direction go in the create request itself (spec 11 · 05): the KPI fields
+ * when they're chosen (`kpiFields`), plus the `kpi-meta` property, marked
+ * `fields: true` then, for the customer's report. With `kpiFields: null`, only
+ * `kpi-meta` (unmarked), as before. The summary carries the KPI name.
  */
 export async function createKpiIssue(
   projectId: string,
   input: CreateKpiInput,
   hierarchy: KpiHierarchyLink | null,
   workType: { id: string } | null = null,
+  kpiFields: KpiFieldsConfig | null = null,
 ): Promise<CreatedKpi> {
   if (input.parentKpiId && !hierarchy) {
     throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
   }
   const name = input.name.trim() || 'Untitled KPI';
-  // unit/direction are descriptive, low-churn → issue entity property (not a field).
   const meta: KpiMetaProperty = KpiMetaProperty.parse({
     unit: input.unit.trim(),
     direction: input.direction ?? null,
   });
+  const write = kpiMetaCreate(kpiFields, meta);
   const fields: Record<string, unknown> = {
     project: { id: projectId },
     // The configured KPI work type (spec 11 · 04); an install that hasn't chosen one uses the type named KPI.
     issuetype: workType ? { id: workType.id } : { name: KPI_ISSUE_TYPE },
     summary: name,
+    ...write.fields,
   };
   // As the USER: Jira requires Create Issues in the KPI project (spec 10).
   const res = await asUser().requestJira(route`/rest/api/3/issue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fields, properties: [{ key: KPI_META_PROPERTY_KEY, value: meta }] }),
+    body: JSON.stringify({ fields, properties: [{ key: KPI_META_PROPERTY_KEY, value: write.meta }] }),
   });
   // Surface Jira's rejection instead of returning `{ key: undefined }` — a
   // swallowed 4xx here is the same silent-failure class fixed in `writeReading`.
@@ -1355,52 +1363,64 @@ export interface KpiIssueForEdit {
   key: string;
   projectKey: string | null;
   name: string;
+  /** unit/direction as the app reads them (resolveKpiMeta) */
   meta: KpiMetaProperty | null;
+  /** the `kpi-meta` property exactly as stored (undefined when absent): edits rewrite it from this */
+  storedMeta: unknown;
   links: IssueLinkRef[];
 }
 
 /**
- * Look up a KPI issue AS THE USER for editing (name, `kpi-meta`, issue links)
- * in one GET. null when the user can't see it (Jira's 404/403).
+ * Look up a KPI issue AS THE USER for editing (name, unit/direction from the
+ * KPI fields and `kpi-meta`, issue links) in one GET. null when the user can't
+ * see it (Jira's 404/403).
  */
-export async function fetchKpiIssueForEdit(idOrKey: string): Promise<KpiIssueForEdit | null> {
+export async function fetchKpiIssueForEdit(
+  idOrKey: string,
+  kpiFields: KpiFieldsConfig | null = null,
+): Promise<KpiIssueForEdit | null> {
+  const fieldList = ['project', 'summary', 'issuelinks', ...kpiMetaFieldIds(kpiFields)].join(',');
   const res = await asUser()
-    .requestJira(route`/rest/api/3/issue/${idOrKey}?fields=project,summary,issuelinks&properties=${KPI_META_PROPERTY_KEY}`);
+    .requestJira(route`/rest/api/3/issue/${idOrKey}?fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}`);
   if (res.status === 404 || res.status === 403) return null;
   if (!res.ok) throw new Error(await jiraError(res, `look up ${idOrKey}`));
   const body = (await res.json()) as {
     id: string;
     key: string;
-    fields?: { project?: { key?: string }; summary?: string; issuelinks?: IssueLinkRef[] };
+    fields?: { project?: { key?: string }; summary?: string; issuelinks?: IssueLinkRef[]; [field: string]: unknown };
     properties?: Record<string, unknown>;
   };
+  const storedMeta = body.properties?.[KPI_META_PROPERTY_KEY];
   return {
     id: String(body.id),
     key: body.key,
     projectKey: body.fields?.project?.key ?? null,
     name: body.fields?.summary ?? body.key,
-    meta: parseKpiMeta(body.properties?.[KPI_META_PROPERTY_KEY]),
+    meta: resolveKpiMeta(kpiFields, { legacy: storedMeta, fields: body.fields }),
+    storedMeta,
     links: body.fields?.issuelinks ?? [],
   };
 }
 
 /**
- * Save a KPI's name (the summary) and/or unit + direction (`kpi-meta`) in ONE
- * issue edit, as the USER so Jira requires Edit Issues. Jira's edit issue
- * request also sets issue properties, so the two can't be half-saved. A 403
- * becomes `JiraForbiddenError` so the resolver can say which permission is missing.
+ * Save a KPI's name (the summary) and/or unit + direction in ONE issue edit, as
+ * the USER so Jira requires Edit Issues and History names them. `fields` are
+ * the changed KPI fields and `meta` the whole `kpi-meta` property to store
+ * (kpiMetaWrite builds both); Jira's edit issue request also sets issue
+ * properties, so they can't be half-saved (01 A6). A 403 becomes
+ * `JiraForbiddenError` so the resolver can say which permission is missing.
  */
 export async function updateKpiDefinition(
   kpiIssueId: string,
-  change: { name?: string; meta?: KpiMetaProperty },
+  change: { name?: string; fields?: Record<string, unknown>; meta?: Record<string, unknown> },
 ): Promise<void> {
-  if (change.name === undefined && change.meta === undefined) return;
+  if (change.name === undefined && change.meta === undefined && !Object.keys(change.fields ?? {}).length) return;
   const res = await asUser().requestJira(route`/rest/api/3/issue/${kpiIssueId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       // Jira rejects an edit without `fields` or `update`, even when it only sets properties.
-      fields: change.name !== undefined ? { summary: change.name } : {},
+      fields: { ...(change.name !== undefined ? { summary: change.name } : {}), ...change.fields },
       ...(change.meta !== undefined ? { properties: [{ key: KPI_META_PROPERTY_KEY, value: change.meta }] } : {}),
     }),
   });
@@ -1547,11 +1567,25 @@ export async function resolveKpiKeys(
   return { found, missing, errors };
 }
 
-/** Read a KPI's unit/direction from the `kpi-meta` entity property (null if unset). */
-export async function fetchKpiMeta(kpiIssueId: string): Promise<KpiMetaProperty | null> {
-  const res = await asUser()
-    .requestJira(route`/rest/api/3/issue/${kpiIssueId}/properties/${KPI_META_PROPERTY_KEY}`);
+/**
+ * Read a KPI's unit/direction (null if unset, or the KPI can't be read): the
+ * KPI fields once chosen, else the `kpi-meta` property (resolveKpiMeta). One GET.
+ */
+export async function fetchKpiMeta(
+  kpiIssueId: string,
+  kpiFields: KpiFieldsConfig | null = null,
+): Promise<KpiMetaProperty | null> {
+  if (!kpiFields) {
+    const res = await asUser()
+      .requestJira(route`/rest/api/3/issue/${kpiIssueId}/properties/${KPI_META_PROPERTY_KEY}`);
+    if (!res.ok) return null;
+    const body = (await res.json()) as { value?: unknown };
+    return parseKpiMeta(body.value);
+  }
+  const res = await asUser().requestJira(
+    route`/rest/api/3/issue/${kpiIssueId}?fields=${kpiMetaFieldIds(kpiFields).join(',')}&properties=${KPI_META_PROPERTY_KEY}`,
+  );
   if (!res.ok) return null;
-  const body = (await res.json()) as { value?: unknown };
-  return parseKpiMeta(body.value);
+  const body = (await res.json()) as { fields?: Record<string, unknown>; properties?: Record<string, unknown> };
+  return resolveKpiMeta(kpiFields, { legacy: body.properties?.[KPI_META_PROPERTY_KEY], fields: body.fields });
 }

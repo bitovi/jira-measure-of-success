@@ -58,9 +58,24 @@ modules:
       # and the changelog names who recorded each value. The field is on no
       # screen, so Jira doesn't show it.
       readOnly: false
+  # Spec 11 · 05: keeps the `kpi-meta` property (read by a customer's report) in
+  # step when someone edits a KPI's unit or direction field in Jira's own UI.
+  # Only marked KPIs (`kpi-meta.fields == true`, entity-property filtering, a
+  # Forge preview feature) and not the app's own writes. Removed in the cleanup
+  # release (09). The trigger key and its function key must differ.
+  trigger:
+    - key: kpi-meta-sync
+      function: kpi-meta-sync-fn
+      events:
+        - avi:jira:updated:issue
+      filter:
+        ignoreSelf: true
+        expression: "event.runtime.issue.properties['kpi-meta'].fields == true"
   function:
     - key: resolver
       handler: index.handler
+    - key: kpi-meta-sync-fn
+      handler: index.kpiMetaSync
 
 resources:
   - key: issue-panel

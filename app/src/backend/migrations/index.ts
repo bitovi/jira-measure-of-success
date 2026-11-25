@@ -1,5 +1,6 @@
 import type { MigrationBatchResult, MigrationFailure, MigrationStatus } from '../../domain/index';
 import type { RequestJira } from '../requestLog';
+import { kpiMetaToFields } from './kpiMetaToFields';
 import { kpiTargetRefsToIds } from './kpiTargetRefsToIds';
 
 /**
@@ -42,7 +43,7 @@ export const MIGRATION_WRITE_CONCURRENCY = 5;
  * function, not a constant: the migrations import this module's helpers, so the
  * list can't be built while this module is still loading.
  */
-const MIGRATIONS = (): Migration[] => [kpiTargetRefsToIds];
+const MIGRATIONS = (): Migration[] => [kpiTargetRefsToIds, kpiMetaToFields];
 
 let registryOverride: readonly Migration[] | null = null;
 

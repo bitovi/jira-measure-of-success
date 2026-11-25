@@ -241,11 +241,16 @@ describe('getMigrations', () => {
     expect(migrations[0]).toMatchObject({ status: null, statusError: 'Jira 500' });
   });
 
-  it('lists the real registry: 03\'s target-reference migration, counted as the app', async () => {
+  it('lists the real registry in order: 03\'s target references, then 05\'s unit and direction', async () => {
     (await import('./index')).setMigrationRegistryForTests(null);
     const { migrations } = await call<MigrationsData>('getMigrations');
-    expect(migrations.map((m) => m.id)).toEqual(['kpi-target-refs-to-ids']);
+    expect(migrations.map((m) => m.id)).toEqual(['kpi-target-refs-to-ids', 'kpi-meta-to-fields']);
     // The fixture's targets are already in the migrated shape.
     expect(migrations[0]).toMatchObject({ writeAs: 'app', ready: true, status: { applicable: true, pending: 0 } });
+    // No KPI fields chosen on the fixture site.
+    expect(migrations[1]).toMatchObject({
+      writeAs: 'user',
+      status: { applicable: false, reason: 'Choose the KPI fields in Settings first (KPI building blocks).', pending: null },
+    });
   });
 });

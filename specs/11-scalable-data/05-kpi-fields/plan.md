@@ -1,6 +1,6 @@
 # 05 — Unit and direction in Jira fields
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft** · Depends on: 02, 04.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** · Depends on: 02, 04.
 
 ## Problem
 
@@ -219,3 +219,106 @@ Settings first").
 4. **Migrating as the admin**: History names the admin for every migrated KPI. Fine, or migrate as the
    app (02 Q2)?
    - **Decided (2026-11-24, implementer, autopilot; revisit at review):** as the admin, as drafted (02 Q2).
+
+## Implementation notes
+
+Done 2026-11-25 on `feat/11-scalable-data`, Steps 1–5 and 7. Step 6 (live check on dev) is pending.
+
+**Files added**
+
+- `app/src/domain/resolve/kpiMetaFields.ts` (+ test): `kpiMetaFieldIds(cfg)`, `encodeKpiMetaFields(cfg, partialMeta)`
+  (only the parts given; `''` / no direction → `null`; a select by `{ id }`), `decodeKpiDirection`,
+  `decodeKpiMetaFields(cfg, rawFields)` (only the fields present in the response), `parseKpiMeta` (moved from
+  `jira.ts`), `resolveKpiMeta(cfg, { legacy, fields })`, `isMarkedKpiMeta`, `kpiMetaToStore(stored, meta, mark)`,
+  `kpiMetaCreate(cfg, meta)` / `kpiMetaWrite(cfg, storedRaw, current, change)` (what a create / an edit writes),
+  `kpiMetaFromChangelog(changelog, cfg, storedMeta)` (the trigger's decision) and
+  `planKpiMetaToFields(cfg, { legacy, fields })` (the migration planner).
+- `app/src/backend/kpiMetaSync.ts`: the trigger handler (`kpiMetaSync`, exported from `src/index.ts`) and
+  `syncKpiMetaFromFields(event, jira?)`, which tests call directly.
+- `app/src/backend/migrations/kpiMetaToFields.ts` (+ test): the `kpi-meta-to-fields` migration, registered
+  after 03's.
+- `app/src/backend/kpiFields.test.ts`: reads, writes and the trigger through the real resolver on the
+  mock Jira, in every fixture shape.
+
+**Files changed**
+
+- `jira.ts`: `fetchKpiSpaceIssues(projectKey, hierarchy, kpiFields = null)`,
+  `fetchKpiIssueForEdit(idOrKey, kpiFields = null)` (also returns `storedMeta`, the raw `kpi-meta`),
+  `fetchKpiMeta(id, kpiFields = null)` (one `GET /issue/{id}?fields=…&properties=kpi-meta` when chosen; the
+  property GET otherwise; still unused by the app), `createKpiIssue(…, workType, kpiFields = null)`,
+  `updateKpiDefinition(id, { name?, fields?, meta? })` (`meta` is now the whole raw `kpi-meta` to store).
+- `kpiConfig.ts`: `readKpiFieldsConfig()`, the fields from the saved record only (a KVS read, no Jira
+  request), used by the Timeline/panel search and `updateKpi`; `createKpi` uses `readKpiSiteConfig().fields`.
+- `resolver.ts` (`visibleKpiSpaceIssues`, `createKpi`, `updateKpi`), `migrations/index.ts` (registry),
+  `index.ts`, `manifest.yml` (the `kpi-meta-sync` trigger + `kpi-meta-sync-fn` function, filter exactly as
+  01 A9), `kpiMeta.ts` and `createKpiIssue` comments, `storage-model.md` ("Revised by spec 11 · 05").
+- `testing/scaleFixture.ts`: `chooseKpiFields(fixture, shape, { direction: 'select' | 'text' })` with
+  shapes `pre-migration`, `migrated`, `mixed`, `field-edited` (not calling it = **not configured**), field
+  ids/options as on dev (`customfield_10910`, `customfield_10911`, `10652` / `10653`), `kpiFieldValues`,
+  `FixtureIssue.fieldValues`; the mock returns requested custom fields (null when empty), takes them in
+  `PUT /issue/{id}` and `POST /issue` (rejecting, like Jira, a field not in the space's field scheme for the
+  work type, 01 A4, and an unknown option), and answers `issuetype = {id} ORDER BY id ASC`.
+- Tests: `kpiSetup.test.ts` (04's "choosing fields changes nothing" now expects empty units/directions
+  until migrated), `runner.test.ts` (the real registry lists both migrations), `test-e2e/jira-api.e2e.ts`
+  (an env-gated step: `E2E_KPI_UNIT_FIELD`, `E2E_KPI_DIRECTION_FIELD`, `E2E_KPI_DIRECTION_OPTIONS`).
+- Harness: only a comment. It doesn't model the `kpi-meta` property, so there's no property shape to
+  mark; its `kpi-meta-to-fields` stand-in already had the real id, title, `writeAs` and reason.
+
+**Decisions made while implementing**
+
+- **Changed parts only.** `updateKpi` works out which of unit/direction changed against what the app
+  shows (the fields), sends only those fields, and rebuilds `kpi-meta` from the stored raw value with only
+  those parts replaced (unknown keys and the marker kept). A KPI with **no readable** `kpi-meta` gets one
+  built from its field values, **marked** when the fields are chosen (its values do come from the fields).
+  With `fields: null` the marker is dropped, so that path writes exactly today's `{ unit, direction }`.
+- **Create** sends only non-empty field values (an empty unit / no direction is simply not set) and always
+  a full `kpi-meta`, marked when the fields are chosen.
+- **Direction decoding**: text is matched case-insensitively after trimming (`Increase` typed in Jira
+  reads as `increase`); a select matches `{ id }` or a bare option id. Anything else reads as no
+  direction. The migration treats an unmapped option like an empty field (overwritten from `kpi-meta`).
+- **Trigger**: decided from the event alone first (no request unless the changelog names one of our
+  fields), then one `GET` of the property and, only if it differs, one `PUT`, both as the app. Values come
+  from the changelog's `toString` (text) / `to` (select option id), as the spec's signature says; the
+  other value stays as stored. Errors are logged, not thrown.
+- **Migration**:
+  - KPIs are listed **as the app** (`issuetype = {workTypeId} ORDER BY id ASC`, `fields=project`,
+    `properties=kpi-meta`, 25 per page, `nextPageToken`), so a KPI the admin can't see is a listed failure
+    rather than silently left out; each pending KPI is **re-read** (fields + `kpi-meta`, as the app) right
+    before its write and planned from that read, so a value set in Jira meanwhile is kept (field wins).
+    The `PUT` (fields + marked raw `kpi-meta`, one request) runs as the admin.
+  - Absent or marked `kpi-meta` → `alreadyDone`; written → `migrated`. A KPI whose field already
+    differed is counted as `migrated` and **logged** (`console.info`, Forge logs: key, field value,
+    `kpi-meta` value): 02's record has no separate count or list for it, so Settings doesn't show them
+    (deviation from Q2's "counted separately"). A 403/404 on the write is a failure naming the space
+    ("…you need Edit Issues in space KPI"); other Jira errors also name the space.
+  - An unparseable but present `kpi-meta` is treated as empty: the fields are kept and `kpi-meta` is
+    rewritten from them, marked (otherwise the migration could never finish).
+  - Not applicable while `fields` (or the work type) is null, with the harness's wording: "Choose the
+    KPI fields in Settings first (KPI building blocks)." No `dependsOn` 03 (the harness keeps its
+    harness-only dependency).
+  - `status().pending` pages every KPI as the app, 100 per page (up to 100 pages, else `null`).
+- **Request budgets unchanged**: the field config is read from KVS only; the field ids ride in the
+  existing KPI-space search, so `timelinePerf.test.ts` and the new budget test show the same requests.
+
+**API later stages use** (06 renames `fetchKpiSpaceIssues` → `fetchKpis`): pass the config's `fields` as
+the `kpiFields` argument of `fetchKpis` / `fetchKpiIssueForEdit` / `createKpiIssue`; edits go through
+`kpiMetaWrite(cfg, kpi.storedMeta, kpi.meta, change)` → `updateKpiDefinition`. `KpiSpaceIssue.meta` /
+`KpiIssueForEdit.meta` keep their type. The migration's site-wide `issuetype =` query is already what 06
+needs; 06's multi-space fixture should add a second space to the field scheme check.
+
+**Verification**: 776 unit tests (was 698) and 187 story tests pass; `typecheck` and `lint` clean;
+`forge lint` passes (only the existing `images` egress warning); the manifest parses and the trigger key
+(`kpi-meta-sync`) differs from its function key (`kpi-meta-sync-fn`).
+
+**Live check (Step 6) should verify** on bitovi-training (fields `customfield_10910` / `customfield_10911`,
+options `10652` Increase / `10653` Decrease, 14 KPIs, work type 10436): deploy (the trigger module is new:
+`forge deploy` + `forge install --upgrade`); before migrating, the Timeline shows empty units/directions;
+Upgrade data → *Move unit and direction into fields* runs to Done with 14 migrated (or fewer plus already
+done), each KPI's History shows one change by the admin, and `kpi-meta` reads `{ unit, direction, fields:
+true }`; the Timeline then matches the pre-deploy units/directions; creating and editing a KPI in the app
+sets the fields (History names the user) and keeps `kpi-meta` in step; editing *KPI Unit* in Jira's own UI
+on a migrated KPI rewrites `kpi-meta` within a few seconds (Forge logs show `[kpi-meta-sync]`), while the
+same edit on an unmigrated KPI and the app's own edits don't invoke it; JQL `cf[10910] ~ "…"` /
+`"KPI Direction" = Decrease` finds the right KPIs; the env-gated E2E step passes with
+`E2E_KPI_UNIT_FIELD=customfield_10910 E2E_KPI_DIRECTION_FIELD=customfield_10911
+E2E_KPI_DIRECTION_OPTIONS=10652,10653`.

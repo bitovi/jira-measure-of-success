@@ -28,6 +28,8 @@ import {
   KPI_HIERARCHY_NOT_SET_UP,
   KpiHierarchyLink,
   KpiMetaProperty,
+  kpiMetaWrite,
+  type KpiMetaChange,
   SetUpCentralSpaceInput,
   SetUpKpiFieldsInput,
   SetUpKpiSpaceStepInput,
@@ -89,7 +91,7 @@ import {
   type KpiSpaceIssue,
 } from './jira';
 import { listMigrations, retryMigration, runMigrationBatch } from './migrations/runner';
-import { loadKpiSiteConfig, readKpiSiteConfig, writeKpiSiteConfig } from './kpiConfig';
+import { loadKpiSiteConfig, readKpiFieldsConfig, readKpiSiteConfig, writeKpiSiteConfig } from './kpiConfig';
 import {
   applyKpiSpaceStep,
   ensureKpiFields,
@@ -293,7 +295,8 @@ async function visibleKpiSpaceIssues(
   hierarchy: KpiHierarchyLink | null,
   accessP: Promise<KpiSpaceAccess | null>,
 ): Promise<KpiSpaceIssue[]> {
-  const search = fetchKpiSpaceIssues(spaceKey, hierarchy).then(
+  // The fields config is a KVS read (no Jira request), so the request budgets don't change.
+  const search = readKpiFieldsConfig().then((kpiFields) => fetchKpiSpaceIssues(spaceKey, hierarchy, kpiFields)).then(
     (issues) => ({ issues }),
     (error: unknown) => ({ error }),
   );
@@ -1051,8 +1054,8 @@ define('createKpi', async ({ payload }) => {
       throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — the link type KPIs nest with was deleted; choose another in Settings.`);
     }
   }
-  const { workType } = await readKpiSiteConfig();
-  return createKpiIssue(space.projectId, input, hierarchy, workType);
+  const { workType, fields } = await readKpiSiteConfig();
+  return createKpiIssue(space.projectId, input, hierarchy, workType, fields);
 });
 
 // Edit a KPI: rename it, change its unit/direction, and/or move it (with its
@@ -1069,7 +1072,11 @@ define('updateKpi', async ({ payload }) => {
   if (!parsed.success) throw new Error(parsed.error.issues[0]?.message ?? 'Invalid KPI edit.');
   const input = parsed.data;
 
-  const [space, hierarchy] = await Promise.all([readResolvedKpiSpaceConfig(), readKpiHierarchyConfig()]);
+  const [space, hierarchy, kpiFields] = await Promise.all([
+    readResolvedKpiSpaceConfig(),
+    readKpiHierarchyConfig(),
+    readKpiFieldsConfig(),
+  ]);
   if (!space.key || !space.projectId) throw new Error('KPI space is not set up — configure it in Settings first.');
   const spaceKey = space.key;
   const spaceLabel = space.name ?? space.key;
@@ -1079,7 +1086,7 @@ define('updateKpi', async ({ payload }) => {
   const read = (idOrKey: string): Promise<KpiIssueForEdit | null> => {
     let pending = reads.get(idOrKey);
     if (!pending) {
-      pending = fetchKpiIssueForEdit(idOrKey);
+      pending = fetchKpiIssueForEdit(idOrKey, kpiFields);
       reads.set(idOrKey, pending);
     }
     return pending;
@@ -1111,7 +1118,11 @@ define('updateKpi', async ({ payload }) => {
     direction: input.direction !== undefined ? input.direction : currentMeta.direction,
   };
   const nameChanged = name !== kpi.name;
-  const metaChanged = meta.unit !== currentMeta.unit || meta.direction !== currentMeta.direction;
+  const metaChange: KpiMetaChange = {
+    ...(meta.unit !== currentMeta.unit ? { unit: meta.unit } : {}),
+    ...(meta.direction !== currentMeta.direction ? { direction: meta.direction } : {}),
+  };
+  const metaChanged = Object.keys(metaChange).length > 0;
   if ((nameChanged || metaChanged) && !access.edit) throw new Error(kpiPermissionMessage('edit', spaceLabel, kpi.key));
 
   // Work out the move (only when the parent was sent) from the KPI's current links.
@@ -1202,7 +1213,11 @@ define('updateKpi', async ({ payload }) => {
 
   if (nameChanged || metaChanged) {
     try {
-      await updateKpiDefinition(kpi.id, { ...(nameChanged ? { name } : {}), ...(metaChanged ? { meta } : {}) });
+      await updateKpiDefinition(kpi.id, {
+        ...(nameChanged ? { name } : {}),
+        // Spec 11 · 05: the changed fields + the whole kpi-meta, rebuilt from what's stored.
+        ...(metaChanged ? kpiMetaWrite(kpiFields, kpi.storedMeta, currentMeta, metaChange) : {}),
+      });
     } catch (e) {
       const message = e instanceof JiraForbiddenError ? kpiPermissionMessage('edit', spaceLabel, kpi.key) : (e as Error).message;
       if (!move) throw new Error(message);

@@ -156,7 +156,7 @@ describe('site configuration (Step 3)', () => {
     });
   });
 
-  it('an upgraded install with no new record reads and writes exactly as before (Timeline and panel unchanged)', async () => {
+  it('an upgraded install with no new record reads as before; choosing fields only empties unit and direction until migrated', async () => {
     const before = {
       timeline: await call<TimelineData>('getTimelineSkeleton', undefined, {}),
       panel: await call<PanelListData>('getPanelList', { issueId: '200000' }, {}),
@@ -167,8 +167,11 @@ describe('site configuration (Step 3)', () => {
       timeline: await call<TimelineData>('getTimelineSkeleton', undefined, {}),
       panel: await call<PanelListData>('getPanelList', { issueId: '200000' }, {}),
     };
-    expect(after.timeline.data).toEqual(before.timeline.data);
-    expect(after.panel.data).toEqual(before.panel.data);
+    // Spec 11 · 05: once fields are chosen they're the only source, and the pre-migration KPIs' fields are empty.
+    const unmigrated = <T,>(data: T): T =>
+      JSON.parse(JSON.stringify(data), (key, value) => (key === 'unit' ? '' : key === 'direction' ? null : value)) as T;
+    expect(after.timeline.data).toEqual(unmigrated(before.timeline.data));
+    expect(after.panel.data).toEqual(unmigrated(before.panel.data));
     expect(before.timeline.byEndpoint('GET /rest/api/3/field')).toBe(1);
     expect(after.timeline.byEndpoint('GET /rest/api/3/field')).toBe(1);
     expect(after.timeline.byEndpoint('GET /rest/api/3/issuetype')).toBe(0);

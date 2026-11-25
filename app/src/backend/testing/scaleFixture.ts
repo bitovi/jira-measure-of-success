@@ -6,6 +6,7 @@ import {
   type StoredAssignments,
   type IssueLinkTypeInfo,
   type KpiDirection,
+  type KpiFieldsConfig,
   type RollupConfig,
 } from '../../domain/index';
 
@@ -92,6 +93,8 @@ export interface FixtureIssue {
   /** keys the issue had before it moved; Jira still resolves them (01 D1) */
   formerKeys?: string[];
   properties: Record<string, unknown>;
+  /** values of `fixture.customFields`, as Jira returns them (text: string; select: `{ self, id, value }`) */
+  fieldValues?: Record<string, unknown>;
 }
 
 /** Who a mock request runs as — mirrors `api.asUser()` / `api.asApp()`. */
@@ -432,6 +435,100 @@ export function addRefEdgeCases(fixture: ScaleFixture): RefEdgeCases {
   return { moved, hiddenKpiId, mixedIssueId, deletedOnlyIssueId };
 }
 
+// ── KPI fields (spec 11 · 05) ────────────────────────────────────────────────
+
+/** The unit/direction fields as on bitovi-training (dev). */
+export const KPI_UNIT_FIELD_ID = 'customfield_10910';
+export const KPI_DIRECTION_FIELD_ID = 'customfield_10911';
+export const KPI_DIRECTION_OPTION_IDS = { increase: '10652', decrease: '10653' } as const;
+/** The fixture's KPI work type id (`issuetype = …`; the KPI entry of `ICON_ID`, declared below). */
+export const KPI_WORK_TYPE_ID = '10300';
+
+/**
+ * How far the fixture's KPIs are along once the fields are chosen. Not calling
+ * `chooseKpiFields` at all is the **not configured** shape (`fields: null`).
+ * - `pre-migration`: fields empty, `kpi-meta` unmarked (what an upgraded site has)
+ * - `migrated`: fields hold the values, `kpi-meta` marked
+ * - `mixed`: even-indexed KPIs migrated, odd ones not
+ * - `field-edited`: pre-migration, but KPI-2's unit field was set in Jira to
+ *   something else (`FIELD_EDITED_UNIT`) before the migration ran
+ */
+export type KpiFieldsShape = 'pre-migration' | 'migrated' | 'mixed' | 'field-edited';
+export const FIELD_EDITED_UNIT = 'orders';
+
+/** A unit/direction as Jira returns the fields' values (the mock's stored format). */
+export function kpiFieldValues(
+  cfg: KpiFieldsConfig,
+  meta: { unit: string; direction: KpiDirection | null },
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (meta.unit) out[cfg.unit.fieldId] = meta.unit;
+  if (meta.direction) {
+    const d = cfg.direction;
+    out[d.fieldId] =
+      d.kind === 'text'
+        ? meta.direction
+        : {
+            self: `https://site/rest/api/3/customFieldOption/${d.optionIds[meta.direction]}`,
+            id: d.optionIds[meta.direction],
+            value: meta.direction === 'increase' ? 'Increase' : 'Decrease',
+          };
+  }
+  return out;
+}
+
+/**
+ * Choose the unit/direction fields on the fixture site (spec 11 · 04's saved
+ * config): creates them, puts them in the KPI space's field scheme for the KPI
+ * type, saves `kpi:config:site`, and puts the KPIs in `shape`.
+ */
+export function chooseKpiFields(
+  fixture: ScaleFixture,
+  shape: KpiFieldsShape,
+  options: { direction?: 'select' | 'text' } = {},
+): KpiFieldsConfig {
+  const select = (options.direction ?? 'select') === 'select';
+  const cfg: KpiFieldsConfig = {
+    unit: { fieldId: KPI_UNIT_FIELD_ID },
+    direction: select
+      ? { fieldId: KPI_DIRECTION_FIELD_ID, kind: 'select', optionIds: { ...KPI_DIRECTION_OPTION_IDS } }
+      : { fieldId: KPI_DIRECTION_FIELD_ID, kind: 'text' },
+  };
+  fixture.customFields.push(
+    { id: KPI_UNIT_FIELD_ID, name: 'KPI Unit', custom: TEXT_FIELD_TYPE },
+    select
+      ? {
+          id: KPI_DIRECTION_FIELD_ID,
+          name: 'KPI Direction',
+          custom: SELECT_FIELD_TYPE,
+          options: [
+            { id: KPI_DIRECTION_OPTION_IDS.increase, value: 'Increase' },
+            { id: KPI_DIRECTION_OPTION_IDS.decrease, value: 'Decrease' },
+          ],
+        }
+      : { id: KPI_DIRECTION_FIELD_ID, name: 'KPI Direction', custom: TEXT_FIELD_TYPE },
+  );
+  const scheme = fixture.fieldSchemes.get(DEFAULT_FIELD_SCHEME_ID)!;
+  scheme.set(KPI_UNIT_FIELD_ID, [KPI_WORK_TYPE_ID]);
+  scheme.set(KPI_DIRECTION_FIELD_ID, [KPI_WORK_TYPE_ID]);
+  fixture.kvs.set('kpi:config:site', { workType: { id: KPI_WORK_TYPE_ID, name: 'KPI' }, fields: cfg, schemes: {} });
+
+  fixture.kpiIds.forEach((id, index) => {
+    const issue = fixture.issues.get(id)!;
+    const meta = issue.properties['kpi-meta'] as { unit: string; direction: KpiDirection | null } | undefined;
+    if (!meta) return;
+    const migrated = shape === 'migrated' || (shape === 'mixed' && index % 2 === 0);
+    if (migrated) {
+      issue.fieldValues = kpiFieldValues(cfg, meta);
+      issue.properties['kpi-meta'] = { ...meta, fields: true };
+    }
+    if (shape === 'field-edited' && index === 1) {
+      issue.fieldValues = kpiFieldValues(cfg, { unit: FIELD_EDITED_UNIT, direction: null });
+    }
+  });
+  return cfg;
+}
+
 // ── Mock Jira REST API ───────────────────────────────────────────────────────
 
 interface MockResponse {
@@ -494,6 +591,7 @@ function issueJson(
   properties: string[],
   link: FixtureLinkShape,
   keyOf: (id: string) => string | undefined = () => undefined,
+  customFieldIds: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   const parentEnd = link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue';
   const parentLinks = [
@@ -521,6 +619,8 @@ function issueJson(
   };
   const picked: Record<string, unknown> = {};
   for (const f of fields) if (f in all && all[f] !== undefined) picked[f] = all[f];
+  // Jira returns a requested custom field even when it's empty (null).
+  for (const f of fields) if (customFieldIds.has(f)) picked[f] = issue.fieldValues?.[f] ?? null;
   const out: Record<string, unknown> = { id: issue.id, key: issue.key, fields: picked };
   if (properties.length > 0) {
     const props: Record<string, unknown> = {};
@@ -561,6 +661,13 @@ function runJql(fixture: ScaleFixture, jql: string): FixtureIssue[] | null {
   if (m) return childrenOf(m[1]);
   m = /^project\s*=\s*(\w+)/i.exec(q);
   if (m && m[1] === KPI_PROJECT.key) return fixture.kpiIds.map(get).filter((i): i is FixtureIssue => !!i);
+  // Spec 11 · 05: every issue of a work type (by id or name), site-wide.
+  m = /^issuetype\s*=\s*"?([^"]+?)"?$/i.exec(q);
+  if (m) {
+    const type = fixture.issueTypes.find((t) => t.id === m![1] || t.name === m![1]);
+    const matched = type ? [...fixture.issues.values()].filter((i) => i.type === type.name) : [];
+    return orderBy && /^id\s+ASC$/i.test(orderBy.trim()) ? matched.sort((a, b) => Number(a.id) - Number(b.id)) : matched;
+  }
   // `kpi-assignments` index clauses, ANDed: matched against the stored property (no index lag).
   const clauses = q.split(/\s+AND\s+/i);
   if (clauses.every((c) => TARGETS_CLAUSE.test(c.trim()))) {
@@ -602,6 +709,11 @@ function projectKeyOf(issue: FixtureIssue): string {
   return issue.type === 'KPI' ? KPI_PROJECT.key : issue.key.split('-')[0];
 }
 
+/** The project id the field scheme lookup uses (work projects have none: they get no custom fields). */
+function projectIdOf(issue: FixtureIssue): string {
+  return issue.type === 'KPI' ? KPI_PROJECT.id : `work-${projectKeyOf(issue)}`;
+}
+
 /** Jira project-permission key → MockProjectAccess flag. */
 const PROJECT_PERMISSION: Record<string, keyof MockProjectAccess> = {
   BROWSE_PROJECTS: 'browse',
@@ -632,6 +744,51 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     [...fixture.issues.values()].find((i) => i.key === idOrKey) ??
     [...fixture.issues.values()].find((i) => i.formerKeys?.includes(idOrKey));
   const keyOf = (id: string) => fixture.issues.get(id)?.key;
+  const customFieldIds = () => new Set(fixture.customFields.map((f) => f.id));
+  /**
+   * The custom field values a create/edit sets, as Jira stores them, or the
+   * 400 Jira answers: a field not in the space's field scheme for the work
+   * type can't be set (01 A4), and a select takes an existing option.
+   */
+  const customFieldWrites = (
+    type: FixtureIssue['type'],
+    projectId: string,
+    reqFields: Record<string, unknown> | undefined,
+  ): { values: Record<string, unknown> } | { error: MockResponse } => {
+    const values: Record<string, unknown> = {};
+    for (const [id, value] of Object.entries(reqFields ?? {})) {
+      const field = fixture.customFields.find((f) => f.id === id);
+      if (!field) continue;
+      const types = fixture.fieldSchemes.get(fixture.fieldSchemeOf.get(projectId) ?? '')?.get(id);
+      if (!types || (types.length > 0 && !types.includes(String(ICON_ID[type])))) {
+        return {
+          error: respond(400, {
+            errorMessages: [],
+            errors: { [id]: `Field '${id}' cannot be set. It is not on the appropriate screen, or unknown.` },
+          }),
+        };
+      }
+      if (value === null) {
+        values[id] = null;
+      } else if (field.custom === SELECT_FIELD_TYPE) {
+        const ref = value as { id?: string; value?: string };
+        const option = (field.options ?? []).find((o) => o.id === ref.id || o.value === ref.value);
+        if (!option) return { error: respond(400, { errorMessages: [], errors: { [id]: `Option id '${ref.id}' is not valid` } }) };
+        values[id] = { self: `https://site/rest/api/3/customFieldOption/${option.id}`, id: option.id, value: option.value };
+      } else {
+        values[id] = String(value);
+      }
+    }
+    return { values };
+  };
+  const applyFieldValues = (issue: FixtureIssue, values: Record<string, unknown>) => {
+    const next = { ...issue.fieldValues };
+    for (const [id, value] of Object.entries(values)) {
+      if (value === null) delete next[id];
+      else next[id] = value;
+    }
+    issue.fieldValues = next;
+  };
   let nextIssueId = 900_000;
   let nextOptionId = 10_650;
   let clock = Date.UTC(2026, 6, 1);
@@ -712,7 +869,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       const page = seen.slice(offset, offset + maxResults);
       const more = offset + maxResults < seen.length;
       return respond(200, {
-        issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture), keyOf)),
+        issues: page.map((i) => issueJson(i, fields, properties, kpiLinkShape(fixture), keyOf, customFieldIds())),
         isLast: !more,
         ...(more ? { nextPageToken: String(offset + maxResults) } : {}),
       });
@@ -731,7 +888,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!issue || !visible(issue, as)) return notFound();
       const fields = (params.get('fields') ?? '').split(',').filter(Boolean);
       const properties = (params.get('properties') ?? '').split(',').filter(Boolean);
-      return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture), keyOf));
+      return respond(200, issueJson(issue, fields, properties, kpiLinkShape(fixture), keyOf, customFieldIds()));
     }
 
     const prop = /^\/rest\/api\/3\/issue\/([^/]+)\/properties\/([^/]+)$/.exec(path);
@@ -782,6 +939,9 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       if (!req.fields && !req.update) {
         return respond(400, { errorMessages: ["one of 'fields' or 'update' required"], errors: {} });
       }
+      const custom = customFieldWrites(issue.type, projectIdOf(issue), req.fields);
+      if ('error' in custom) return custom.error;
+      applyFieldValues(issue, custom.values);
       if (typeof req.fields?.summary === 'string') issue.summary = req.fields.summary;
       for (const p of req.properties ?? []) issue.properties[p.key] = p.value;
       const reading = req.fields?.[READING_FIELD_ID];
@@ -800,10 +960,12 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
 
     if (method === 'POST' && path === '/rest/api/3/issue') {
       const req = JSON.parse(String(body)) as {
-        fields: { summary: string; project?: { id?: string; key?: string } };
+        fields: { summary: string; project?: { id?: string; key?: string }; [field: string]: unknown };
         properties?: Array<{ key: string; value: unknown }>;
       };
       if (as === 'user' && !accessTo(KPI_PROJECT.key).create) return forbidden('create issues in this project');
+      const custom = customFieldWrites('KPI', KPI_PROJECT.id, req.fields);
+      if ('error' in custom) return custom.error;
       const id = String(nextIssueId++);
       const key = `${KPI_PROJECT.key}-${fixture.kpiIds.length + 1}`;
       fixture.issues.set(id, {
@@ -817,6 +979,7 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
         kpiParentId: null,
         properties: Object.fromEntries((req.properties ?? []).map((p) => [p.key, p.value])),
       });
+      applyFieldValues(fixture.issues.get(id)!, custom.values);
       fixture.kpiIds.push(id);
       return respond(201, { id, key });
     }
