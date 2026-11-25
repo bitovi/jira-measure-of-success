@@ -1,6 +1,6 @@
 # 04 — KPI configuration (Settings)
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft: design pending gate G2** · Depends on: 01, 02
+Part of [11 — Scalable KPI data](../plan.md). Status: **G2 decided by the implementer (autopilot), pending Justin's review** · Depends on: 01, 02
 (and 03 for Step 7's live check only).
 
 Prototypes: [kpi-space-setup.html](./kpi-space-setup.html) (v3, the latest).
@@ -130,9 +130,51 @@ action that runs every pending migration in order, is decided at G2 (Q7).
 Generated from the configuration (names of the actual work type, fields and schemes), as in v3's
 section 3. Who does what (Jira admin vs space admin) comes from 01 B4. The same text goes in the README.
 
+## Decided design (2026-11-24, implementer, autopilot; revisit at review)
+
+Justin asked the implementer to continue without stopping at G2, so the decisions below (one per
+question, recorded under *Questions*) were made from 01's findings and the v3 prototype, favouring the
+smallest design that works for one central space and for other spaces. The UI follows v3's three parts.
+**Steps 1–2 (extending the prototype and the review) are replaced by this section**; the built
+Settings page in the harness is what Justin reviews.
+
+- **Fields (Q1 c, Q2 select, Q10):** Settings **creates** *KPI Unit* (short text) and *KPI Direction*
+  (single select with options *Increase* / *Decrease*), or the admin **picks existing** fields (a text
+  field for unit; a single select with two options mapped to increase/decrease, or a text field holding
+  `increase`/`decrease`). Saved together into `fields` (all or nothing).
+- **Making them usable (Q3): field schemes, no new scheme.** `ensureKpiFieldsInSpace(projectId)` adds
+  unit and direction to **the space's current field scheme**, restricted to the KPI work type
+  (`PUT /config/fieldschemes/fields { [fieldId]: [{ schemeIds: [id], restrictedToWorkTypes: [typeId] }] }`,
+  01 B2/A4). Harmless when the scheme is shared: other work types don't get the fields. Run for the
+  central space when fields are saved or the space is set, and offered per space in the guide.
+  Contexts aren't touched (01 A3). The select's options live in its one global context.
+- **Screens:** `ensureKpiFieldsOnScreens(projectId)` adds unit and direction to the first tab of every
+  screen the space uses for the KPI work type (its work type screen scheme → screen scheme → screens).
+  Shared screens are fine: the field scheme hides the fields from other work types. Optional (only for
+  people editing in Jira; the app's writes don't need it, 01 A4/B5).
+- **No work type scheme block (Q4).** Adding the KPI type to a space's existing work type scheme (today's
+  `ensureKpiIssueTypeOnProject`) is enough; `schemes` in the config stays for display only.
+- **Central space optional (Q5)** for new installs; existing installs keep theirs (derived).
+- **Set up everything (Q6):** kept: work type → fields → central space (create) → fields in its scheme
+  and on its screens → hierarchy link type.
+- **Upgrade data (Q7):** a card **at the top**, shown expanded only when a migration isn't `done`
+  (otherwise one collapsed line, "All data is up to date"). One **Upgrade** button runs every pending
+  migration in order (looping `runMigrationBatch`), with **Pause**; each row shows its state and counts,
+  and a failed row has **Retry failed**.
+- **Changing a block later (Q8): allowed with a warning** ("Existing KPIs keep their values in the old
+  field/type; they aren't moved."), no migration.
+- **Per install (Q9):** each install configures itself; the "use existing" pickers list the site's
+  fields, so another install's fields are easy to pick.
+- **Icon (Q11):** a work type the app **creates** gets the bullseye as a **PNG** (01 B7); existing types
+  are left alone.
+- **Guide for other spaces:** generated text naming the real work type and fields, in three steps (add
+  the work type to the space's work type scheme; add the two fields to its field scheme for that type;
+  optionally to its screens), each with a **Do it for {space}** action in Settings for a Jira admin. B4
+  (what a space admin can do alone) is deferred, so the guide says these steps need a Jira admin.
+
 ## Implementation steps
 
-### Step 1 — Extend the prototype with the upgrade path
+### Step 1 — ~~Extend the prototype with the upgrade path~~ (replaced by *Decided design*)
 
 - Keep v3 as `kpi-space-setup-v3.html` and make `kpi-space-setup.html` the new version. Add to it:
   - the **existing install** scenario as it really will look after upgrading: work type and central
@@ -143,7 +185,7 @@ section 3. Who does what (Jira admin vs space admin) comes from 01 B4. The same 
   - anything 01's findings change (e.g. field schemes vs contexts, who can do what).
 - **Verify:** every scenario button works; nothing talks to Jira.
 
-### Step 2 — 🔍 Gate G2: prototype review
+### Step 2 — 🔍 Gate G2: prototype review (decided by the implementer; Justin reviews the built page)
 
 - **Stop. Ask Justin to review** the prototype (and v1–v3 for comparison) together with 01's findings.
 - Write the decisions into *Questions* below, then **rewrite *Design* and Steps 3–7** to match before
@@ -201,9 +243,11 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
    - **(b) Admin-created over REST** by Settings (v3's *Create fields*): ordinary Jira fields, shared
      by every install on the site, can be a dropdown, no Forge formatter or validation.
    - **(c) (b) plus "use existing"** (v3's picker): reuse fields a site already has.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** (c).
 2. **Direction field type**: a single-select dropdown with an option mapping (v3), or text
    `increase` / `decrease` with a formatter, validation and custom editor (earlier draft; only
    possible with 1a)?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** a single-select dropdown with an option mapping (text still accepted for an existing field).
 3. **Making the fields usable in a space** (01 A3/B2 answer most of this: **contexts can no longer
    restrict a field**: Jira gives each field one global context that can't be narrowed or deleted, and
    field configuration schemes are gone on bitovi-training. **Field schemes are the only way**, with the
@@ -213,23 +257,32 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
    field **contexts** limited to the KPI work type in all projects (earlier draft), or both? Depends on
    01 A3 and B2. Note: Jira marks the field schemes REST API (`/rest/api/3/config/fieldschemes`)
    **experimental**, so it may change under us. Contexts and field configuration schemes are stable.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** add the fields to each KPI space's **current** field scheme, restricted to the KPI type; no KPI-specific scheme.
 4. **KPI work type scheme**: keep this optional block (a scheme with only the KPI type, for KPI-only
    spaces like the central one)?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** no; adding the KPI type to the space's existing work type scheme is enough.
 5. **Is the central space optional?** v3 lets you skip it. Existing installs always have one (and the
    customer's report needs it). (Add KPI no longer depends on it: 08 never defaults to it.)
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** optional for new installs.
 6. **"Set up everything with defaults"**: keep the shortcut?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** keep it.
 7. **Upgrade data**: where on the page, shown only when there's something to do (or collapsed "All data
    is up to date")? One **Upgrade** button that runs every pending migration in order, or a Run button
    per migration?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** a card at the top, collapsed when everything is done; one **Upgrade** button plus per-row **Retry failed**.
 8. **Changing a block later** ("Change…" in v3): what happens to existing KPIs if an admin switches
    the work type or the unit field? Disallow once KPIs exist, warn, or offer a migration?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** allowed, with a warning; nothing is moved.
 9. **Config per install**: each install (dev, staging, prod) keeps its own `kpi:config:site`, so each
    one's admin configures it. With shared fields (1b/1c) they'd normally choose the same ones. OK, or
    should Settings offer "use the same as another install"?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** per install; the pickers make reuse easy.
 10. **Field names** when the app creates them: "KPI Unit" / "KPI Direction" (draft), or
     "Unit" / "Direction"?
+    - **Decided (2026-11-24, implementer, autopilot; revisit at review):** "KPI Unit" / "KPI Direction".
 11. **KPI type icon.** A work type the app creates gets a target (bullseye) avatar, as in the
     [picker prototype](../07-kpi-picker/kpi-picker.html). Should Settings also offer to set it on an
     **existing** KPI type (e.g. bitovi-training's, which has Jira's generic checkbox avatar), or leave
     existing types' icons alone? Changing it affects every space that uses the type. 01 B7 checks the
     API. (01 B7: PNG, GIF or JPEG only; SVG is rejected. Ship the bullseye as a PNG.)
+    - **Decided (2026-11-24, implementer, autopilot; revisit at review):** only types the app creates get the PNG bullseye; existing types are left alone.

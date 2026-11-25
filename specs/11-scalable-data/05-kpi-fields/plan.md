@@ -204,14 +204,18 @@ Settings first").
 
 1. **Rename `KpiMetaProperty` → `KpiMeta`** now that it isn't only a property? A mechanical rename
    across domain and backend.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** no rename now (churn without a behaviour change); the cleanup release can do it.
 2. **A field that already differs wins.** If a field was edited in Jira's own UI before the migration
    ran (only possible when the fields are on screens first), or a "use existing" field already held
    values, the migration keeps the field and rewrites `kpi-meta` to match, listing each one. OK? Or
    should `kpi-meta` win, or should 04 only put the fields on screens **after** this migration is
    done (the earlier draft's ordering)?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** the field wins, as drafted, listed for review.
 3. **Sync trigger.** (01 A9: the filtered trigger works as designed, so this is only a product
    decision now.) Add the `avi:jira:updated:issue` trigger so `kpi-meta` follows edits made in
    Jira's UI (for the customer's report) until the cleanup release? Without it, the
    customer's report can show an old unit or direction after a Jira-side edit.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** yes, add the trigger (Step 4).
 4. **Migrating as the admin**: History names the admin for every migrated KPI. Fine, or migrate as the
    app (02 Q2)?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** as the admin, as drafted (02 Q2).
