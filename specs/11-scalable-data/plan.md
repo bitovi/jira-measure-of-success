@@ -108,6 +108,8 @@ graph LR
 
 ### Implementation status (2026-11-25)
 
+**Picking this up? Start with [status.md](./status.md).**
+
 Implemented on `feat/11-scalable-data` (local, not pushed) and checked live on dev, as Justin, a Jira
 admin. **Every stage through 08 is done; 09 stopped at gate G5.** Justin asked the implementer to keep
 going without stopping at the gates, so **G1, G2 and G4 were decided by the implementer** and are
