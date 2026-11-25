@@ -740,6 +740,8 @@ interface IssueJsonSite {
   issue: (id: string) => FixtureIssue | undefined;
   project: (issue: FixtureIssue) => { id: string; key: string; name: string };
   visible: (issue: FixtureIssue) => boolean;
+  /** issues linked under this one as KPI children (the other end of their parent links) */
+  kpiChildren: (id: string) => Array<{ child: FixtureIssue; linkId: string }>;
 }
 
 function issueJson(
@@ -751,6 +753,7 @@ function issueJson(
   customFieldIds: ReadonlySet<string> = new Set(),
 ): Record<string, unknown> {
   const parentEnd = link.parentEnd === 'outward' ? 'outwardIssue' : 'inwardIssue';
+  const childEnd = link.parentEnd === 'outward' ? 'inwardIssue' : 'outwardIssue';
   const parentLinks = [
     ...(issue.kpiParentId ? [{ id: parentLinkId(issue, issue.kpiParentId, true), parentId: issue.kpiParentId }] : []),
     ...(issue.extraKpiParentIds ?? []).map((parentId) => ({ id: parentLinkId(issue, parentId, false), parentId })),
@@ -769,21 +772,33 @@ function issueJson(
     status: { statusCategory: { key: 'indeterminate' } },
     parent: issue.parentId ? { id: issue.parentId } : undefined,
     // Like Jira (01 C2), a link to an issue the caller can't see is left out.
-    issuelinks: parentLinks.flatMap((l) => {
-      const parent = site.issue(l.parentId);
-      if (parent && !site.visible(parent)) return [];
-      return [
-        {
-          id: l.id,
-          type: link.type,
-          [parentEnd]: {
-            id: l.parentId,
-            key: parent?.key,
-            ...(parent ? { fields: { issuetype: { id: typeIdOf(parent), name: parent.type } } } : {}),
-          },
-        },
-      ];
-    }),
+    issuelinks: fields.includes('issuelinks')
+      ? [
+          ...parentLinks.flatMap((l) => {
+            const parent = site.issue(l.parentId);
+            if (parent && !site.visible(parent)) return [];
+            return [
+              {
+                id: l.id,
+                type: link.type,
+                [parentEnd]: {
+                  id: l.parentId,
+                  key: parent?.key,
+                  ...(parent ? { fields: { issuetype: { id: typeIdOf(parent), name: parent.type } } } : {}),
+                },
+              },
+            ];
+          }),
+          ...site
+            .kpiChildren(issue.id)
+            .filter(({ child }) => site.visible(child))
+            .map(({ child, linkId }) => ({
+              id: linkId,
+              type: link.type,
+              [childEnd]: { id: child.id, key: child.key, fields: { issuetype: { id: typeIdOf(child), name: child.type } } },
+            })),
+        ]
+      : undefined,
     [RANK_FIELD_ID]: issue.rank ?? null,
   };
   const picked: Record<string, unknown> = {};
@@ -946,11 +961,30 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
     const p = fixture.projects.get(key);
     return p ? { id: p.id, key, name: p.name } : { id: `work-${key}`, key, name: key };
   };
-  const siteFor = (as: MockPrincipal): IssueJsonSite => ({
-    issue: (id) => fixture.issues.get(id),
-    project: projectOf,
-    visible: (issue) => visible(issue, as),
-  });
+  const siteFor = (as: MockPrincipal): IssueJsonSite => {
+    let children: Map<string, Array<{ child: FixtureIssue; linkId: string }>> | null = null;
+    return {
+      issue: (id) => fixture.issues.get(id),
+      project: projectOf,
+      visible: (issue) => visible(issue, as),
+      kpiChildren: (id) => {
+        if (!children) {
+          children = new Map();
+          for (const i of fixture.issues.values()) {
+            if (i.type !== 'KPI') continue;
+            const parents = [
+              ...(i.kpiParentId ? [{ parentId: i.kpiParentId, primary: true }] : []),
+              ...(i.extraKpiParentIds ?? []).map((parentId) => ({ parentId, primary: false })),
+            ];
+            for (const { parentId, primary } of parents) {
+              children.set(parentId, [...(children.get(parentId) ?? []), { child: i, linkId: parentLinkId(i, parentId, primary) }]);
+            }
+          }
+        }
+        return children.get(id) ?? [];
+      },
+    };
+  };
   const customFieldIds = () => new Set(fixture.customFields.map((f) => f.id));
   /**
    * The custom field values a create/edit sets, as Jira stores them, or the
@@ -1298,7 +1332,12 @@ export function createMockJira(fixture: ScaleFixture): MockJira {
       return respond(200, projectJson(...entry));
     }
     if (method === 'GET' && path === '/rest/api/3/project/search') {
-      const all = [...fixture.projects.entries()].map(([key, p]) => projectJson(key, p));
+      const query = (params.get('query') ?? '').toLowerCase();
+      const all = [...fixture.projects.entries()]
+        .filter(([key, p]) => !query || key.toLowerCase().includes(query) || p.name.toLowerCase().includes(query))
+        .filter(([key]) => as === 'app' || accessTo(key).browse)
+        .sort(([a], [b]) => (params.get('orderBy') === 'key' ? (a < b ? -1 : a > b ? 1 : 0) : 0))
+        .map(([key, p]) => projectJson(key, p));
       const startAt = Number(params.get('startAt') ?? 0);
       const max = Number(params.get('maxResults') ?? 50);
       return respond(200, { values: all.slice(startAt, startAt + max), isLast: startAt + max >= all.length });

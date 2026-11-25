@@ -28,13 +28,17 @@ import {
   retryMigration,
   kpiKeyOf,
   kpiSetup,
+  pickerApi,
   spaceOfKey,
 } from './fixtures/mock-resolvers.js';
 import { KPI_SPACES } from './fixtures/hierarchy.js';
 import {
   accessMode,
+  applyAccessToLookup,
+  applyAccessToOptions,
   applyAccessToPanelList,
   applyAccessToPanelParts,
+  applyAccessToSearch,
   applyAccessToPanelValues,
   applyAccessToTimeline,
   assertKpiWriteAllowed,
@@ -81,6 +85,16 @@ const resolvers: Record<string, Handler> = {
   },
   removeAssignment: (p) =>
     applyAccessToPanelParts(removeAssignment(p?.issueId, p?.kpiId), accessMode(), hiddenKpiId()),
+  // KPI picker (spec 11 · 07): the views that load when opened. `?pickerDelayMs=`
+  // (default 400) is each load's round trip.
+  listKpisInSpaces: async (p) =>
+    applyAccessToOptions(await pickerApi(pickerDelay()).listKpisInSpaces(p?.projectKeys ?? []), accessMode(), hiddenKpiId()),
+  searchKpis: async (p) =>
+    applyAccessToSearch(await pickerApi(pickerDelay()).searchKpis(p?.text ?? '', p?.projectKey), accessMode(), hiddenKpiId()),
+  listKpiSpaces: (p) => pickerApi(pickerDelay()).listKpiSpaces(p?.query ?? '', p?.startAt ?? 0),
+  lookupKpiRef: async (p) =>
+    applyAccessToLookup(await pickerApi(pickerDelay()).lookupKpiRef(String(p?.ref ?? '')), accessMode(), hiddenKpiId()),
+  getKpiCurrentValue: (p) => pickerApi(pickerDelay()).getKpiCurrentValue(String(p?.kpiId ?? '')),
   // Settings
   getHierarchyLevels: () => getHierarchyLevels(),
   getRollupConfig: () => getRollupConfig(),
@@ -190,6 +204,10 @@ async function simulateMutation(): Promise<void> {
 async function simulateAccessLookup(): Promise<void> {
   const delay = Number(new URLSearchParams(globalThis.location?.search ?? '').get('accessDelayMs') ?? 300);
   if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+function pickerDelay(): number {
+  return Number(new URLSearchParams(globalThis.location?.search ?? '').get('pickerDelayMs') ?? 400);
 }
 
 async function migrationDelay(): Promise<void> {

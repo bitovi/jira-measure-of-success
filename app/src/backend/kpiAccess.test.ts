@@ -112,11 +112,12 @@ describe('reads follow the user’s permissions in each KPI space', () => {
     expect(bodies.flat()).not.toContain(KPI_1_ID);
   });
 
-  it('panel without Browse: empty catalog, the target shows as no-permission, no permission lookup', async () => {
+  it('panel without Browse: no KPI definitions, the target shows as no-permission, no permission lookup', async () => {
     const { data, asOf } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.access[KPI_PROJECT.key] = NO_ACCESS;
     });
-    expect(data!.basis!.catalog).toEqual([]);
+    expect(data!.basis!.kpis).toEqual([]);
+    expect(data!.basis!.picker!.trackedByParents).toEqual([]);
     expect(data!.basis).not.toHaveProperty('access');
     expect(data!.basis!.noAccessKpiIds).toEqual([KPI_1_ID]);
     expect(data!.basis!.deletedKpiIds).toBeUndefined();
@@ -127,7 +128,7 @@ describe('reads follow the user’s permissions in each KPI space', () => {
     const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.hidden.add(KPI_1_ID);
     });
-    expect(data!.basis!.catalog.map((c) => c.id)).not.toContain(KPI_1_ID);
+    expect(data!.basis!.kpis.map((c) => c.id)).not.toContain(KPI_1_ID);
     expect(data!.basis!.noAccessKpiIds).toEqual([KPI_1_ID]);
     expect(data!.basis!.deletedKpiIds).toBeUndefined();
     // Labelled with the key the app's lookup found (it's on the work item's own property anyway).
@@ -156,21 +157,21 @@ describe('reads follow the user’s permissions in each KPI space', () => {
     expect(data!.basis!.noAccessKpiIds).toBeUndefined();
   });
 
-  it('panel values without Browse: no readings, nothing fetched for hidden KPIs', async () => {
+  it('panel values without Browse: no readings; only the own target is asked for, and Jira leaves it out', async () => {
     let bodies: string[][] = [];
     const { data } = await invoke<PanelValuesData>('getPanelValues', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.access[KPI_PROJECT.key] = NO_ACCESS;
       bodies = captureBulkfetch(jira);
     });
     expect(data!.readings).toEqual({});
-    expect(bodies).toEqual([]);
+    expect(bodies).toEqual([[KPI_1_ID]]);
   });
 
-  it('panel with Browse only: catalog listed', async () => {
+  it('panel with Browse only: the targeted KPI is listed', async () => {
     const { data } = await invoke<PanelListData>('getPanelList', { issueId: EPIC }, (jira) => {
       jira.fixture.userView.access[KPI_PROJECT.key] = READ_ONLY;
     });
-    expect(data!.basis!.catalog).toHaveLength(SMALL.kpis);
+    expect(data!.basis!.kpis.map((c) => c.id)).toEqual([KPI_1_ID]);
   });
 
   it('timeline when the search fails: an error, not a no-permission state', async () => {

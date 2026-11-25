@@ -24,6 +24,23 @@ import {
   type GetKpiAccessInput,
   type IssueLinkTypeInfo,
   type KpiAccessResult,
+  type GetKpiCurrentValueInput,
+  type KpiCurrentValue,
+  type KpiOptionDto,
+  type KpiRefLookup,
+  type ListKpiSpacesInput,
+  type ListKpiSpacesResult,
+  type ListKpisInSpacesInput,
+  type LookupKpiRefInput,
+  type PickerKpi,
+  type SearchKpisInput,
+  type SearchKpisResult,
+  buildKpiSuggestions,
+  KPI_CHAIN_DEPTH_CAP,
+  kpiRefOf,
+  parseKpiRefInput,
+  projectKeyOfIssueKey,
+  toKpiOptions,
   type KpiHierarchyStatus,
   type KpiSpaceAccess,
   type KpiSpaceRef,
@@ -61,7 +78,6 @@ import {
   type TimelineTargetsData,
 } from '../domain/index';
 import {
-  fetchAssignments,
   fetchStoredAssignments,
   fetchDateFieldCatalog,
   classifyUnlistedKpis,
@@ -88,7 +104,11 @@ import {
   updateKpiDefinition,
   ensureKpiHierarchyLinkType,
   listIssueLinkTypes,
+  inlineIconOnce,
   inlineIssueTypeIcons,
+  fetchParentChain,
+  listKpiSpaces,
+  lookupIssueAsKpi,
   JiraForbiddenError,
   KPI_ISSUE_TYPE,
   searchIssuePicker,
@@ -192,14 +212,6 @@ const defineSettingsWrite = (functionKey: string, cb: ResolverFunction<unknown, 
   });
 };
 
-/**
- * The panel's "Set a KPI target" list, TEMPORARILY every KPI the user can
- * browse (by work type, spec 11 · 06 Q1), capped, until 07's KPI browser
- * replaces it. Each issue's id is the KPI id (its key is only for display,
- * spec 11 · 03); unit/direction come from the KPI fields or `kpi-meta`.
- */
-const PANEL_CATALOG_LIMIT = 500;
-
 /** Sibling order: native LexoRank (as a backlog drag sets it); KPIs without a rank keep search order. */
 const byRank = (a: KpiIssue, b: KpiIssue): number => {
   if (a.rank && b.rank) return a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0;
@@ -227,29 +239,88 @@ function kpiForest(issues: KpiIssue[]): { roots: KpiIssue[]; childrenOf: Map<str
   return { roots, childrenOf };
 }
 
-/**
- * The KPI catalog, ordered + indented depth-first by KPI nesting (the same
- * forest the timeline draws) so the picker can show the hierarchy.
- * `currentValue` needs readings, so it arrives with the panel's Phase 2
- * (`assemblePanel` fills it in).
- */
-function buildKpiCatalog(issues: KpiIssue[]): CatalogEntryDto[] {
-  const { roots, childrenOf } = kpiForest(issues);
-  const out: CatalogEntryDto[] = [];
-  const walk = (issue: KpiIssue, depth: number) => {
-    out.push({
-      id: issue.id,
-      key: issue.key,
-      name: issue.name,
-      unit: issue.meta?.unit ?? '',
-      direction: issue.meta?.direction ?? null,
-      currentValue: null,
-      depth,
-      ...(issue.space ? { space: issue.space } : {}),
-    });
-    for (const c of childrenOf.get(issue.id) ?? []) walk(c, depth + 1);
+/** A targeted KPI's definition, for its target card (`currentValue` arrives with Phase 2). */
+function kpiDef(issue: KpiIssue): CatalogEntryDto {
+  return {
+    id: issue.id,
+    key: issue.key,
+    name: issue.name,
+    unit: issue.meta?.unit ?? '',
+    direction: issue.meta?.direction ?? null,
+    currentValue: null,
+    ...(issue.space ? { space: issue.space } : {}),
   };
-  for (const r of roots) walk(r, 0);
+}
+
+/** A loaded KPI as the picker's pure rules take it, its type icon inlined (once per distinct icon). */
+async function pickerKpis(issues: KpiIssue[]): Promise<PickerKpi[]> {
+  return Promise.all(
+    issues.map(async (k) => ({
+      id: k.id,
+      key: k.key,
+      name: k.name,
+      typeIconUrl: await inlineIconOnce(k.typeIconUrl),
+      unit: k.meta?.unit ?? '',
+      direction: k.meta?.direction ?? null,
+      space: k.space ? { key: k.space.key, name: k.space.name } : null,
+      parentIds: k.parentLinks.map((l) => l.id),
+      rank: k.rank,
+    })),
+  );
+}
+
+/** A picker list (parent space, Global KPIs, search results) in rank order, nested within itself. */
+async function kpiOptionList(issues: KpiIssue[]): Promise<KpiOptionDto[]> {
+  return toKpiOptions(await pickerKpis(issues), { key: '', name: '' });
+}
+
+const uniqueById = (issues: KpiIssue[]): KpiIssue[] => {
+  const seen = new Set<string>();
+  return issues.filter((i) => !seen.has(i.id) && seen.add(i.id));
+};
+
+/** The most KPIs a picker space view loads (This space, a parent space, Global KPIs). */
+const PICKER_SPACE_LIMIT = 1000;
+/** The most KPIs one picker search returns (All KPIs, "N more in other spaces"). */
+const PICKER_SEARCH_LIMIT = 50;
+
+/**
+ * The targets' same-space sub-KPIs, every level (spec 11 · 07): each level's
+ * `issuelinks` name the children; one `id in (…)` per level fetches the ones
+ * not already loaded whose key is in the target's space. Bounded by the chain
+ * depth cap.
+ */
+async function fetchTargetSubKpis(targets: KpiIssue[], loaded: KpiIssue[], cfg: KpiReadConfig): Promise<KpiIssue[]> {
+  const known = new Set([...targets, ...loaded].map((k) => k.id));
+  const out: KpiIssue[] = [];
+  let level: Array<{ kpi: KpiIssue; spaceKey: string | null }> = targets.map((t) => ({ kpi: t, spaceKey: t.space?.key ?? null }));
+  const loadedById = new Map(loaded.map((k) => [k.id, k]));
+  for (let depth = 0; depth < KPI_CHAIN_DEPTH_CAP && level.length > 0; depth += 1) {
+    const wanted = new Map<string, string | null>();
+    const next: Array<{ kpi: KpiIssue; spaceKey: string | null }> = [];
+    for (const { kpi, spaceKey } of level) {
+      for (const child of kpi.childLinks) {
+        if (spaceKey && child.key && projectKeyOfIssueKey(child.key) !== spaceKey) continue;
+        const already = loadedById.get(child.id);
+        if (already && !out.includes(already) && already.space?.key === spaceKey) {
+          out.push(already);
+          next.push({ kpi: already, spaceKey });
+        } else if (!known.has(child.id)) {
+          wanted.set(child.id, spaceKey);
+        }
+      }
+    }
+    if (wanted.size > 0) {
+      const fetched = await fetchKpis({ ids: [...wanted.keys()] }, cfg);
+      for (const k of fetched) {
+        if (known.has(k.id) || k.space?.key !== wanted.get(k.id)) continue;
+        known.add(k.id);
+        out.push(k);
+        next.push({ kpi: k, spaceKey: k.space?.key ?? null });
+      }
+    }
+    level = next;
+  }
   return out;
 }
 
@@ -286,7 +357,10 @@ function kpiNode(
  * install with nothing saved the work type is derived (one `GET /issuetype`).
  */
 async function kpiReadConfig(): Promise<KpiReadConfig | null> {
-  const { workType, hierarchy, fields } = await readKpiSiteConfig();
+  return readConfigOf(await readKpiSiteConfig());
+}
+
+function readConfigOf({ workType, hierarchy, fields }: KpiSiteConfig): KpiReadConfig | null {
   return workType ? { workTypeId: workType.id, hierarchy, kpiFields: fields } : null;
 }
 
@@ -318,6 +392,8 @@ function kpiAccessOrNull(projectKey: string | null | undefined): Promise<KpiSpac
 interface PanelIssueHint {
   /** the issue's work type id, when the context names the issue being loaded */
   typeId: string | null;
+  /** the issue's space key, when the context names it (This space can load without waiting) */
+  projectKey?: string;
 }
 
 /**
@@ -335,30 +411,36 @@ function isKpiPanel(
 
 /**
  * Phase 1 of the issue panel (spec 07): the issue's own targets, its parent's
- * targets (for grouping) and the KPI catalog — everything the target list and
- * the "Set a KPI target" form need. Requests start as soon as their input is
- * known: the issue (with its targets in the same GET) and the config at t=0,
- * the catalog search once the issue is known not to be a KPI, the parent's
- * targets once the issue says who the parent is. No readings, no rollup walk
- * (that's Phase 2), and no permission lookup (spec 11 · 06: per space, when an
- * action needs it).
+ * targets (for grouping), those KPIs' definitions, and what the KPI browser
+ * shows on open (spec 11 · 07): Tracked by parents and This space. Requests
+ * start as soon as their input is known: the issue (with its targets in the
+ * same GET) and the config at t=0; once the issue is known not to be a KPI,
+ * This space's KPIs and the chain walk (one GET per parent, to the top) run
+ * side by side; then ONE `id in (…)` for every KPI the issue or a parent
+ * targets, one per level of the targets' same-space sub-KPIs, and the type
+ * icons (once per distinct type). No query over all KPIs, nothing for the
+ * other views (they load when opened), no readings, no rollup walk (Phase 2)
+ * and no permission lookup (spec 11 · 06).
  *
  * A KPI issue gets its complete panel (the KPI chart, `buildKpiViewPanel`) instead.
  */
 async function buildPanelList(issueId: string, hint: PanelIssueHint | null = null): Promise<PanelListData> {
   const issueP = stage('issue', () => fetchIssueWithAssignments(issueId));
-  const cfgP = observed(stage('config', () => kpiReadConfig()));
+  const siteP = observed(stage('config', () => readKpiSiteConfig()));
+  const cfgP = observed(siteP.then(readConfigOf));
   const isKpiP = observed(isKpiPanel(cfgP, issueP, hint));
-  const kpiIssuesP = observed(
-    stage('kpis', async () => {
-      const [cfg, isKpi] = await Promise.all([cfgP, isKpiP]);
-      return cfg && !isKpi ? fetchKpis({ limit: PANEL_CATALOG_LIMIT }, cfg) : [];
+  const workItemP = observed(Promise.all([cfgP, isKpiP]).then(([cfg, isKpi]) => (cfg && !isKpi ? cfg : null)));
+  const thisSpaceP = observed(
+    stage('thisSpace', async () => {
+      const cfg = await workItemP;
+      const projectKey = hint?.projectKey ?? (await issueP).project?.key;
+      return cfg && projectKey ? fetchKpis({ projects: [projectKey], limit: PICKER_SPACE_LIMIT }, cfg) : [];
     }),
   );
-  const parentKpiIdsP = observed(
-    stage('parentTargets', async () => {
-      const { parentId } = await issueP;
-      return parentId ? (await fetchAssignments(parentId)).map((a) => a.kpiId) : [];
+  const chainP = observed(
+    stage('chain', async () => {
+      const [cfg, issue] = await Promise.all([workItemP, issueP]);
+      return cfg ? fetchParentChain(issue.parentId, KPI_CHAIN_DEPTH_CAP, [issueId]) : [];
     }),
   );
 
@@ -368,23 +450,62 @@ async function buildPanelList(issueId: string, hint: PanelIssueHint | null = nul
     if (panel) return { panel };
   }
 
-  const [kpiIssues, parentKpiIds] = await Promise.all([kpiIssuesP, parentKpiIdsP]);
-  const catalog = buildKpiCatalog(kpiIssues);
-  const known = new Set(catalog.map((c) => c.id));
-  // Only check the (rare) targeted KPIs the catalog doesn't list: they may be
-  // deleted, hidden from this user (spec 10), too new for the search index, or
-  // past the catalog's cap.
-  const unlisted = [...issue.assignments.map((a) => a.kpiId), ...parentKpiIds].filter((id) => !known.has(id));
-  const { deleted: deletedKpiIds, noAccess: noAccessKpiIds, keys: kpiKeys } = unlisted.length
-    ? await stage('unlistedKpis', () => classifyUnlistedKpis(unlisted))
-    : { deleted: [], noAccess: [], keys: {} };
+  const [site, chain, thisSpaceKpis] = await Promise.all([siteP, chainP, thisSpaceP]);
+  const parentKpiIds = chain[0]?.assignments.map((a) => a.kpiId) ?? [];
+  const ownIds = issue.assignments.map((a) => a.kpiId);
+  const targetedIds = [...new Set([...ownIds, ...chain.flatMap((c) => c.assignments.map((a) => a.kpiId))])].filter(isKpiIssueId);
+  const targeted = cfg && targetedIds.length ? await stage('targetedKpis', () => fetchKpis({ ids: targetedIds }, cfg)) : [];
+  const targetedById = new Map(targeted.map((k) => [k.id, k]));
+  const chainTargets = uniqueById(
+    chain.flatMap((c) => c.assignments.map((a) => targetedById.get(a.kpiId)).filter((k): k is KpiIssue => !!k)),
+  );
+
+  const known = new Set(targeted.map((k) => k.id));
+  // Only check the (rare) targeted KPIs Jira's search didn't return: they may be
+  // deleted, hidden from this user (spec 10), or too new for the search index.
+  const unlisted = [...ownIds, ...parentKpiIds].filter((id) => !known.has(id));
+  const [subKpis, unlistedKinds, chainIcons] = await Promise.all([
+    cfg
+      ? stage('subKpis', () => fetchTargetSubKpis(chainTargets, thisSpaceKpis, cfg)).catch((error: unknown) => {
+          // Best effort: the targets still show, without their sub-KPIs.
+          console.warn('[measure-of-success] could not load the targets’ sub-KPIs', error);
+          return [] as KpiIssue[];
+        })
+      : Promise.resolve([] as KpiIssue[]),
+    unlisted.length
+      ? stage('unlistedKpis', () => classifyUnlistedKpis(unlisted))
+      : Promise.resolve({ deleted: [], noAccess: [], keys: {} as Record<string, string> }),
+    Promise.all(chain.map((c) => inlineIconOnce(c.typeIconUrl))),
+  ]);
+  const { deleted: deletedKpiIds, noAccess: noAccessKpiIds, keys: kpiKeys } = unlistedKinds;
+
+  const thisSpace = issue.project ?? (hint?.projectKey ? { id: '', key: hint.projectKey, name: hint.projectKey } : null);
+  const picker =
+    cfg && thisSpace
+      ? await stage('icons', async () =>
+          buildKpiSuggestions({
+            thisSpace: { key: thisSpace.key, name: thisSpace.name },
+            centralSpace: site.centralSpace ? { key: site.centralSpace.key, name: site.centralSpace.name } : null,
+            chain: chain.map((c, i) => ({
+              item: { id: c.id, key: c.key, summary: c.summary, typeName: c.typeName, typeIconUrl: chainIcons[i] },
+              space: c.space ? { key: c.space.key, name: c.space.name } : null,
+              targets: c.assignments,
+            })),
+            kpis: await pickerKpis(uniqueById([...thisSpaceKpis, ...targeted, ...subKpis])),
+            ownTargetIds: ownIds,
+          }),
+        )
+      : undefined;
+
+  const ownAndParent = new Set([...ownIds, ...parentKpiIds]);
   return {
     basis: {
       issueKey: issue.issueKey,
       closed: issue.closed,
       own: issue.assignments,
       parentKpiIds: [...new Set(parentKpiIds)],
-      catalog,
+      kpis: targeted.filter((k) => ownAndParent.has(k.id)).map(kpiDef),
+      ...(picker ? { picker } : {}),
       ...(deletedKpiIds.length ? { deletedKpiIds } : {}),
       ...(noAccessKpiIds.length ? { noAccessKpiIds } : {}),
       ...(Object.keys(kpiKeys).length ? { kpiKeys } : {}),
@@ -422,7 +543,7 @@ async function buildKpiViewPanel(
   return {
     issueKey: issue.issueKey,
     rows: [],
-    catalog: [],
+    kpis: [],
     issueDueDate: null,
     issueDueRolledUp: false,
     // The raw targets ride along so recording a value can rebuild the markers client-side.
@@ -437,9 +558,9 @@ async function buildKpiViewPanel(
 }
 
 /**
- * Phase 2 of the issue panel (spec 07): the issue's rolled-up due date and the
- * catalog KPIs' readings — what the estimate lines, status pills and dates
- * need. The rollup walk covers the issue's OWN subtree. The parent's subtree is
+ * Phase 2 of the issue panel (spec 07): the issue's rolled-up due date and its
+ * own targets' KPI readings (spec 11 · 07: never every KPI's) — what the
+ * estimate lines, status pills and dates need. The rollup walk covers the issue's OWN subtree. The parent's subtree is
  * walked only when one of the issue's targets is dated relative to the parent's
  * due date, the only thing the parent's date is used for. A KPI's panel needs
  * none of it (Phase 1 delivers the chart), so no KPI search is made for one.
@@ -456,13 +577,15 @@ async function buildPanelValues(issueId: string, hint: PanelIssueHint | null = n
   );
   const readingsP = observed(
     stage('readings', async () => {
-      const [cfg, isKpi] = await Promise.all([cfgP, isKpiP]);
+      const [cfg, isKpi, { assignments }] = await Promise.all([cfgP, isKpiP, issueP]);
       if (!cfg || isKpi) return {};
-      const kpiIssues = await fetchKpis({ limit: PANEL_CATALOG_LIMIT }, cfg);
-      const changelog = await fetchReadingChangelog(kpiIssues.map((i) => i.id));
+      const ids = [...new Set(assignments.map((a) => a.kpiId))].filter(isKpiIssueId);
+      const changelog = await fetchReadingChangelog(ids);
       const readings: PanelValuesData['readings'] = {};
-      for (const k of kpiIssues) {
-        readings[k.id] = readingsFromChangelog(changelog.get(k.id) ?? []).map((r) => ({ date: r.date, value: r.value }));
+      // As the user: Jira leaves out KPIs they may not see (and deleted ones), so those get no series.
+      for (const id of ids) {
+        const changes = changelog.get(id);
+        if (changes) readings[id] = readingsFromChangelog(changes).map((r) => ({ date: r.date, value: r.value }));
       }
       return readings;
     }),
@@ -506,7 +629,9 @@ async function buildPanelParts(issueId: string, hint: PanelIssueHint | null = nu
   return { list, values };
 }
 
-type PanelContext = { extension?: { issue?: { id?: string | number; typeId?: string | number } } } | undefined;
+type PanelContext =
+  | { extension?: { issue?: { id?: string | number; typeId?: string | number }; project?: { key?: string } } }
+  | undefined;
 
 /**
  * The panel's issue: the payload's `issueId`, else the issue the panel is open
@@ -521,11 +646,14 @@ function panelIssueId(payload: unknown, context: unknown): string {
 
 /** The context's work type for `issueId`, when the context is about that issue. */
 function panelIssueHint(issueId: string, context: unknown): PanelIssueHint | null {
-  const issue = (context as PanelContext)?.extension?.issue;
-  return issue?.typeId !== undefined && String(issue.id) === issueId ? { typeId: String(issue.typeId) } : null;
+  const extension = (context as PanelContext)?.extension;
+  const issue = extension?.issue;
+  if (issue?.typeId === undefined || String(issue.id) !== issueId) return null;
+  const projectKey = extension?.project?.key;
+  return { typeId: String(issue.typeId), ...(projectKey && isValidProjectKey(projectKey) ? { projectKey } : {}) };
 }
 
-const EMPTY_PANEL: PanelData = { issueKey: '', rows: [], catalog: [], issueDueDate: null, issueDueRolledUp: false };
+const EMPTY_PANEL: PanelData = { issueKey: '', rows: [], kpis: [], issueDueDate: null, issueDueRolledUp: false };
 
 define('getPanelData', async ({ payload, context }) => {
   const issueId = panelIssueId(payload, context);
@@ -554,6 +682,85 @@ define('getKpiAccess', async ({ payload }) => {
   const projectKey = normalizeProjectKey(String((payload as Partial<GetKpiAccessInput> | undefined)?.projectKey ?? ''));
   if (!isValidProjectKey(projectKey)) throw new Error(`Invalid space key: "${projectKey}"`);
   const result: KpiAccessResult = { projectKey, access: await kpiAccessOrNull(projectKey) };
+  return result;
+});
+
+// ── KPI picker (spec 11 · 07): the views that load when opened ───────────────
+
+const payloadOf = <T>(payload: unknown): Partial<T> => (payload ?? {}) as Partial<T>;
+
+/** The KPI work type's read config, or an error saying it isn't set up. */
+async function requirePickerConfig(): Promise<KpiReadConfig> {
+  const cfg = await kpiReadConfig();
+  if (!cfg) throw new Error(KPI_WORK_TYPE_NOT_SET_UP);
+  return cfg;
+}
+
+/** A parent space or Global KPIs: those spaces' KPIs (names, units, nesting; no readings). */
+define('listKpisInSpaces', async ({ payload }) => {
+  const projectKeys = [...new Set((payloadOf<ListKpisInSpacesInput>(payload).projectKeys ?? []).map((k) => normalizeProjectKey(String(k))))];
+  if (projectKeys.length === 0 || !projectKeys.every(isValidProjectKey)) throw new Error('Choose a space to list its KPIs.');
+  const cfg = await requirePickerConfig();
+  const kpis = await stage('kpis', () => fetchKpis({ projects: projectKeys, limit: PICKER_SPACE_LIMIT }, cfg));
+  return kpiOptionList(kpis);
+});
+
+/** All KPIs' search (`summary ~ "text*"`), capped; with `projectKey`, that one space (the Space filter). */
+define('searchKpis', async ({ payload }) => {
+  const input = payloadOf<SearchKpisInput>(payload);
+  const text = String(input.text ?? '').trim();
+  const projectKey = input.projectKey ? normalizeProjectKey(String(input.projectKey)) : null;
+  if (projectKey && !isValidProjectKey(projectKey)) throw new Error(`Invalid space key: "${projectKey}"`);
+  if (!text && !projectKey) return { kpis: [], truncated: false } satisfies SearchKpisResult;
+  const cfg = await requirePickerConfig();
+  const limit = text ? PICKER_SEARCH_LIMIT : PICKER_SPACE_LIMIT;
+  const found = await stage('search', () =>
+    fetchKpis({ ...(text ? { text } : {}), ...(projectKey ? { projects: [projectKey] } : {}), limit: limit + 1 }, cfg),
+  );
+  const result: SearchKpisResult = { kpis: await kpiOptionList(found.slice(0, limit)), truncated: found.length > limit };
+  return result;
+});
+
+/** The Space filter's list: spaces that can hold KPIs, filtered by key or name, one page at a time. */
+define('listKpiSpaces', async ({ payload }) => {
+  const input = payloadOf<ListKpiSpacesInput>(payload);
+  const cfg = await requirePickerConfig();
+  const startAt = Math.max(0, Math.floor(Number(input.startAt ?? 0)) || 0);
+  const result: ListKpiSpacesResult = await stage('spaces', () =>
+    listKpiSpaces(String(input.query ?? '').trim(), startAt, cfg.workTypeId),
+  );
+  return result;
+});
+
+/**
+ * A whole key, an issue id or a `/browse/` URL, looked up directly in any
+ * space as the user (one GET; Jira follows a moved KPI's old key): the KPI,
+ * another work item, or hidden (no access or no such issue, Jira won't say which).
+ */
+define('lookupKpiRef', async ({ payload }) => {
+  const ref = kpiRefOf(parseKpiRefInput(String(payloadOf<LookupKpiRefInput>(payload).ref ?? '')));
+  if (!ref) return { kind: 'hidden' } satisfies KpiRefLookup;
+  const cfg = await requirePickerConfig();
+  const found = await stage('lookup', () => lookupIssueAsKpi(ref, cfg));
+  let result: KpiRefLookup;
+  if (found.kind === 'kpi') {
+    const [option] = await kpiOptionList([found.kpi]);
+    result = { kind: 'kpi', option: { ...option, parentId: null, hasChildren: false } };
+  } else if (found.kind === 'notKpi') {
+    result = { kind: 'notKpi', item: { ...found.item, typeIconUrl: await inlineIconOnce(found.item.typeIconUrl) } };
+  } else {
+    result = { kind: 'hidden' };
+  }
+  return result;
+});
+
+/** The picked KPI's latest reading, for the form's preview (one changelog fetch, one KPI). */
+define('getKpiCurrentValue', async ({ payload }) => {
+  const kpiId = String(payloadOf<GetKpiCurrentValueInput>(payload).kpiId ?? '');
+  if (!isKpiIssueId(kpiId)) throw new Error(`Invalid KPI id: "${kpiId}"`);
+  const changelog = await stage('readings', () => fetchReadingChangelog([kpiId]));
+  const series = readingsFromChangelog(changelog.get(kpiId) ?? []);
+  const result: KpiCurrentValue = { kpiId, value: series.length ? series[series.length - 1].value : null };
   return result;
 });
 

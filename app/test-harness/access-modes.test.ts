@@ -8,7 +8,7 @@ import {
   applyAccessToTimeline,
   assertKpiWriteAllowed,
 } from './access-modes.js';
-import type { TimelineNodeDto } from '@domain/index.js';
+import type { PanelBasis, TimelineNodeDto } from '@domain/index.js';
 
 const flatten = (nodes: TimelineNodeDto[]): TimelineNodeDto[] => nodes.flatMap((n) => [n, ...flatten(n.children)]);
 
@@ -28,7 +28,8 @@ describe('harness ?access= modes (spec 10, per space since spec 11 · 06)', () =
     expect(tl.roots).toEqual([]);
     expect(tl).not.toHaveProperty('access');
     const list = applyAccessToPanelList(getPanelList('10048'), 'none', null);
-    expect(list.basis!.catalog).toEqual([]);
+    expect(list.basis!.kpis).toEqual([]);
+    expect(list.basis!.picker!.trackedByParents).toEqual([]);
     expect(list.basis!.noAccessKpiIds!.length).toBeGreaterThan(0);
   });
 
@@ -40,18 +41,22 @@ describe('harness ?access= modes (spec 10, per space since spec 11 · 06)', () =
     expect(after).toHaveLength(before.length - 1);
     const list = applyAccessToPanelList(getPanelList('10048'), 'hiddenKpi', hidden);
     expect(list.basis!.noAccessKpiIds).toEqual([hidden]);
-    expect(list.basis!.catalog.map((c) => c.id)).not.toContain(hidden);
+    expect(list.basis!.kpis.map((c) => c.id)).not.toContain(hidden);
   });
 
-  it('hiddenKpi: the hidden KPI is out of the catalog on issues that don’t target it, and not flagged there', () => {
+  it('hiddenKpi: the hidden KPI is out of the KPI browser on issues that don’t target it, and not flagged there', () => {
     const hidden = getPanelList('10048').basis!.own[0].kpiId;
+    const listed = (basis: PanelBasis) => {
+      const p = basis.picker;
+      return p ? [...p.inThisSpace, ...p.trackedByParents.flatMap((b) => b.targets.flatMap((t) => [t.option, ...t.subKpis]))] : [];
+    };
     const other = ['10000', '10001', '10002', '10003', '10004', '10012', '10020', '10090', '10231', '10500'].find((id) => {
       const b = getPanelList(id).basis;
-      return b && b.catalog.some((c) => c.id === hidden) && ![...b.own.map((a) => a.kpiId), ...b.parentKpiIds].includes(hidden);
+      return b && listed(b).some((o) => o.id === hidden) && ![...b.own.map((a) => a.kpiId), ...b.parentKpiIds].includes(hidden);
     });
     expect(other).toBeDefined();
     const list = applyAccessToPanelList(getPanelList(other!), 'hiddenKpi', hidden);
-    expect(list.basis!.catalog.map((c) => c.id)).not.toContain(hidden);
+    expect(listed(list.basis!).map((o) => o.id)).not.toContain(hidden);
     expect(list.basis!.noAccessKpiIds).toBeUndefined();
   });
 
@@ -61,11 +66,11 @@ describe('harness ?access= modes (spec 10, per space since spec 11 · 06)', () =
     expect(() => applyAccessToPanelList(getPanelList('KPI-1'), 'hiddenKpi', kpi1)).toThrow(/do not have permission/);
   });
 
-  it('a KPI issue’s own panel carries its own space’s access (and no catalog)', () => {
+  it('a KPI issue’s own panel carries its own space’s access (and no other KPIs)', () => {
     expect(applyAccessToPanelList(getPanelList('KPI-1'), 'split', null).panel!.access).toEqual(accessFor('KPI', 'split'));
     const ops = applyAccessToPanelList(getPanelList('OPS-1'), 'split', null).panel!;
     expect(ops.access).toEqual({ browse: true, create: false, edit: false, link: false });
-    expect(ops.catalog).toEqual([]);
+    expect(ops.kpis).toEqual([]);
     expect(applyAccessToPanelList(getPanelList('OPS-1'), 'lookupFails', null).panel).not.toHaveProperty('access');
   });
 
@@ -89,7 +94,7 @@ describe('harness ?access= modes (spec 10, per space since spec 11 · 06)', () =
     const readonly = applyAccessToPanelParts(panelParts('10048'), 'readonly', null);
     expect(readonly.list.basis).not.toHaveProperty('access');
     const hiddenParts = applyAccessToPanelParts(panelParts('10048'), 'hiddenKpi', hidden);
-    expect(hiddenParts.list.basis!.catalog.map((c) => c.id)).not.toContain(hidden);
+    expect(hiddenParts.list.basis!.kpis.map((c) => c.id)).not.toContain(hidden);
     expect(hiddenParts.list.basis!.noAccessKpiIds).toEqual([hidden]);
     expect(hiddenParts.values.readings[hidden]).toBeUndefined();
   });

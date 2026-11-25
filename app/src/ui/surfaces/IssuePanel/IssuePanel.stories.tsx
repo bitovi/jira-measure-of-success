@@ -3,14 +3,18 @@ import { fn, within, userEvent, expect, waitFor, screen } from '@storybook/test'
 import {
   NO_KPIS_MESSAGE,
   type CatalogEntryDto,
+  type KpiOptionDto,
   type KpiSpaceAccess,
   type KpiSpaceRef,
+  type KpiSuggestionsDto,
   type PanelData,
   type PanelRowDto,
   type TimelineNodeDto,
 } from '@domain/index.js';
+import { TYPE_ICONS } from '@harness/fixtures/typeIcons.js';
 import { IssuePanel } from './IssuePanel.js';
 import type { PanelController, UsePanel } from '@ui/data/usePanelData/index.js';
+import type { KpiPickerApi } from '@ui/data/useKpiPicker/index.js';
 
 /**
  * Scenario stories for the Issue panel. Each story injects a STUB loader hook
@@ -18,15 +22,63 @@ import type { PanelController, UsePanel } from '@ui/data/usePanelData/index.js';
  * / pending date / all groups — renders deterministically with no bridge.
  * The `*.test.tsx` sibling replays these same stories as assertions.
  */
-// Ordered + depth-first to mirror the KPI tree (revenue > orders > stores;
-// costs is a separate root) so the associate-form picker can indent options
-// to show the parent/child relationship.
+// The targeted KPIs' definitions (revenue > orders > stores in the KPI tree; costs is a root).
 const CATALOG: CatalogEntryDto[] = [
-  { id: '20001', key: 'KPI-1', name: 'Revenue', unit: 'USD', direction: 'increase', depth: 0 },
-  { id: '20002', key: 'KPI-2', name: '# of Orders', unit: 'count', direction: 'increase', depth: 1 },
-  { id: '20003', key: 'KPI-3', name: 'Number of Stores', unit: 'count', direction: 'increase', depth: 2 },
-  { id: '20009', key: 'KPI-9', name: 'Costs', unit: 'USD', direction: 'decrease', depth: 0 },
+  { id: '20001', key: 'KPI-1', name: 'Revenue', unit: 'USD', direction: 'increase' },
+  { id: '20002', key: 'KPI-2', name: '# of Orders', unit: 'count', direction: 'increase' },
+  { id: '20003', key: 'KPI-3', name: 'Number of Stores', unit: 'count', direction: 'increase' },
+  { id: '20009', key: 'KPI-9', name: 'Costs', unit: 'USD', direction: 'decrease' },
 ];
+
+const KPI_SPACE = { key: 'KPI', name: 'KPIs' };
+const option = (c: CatalogEntryDto, parentId: string | null, hasChildren: boolean): KpiOptionDto => ({
+  id: c.id,
+  key: c.key,
+  name: c.name,
+  typeIconUrl: TYPE_ICONS.KPI,
+  unit: c.unit,
+  direction: c.direction,
+  space: KPI_SPACE,
+  parentId,
+  hasChildren,
+});
+const [REVENUE, ORDERS, STORES, COSTS] = CATALOG;
+const due = { mode: 'absolute' as const, absolute: '2026-12-31', anchor: 'issueDueDate' as const, offsetMonths: 0 };
+
+/**
+ * The KPI browser's opening views (spec 11 · 07) for these stories: the parent
+ * OUT-12 targets Revenue (with its sub-KPIs) and Costs; Global KPIs is the central space.
+ */
+const PICKER: KpiSuggestionsDto = {
+  thisSpace: { key: 'INIT', name: 'Initiatives' },
+  hasParents: true,
+  trackedByParents: [
+    {
+      item: { id: '10012', key: 'OUT-12', summary: 'Grow POS revenue', typeName: 'Outcome', typeIconUrl: TYPE_ICONS.Initiative },
+      targets: [
+        {
+          option: option(REVENUE, null, true),
+          target: { target: 1_500_000, targetType: 'absolute', due },
+          subKpis: [option(ORDERS, REVENUE.id, true), option(STORES, ORDERS.id, false)],
+        },
+        { option: option(COSTS, null, false), target: { target: 800_000, targetType: 'absolute', due }, subKpis: [] },
+      ],
+    },
+  ],
+  inThisSpace: [],
+  parentSpaces: [{ key: 'OUT', name: 'Outcomes' }],
+  globalSpace: KPI_SPACE,
+};
+
+/** The picker's lazy loads: only the picked KPI's current value matters here. */
+const CURRENT: Record<string, number> = { '20002': 1200, '20003': 250 };
+const PICKER_API: KpiPickerApi = {
+  listKpisInSpaces: async () => [option(REVENUE, null, true), option(ORDERS, REVENUE.id, true), option(STORES, ORDERS.id, false), option(COSTS, null, false)],
+  searchKpis: async () => ({ kpis: [], truncated: false }),
+  listKpiSpaces: async () => ({ spaces: [KPI_SPACE], nextStartAt: null }),
+  lookupKpiRef: async () => ({ kind: 'hidden' }),
+  getKpiCurrentValue: async (kpiId) => ({ kpiId, value: CURRENT[kpiId] ?? null }),
+};
 
 const row = (over: Partial<PanelRowDto> & { kpiId: string }): PanelRowDto => ({
   kpiKey: CATALOG.find((k) => k.id === over.kpiId)?.key ?? over.kpiId,
@@ -51,7 +103,8 @@ const row = (over: Partial<PanelRowDto> & { kpiId: string }): PanelRowDto => ({
 
 const ALL_GROUPS: PanelData = {
   issueKey: 'INIT-48',
-  catalog: CATALOG,
+  kpis: CATALOG,
+  picker: PICKER,
   issueDueDate: '2026-09-30',
   issueDueRolledUp: false,
   rows: [
@@ -71,7 +124,8 @@ const ALL_GROUPS: PanelData = {
 
 const PENDING_DATE: PanelData = {
   issueKey: 'OUT-12',
-  catalog: CATALOG,
+  kpis: CATALOG,
+  picker: PICKER,
   issueDueDate: null,
   issueDueRolledUp: false,
   rows: [
@@ -88,9 +142,10 @@ const PENDING_DATE: PanelData = {
   ],
 };
 
-const EMPTY: PanelData = { issueKey: 'STORY-1', catalog: CATALOG, issueDueDate: '2026-09-30', issueDueRolledUp: false, rows: [] };
+const EMPTY: PanelData = { issueKey: 'STORY-1', kpis: [], picker: PICKER, issueDueDate: '2026-09-30', issueDueRolledUp: false, rows: [] };
 
-const NO_CATALOG: PanelData = { issueKey: 'STORY-1', catalog: [], issueDueDate: null, issueDueRolledUp: false, rows: [] };
+/** No KPI work type configured: no KPI browser (spec 11 · 06 Q4 message). */
+const NO_KPIS: PanelData = { issueKey: 'STORY-1', kpis: [], issueDueDate: null, issueDueRolledUp: false, rows: [] };
 
 /** A saved PERCENT-change target row (Number of Stores, +10%) in a given state. */
 const percentRow = (over: Partial<PanelRowDto> & { kpiId: string; displayState: PanelRowDto['displayState'] }): PanelRowDto =>
@@ -112,7 +167,8 @@ const baselinedRV = { baseline: 258, value: 284, baselineDate: '2026-06-01', bas
 
 const SAVED_STATES: PanelData = {
   issueKey: 'INIT-48',
-  catalog: CATALOG,
+  kpis: CATALOG,
+  picker: PICKER,
   issueDueDate: '2027-01-15',
   issueDueRolledUp: true,
   rows: [
@@ -162,7 +218,7 @@ const KPI_NODE: TimelineNodeDto = {
 
 const KPI_VIEW: PanelData = {
   issueKey: 'KPI-1',
-  catalog: CATALOG,
+  kpis: [],
   issueDueDate: null,
   issueDueRolledUp: false,
   rows: [],
@@ -184,6 +240,7 @@ function stub(over: Partial<PanelController> & { data: PanelData | null }): UseP
     remove: over.remove ?? (() => {}),
     record: over.record ?? (async () => {}),
     ...(over.getKpiAccess ? { getKpiAccess: over.getKpiAccess } : {}),
+    pickerApi: over.pickerApi ?? PICKER_API,
   });
 }
 
@@ -193,7 +250,7 @@ const VALUES_LOADING: PanelData = {
   resolving: true,
   issueDueDate: null,
   issueDueRolledUp: false,
-  catalog: ALL_GROUPS.catalog.map((c) => ({ ...c, currentValue: null })),
+  kpis: ALL_GROUPS.kpis.map((c) => ({ ...c, currentValue: null })),
   rows: ALL_GROUPS.rows.map((r) =>
     r.relationship === 'onParentNotTracked'
       ? r
@@ -228,16 +285,13 @@ export const AllGroups: Story = {
     await expect(c.getByText('Only on this issue')).toBeInTheDocument();
     await expect(c.getByText('On parent, not tracked here')).toBeInTheDocument();
     await expect(c.getByText('1 month after due date')).toBeInTheDocument();
-    // "Set a KPI target" picker indents options by KPI-tree depth (orders is
-    // nested under revenue in CATALOG; costs is a root alongside revenue).
+    // "Set a KPI target" opens the KPI browser on Tracked by parents: the
+    // parent's Costs target, with its unit and target; Revenue and Number of
+    // Stores are tracked here, so they're left out (spec 11 · 07).
     await userEvent.click(c.getByRole('combobox', { name: 'KPI' }));
-    const nested = await c.findByText('# of Orders');
-    const root = (await c.findAllByText('Costs')).find((el) => el.style.paddingLeft !== '');
-    await expect(nested.style.paddingLeft).toBe('12px');
-    await expect(root?.style.paddingLeft).toBe('0px');
-    // each option names its unit, so a total is typed in the right one
-    await expect(c.getByRole('option', { name: 'Costs (USD)' })).toBeInTheDocument();
-    await expect(c.getByRole('option', { name: '# of Orders (count)' })).toBeInTheDocument();
+    const list = within(c.getByRole('listbox', { name: 'KPIs' }));
+    await expect(list.getAllByRole('option').map((o) => o.textContent)).toEqual(['KPI-9CostsUSD$800K by Dec 31, 2026']);
+    await expect(list.getByText('OUT-12')).toBeInTheDocument();
   },
 };
 
@@ -271,8 +325,9 @@ export const TrackThisPrefillsForm: Story = {
     await userEvent.click(c.getByRole('button', { name: 'Track this' }));
     await expect(trackSaveSpy).not.toHaveBeenCalled();
     const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
-    // picked in the select, and previewed
-    await expect(form.getAllByText('Costs')).toHaveLength(2);
+    // picked in the KPI field, and previewed
+    await expect(form.getByRole('combobox', { name: 'KPI' })).toHaveValue('KPI-9 Costs (USD)');
+    await expect(form.getByText('Costs')).toBeInTheDocument();
     await expect(form.getByText('Preview')).toBeInTheDocument();
     await waitFor(() => expect(form.getByLabelText('Target value')).toHaveFocus());
     await userEvent.type(form.getByLabelText('Target value'), '-5');
@@ -339,8 +394,8 @@ export const Empty: Story = {
   },
 };
 
-export const NoCatalog: Story = {
-  args: { usePanel: stub({ data: NO_CATALOG }) },
+export const NoKpis: Story = {
+  args: { usePanel: stub({ data: NO_KPIS }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
     // Spec 11 · 06 (Q4): no KPIs found — none yet, or none the user may see.
@@ -351,7 +406,7 @@ export const NoCatalog: Story = {
   },
 };
 
-export const NoCatalogDark: Story = { ...NoCatalog, globals: { theme: 'dark' } };
+export const NoKpisDark: Story = { ...NoKpis, globals: { theme: 'dark' } };
 
 // ── Spec 11 · 06: access per KPI space, looked up when "Record a value" is used ──
 
@@ -361,7 +416,7 @@ const READ_ONLY: KpiSpaceAccess = { browse: true, create: false, edit: false, li
 const IN_PORTFOLIO: PanelData = {
   ...SAVED_STATES,
   rows: SAVED_STATES.rows.map((r, i) => ({ ...r, kpiKey: `PORT-${i + 1}` })),
-  catalog: SAVED_STATES.rows.map((r, i) => ({
+  kpis: SAVED_STATES.rows.map((r, i) => ({
     id: r.kpiId,
     key: `PORT-${i + 1}`,
     name: r.name,
@@ -704,16 +759,18 @@ export const EditDateTypeRoundTrip: Story = {
 /** The form previews the exact card it will create, and flags a bet against the KPI's direction. */
 const formSaveSpy = fn();
 export const FormPreview: Story = {
-  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === '20003' ? { ...k, currentValue: 250 } : k)) }, save: formSaveSpy }) },
+  args: { usePanel: stub({ data: EMPTY, save: formSaveSpy }) },
   play: async ({ canvasElement }) => {
     formSaveSpy.mockClear();
     const c = within(canvasElement);
     const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
     await expect(form.queryByText('Preview')).not.toBeInTheDocument();
-    await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
-    await userEvent.click(await form.findByText('Number of Stores'));
-    // the picked KPI keeps showing its unit next to the name
-    await expect(form.getByText(/^\s*\(count\)$/)).toBeInTheDocument();
+    // Searching the view opens the path to Number of Stores (under Revenue > # of Orders).
+    await userEvent.type(form.getByRole('combobox', { name: 'KPI' }), 'stores');
+    await userEvent.click(form.getByRole('option', { name: /KPI-3/ }));
+    // the picked KPI keeps showing its unit next to the name; its current value is fetched for it alone
+    await expect(form.getByRole('combobox', { name: 'KPI' })).toHaveValue('KPI-3 Number of Stores (count)');
+    await waitFor(() => expect(form.getByTestId('picked-kpi')).toHaveTextContent('Current: 250 count'));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '+2');
     const preview = within(form.getByRole('group', { name: 'Number of Stores' }));
     await expect(preview.getByText('+2%')).toBeInTheDocument();
@@ -735,13 +792,15 @@ export const FormPreview: Story = {
 /** An additive ("more") target: `+100` on # of Orders previews latest + 100 and saves as `relative`. */
 const amountSaveSpy = fn();
 export const FormAmountChange: Story = {
-  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === '20002' ? { ...k, currentValue: 1200 } : k)) }, save: amountSaveSpy }) },
+  args: { usePanel: stub({ data: EMPTY, save: amountSaveSpy }) },
   play: async ({ canvasElement }) => {
     amountSaveSpy.mockClear();
     const c = within(canvasElement);
     const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
     await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
-    await userEvent.click(await form.findByText('# of Orders'));
+    await userEvent.click(form.getByRole('button', { name: 'Expand Revenue' }));
+    await userEvent.click(form.getByRole('option', { name: /KPI-2/ }));
+    await waitFor(() => expect(form.getByTestId('picked-kpi')).toHaveTextContent('Current: 1,200 count'));
     await userEvent.click(form.getByRole('combobox', { name: 'Value type' }));
     await userEvent.click(await form.findByText('more'));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '+100');

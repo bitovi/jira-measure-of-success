@@ -92,8 +92,8 @@ export interface PanelRowDto {
    */
   resolving?: boolean;
   /**
-   * true when the target points at a KPI that's no longer in the catalog (the
-   * KPI issue was deleted). The row keeps the
+   * true when the target points at a KPI that no longer exists (the KPI issue
+   * was deleted). The row keeps the
    * stored bet so it can be removed, but has no values, status or record action.
    */
   kpiMissing?: boolean;
@@ -133,7 +133,13 @@ export interface CatalogEntryDto {
 export interface PanelData {
   issueKey: string;
   rows: PanelRowDto[];
-  catalog: CatalogEntryDto[];
+  /** the KPIs this work item and its parent target (spec 11 · 07: not every KPI) */
+  kpis: CatalogEntryDto[];
+  /**
+   * What the "Set a KPI target" browser shows on open (spec 11 · 07). Absent
+   * when no KPI work type is configured (there are no KPIs), and on a KPI's own panel.
+   */
+  picker?: KpiSuggestionsDto;
   /** the issue's effective due date (baseline + relative-timing anchor); null pending */
   issueDueDate: string | null;
   /** true when that due date was rolled up from descendants ("Rolled up due date") */
@@ -157,8 +163,9 @@ export interface PanelData {
 
 /**
  * Phase 1 of the progressive issue panel (spec 07): what the target list and the
- * "Set a KPI target" form need — the issue's and its parent's targets and the
- * KPI catalog. No readings and no rolled-up dates.
+ * "Set a KPI target" form need — the issue's and its parent's targets, those
+ * KPIs' definitions and the KPI browser's opening views (spec 11 · 07). No
+ * readings and no rolled-up dates.
  */
 export interface PanelBasis {
   issueKey: string;
@@ -168,12 +175,14 @@ export interface PanelBasis {
   own: Assignment[];
   /** KPI ids targeted on the parent issue (only used to group the rows); key-only references keep their key */
   parentKpiIds: string[];
-  /** the KPI picker catalog, without `currentValue` (that needs readings) */
-  catalog: CatalogEntryDto[];
+  /** the targeted KPIs' definitions (own and parent's), without `currentValue` (that needs readings) */
+  kpis: CatalogEntryDto[];
+  /** the KPI browser's opening views; absent when no KPI work type is configured */
+  picker?: KpiSuggestionsDto;
   /**
    * Targeted KPI ids (own or parent's) that Jira confirmed no longer exist, plus
    * every key-only reference (read as deleted without asking Jira, spec 11 · 03).
-   * A KPI merely missing from the catalog isn't enough — the search index lags
+   * A KPI merely missing from `kpis` isn't enough — the search index lags
    * new KPIs — so only these are shown as "KPI deleted".
    */
   deletedKpiIds?: string[];
@@ -182,7 +191,7 @@ export interface PanelBasis {
    * (spec 10). Shown as "You don't have permission to view this KPI".
    */
   noAccessKpiIds?: string[];
-  /** keys of targeted KPIs the catalog doesn't list but Jira found (KPI id → key), for their labels */
+  /** keys of targeted KPIs `kpis` doesn't list but Jira found (KPI id → key), for their labels */
   kpiKeys?: Record<string, string>;
 }
 
@@ -204,7 +213,7 @@ export interface PanelValuesData {
   issueDue: ResolvedEndpoint;
   /** the parent's key and effective due — only loaded when a target anchors to it */
   parent: { issueKey: string; due: ResolvedEndpoint } | null;
-  /** reading series per KPI id (every KPI in the catalog) */
+  /** reading series per KPI id (the issue's own targets' KPIs only, spec 11 · 07) */
   readings: Record<string, TimelineReadingDto[]>;
 }
 
@@ -236,6 +245,123 @@ export interface KpiViewDto {
 export interface PanelParts {
   list: PanelListData;
   values: PanelValuesData;
+}
+
+// ── KPI picker (spec 11 · 07) ───────────────────────────────────────────────
+
+/** A space as the KPI picker names it. */
+export interface KpiPickerSpace {
+  key: string;
+  name: string;
+}
+
+/** A work item as the picker shows it: `{type icon} {key} {summary}`. */
+export interface WorkItemRefDto {
+  id: string;
+  key: string;
+  summary: string;
+  /** for the icon's tooltip */
+  typeName: string;
+  /** an inlined `data:` URL (inlineIssueTypeIcons); null if it couldn't be fetched */
+  typeIconUrl: string | null;
+}
+
+/** One KPI in a picker list. Lists are sent in rank order. */
+export interface KpiOptionDto {
+  /** issue id (spec 11 · 03) */
+  id: string;
+  key: string;
+  name: string;
+  /** the KPI work type's icon, inlined; null if it couldn't be fetched */
+  typeIconUrl: string | null;
+  unit: string;
+  direction: KpiDirection | null;
+  space: KpiPickerSpace;
+  /** KPI-tree parent within the list it was sent with; null = top level there */
+  parentId: string | null;
+  /** has sub-KPIs in the list it was sent with: draw a chevron */
+  hasChildren: boolean;
+}
+
+/** A parent's target as the picker's Target column words it (as the panel's target cards). */
+export interface TargetSummaryDto {
+  target: number | null;
+  targetType: TargetType;
+  due: DueTiming;
+}
+
+/** One parent work item with targets: a band in "Tracked by parents". */
+export interface TrackedByParentDto {
+  item: WorkItemRefDto;
+  targets: Array<{
+    option: KpiOptionDto;
+    target: TargetSummaryDto;
+    /** the KPI's same-space sub-KPIs, every level (shown collapsed); `parentId` within this target's tree */
+    subKpis: KpiOptionDto[];
+  }>;
+}
+
+/** What the KPI browser shows on open: Tracked by parents, This space, and the menu entries. */
+export interface KpiSuggestionsDto {
+  thisSpace: KpiPickerSpace;
+  /** the work item has at least one parent (for the empty Tracked by parents message) */
+  hasParents: boolean;
+  /** one band per parent with targets, nearest first; a KPI may be under several */
+  trackedByParents: TrackedByParentDto[];
+  inThisSpace: KpiOptionDto[];
+  /** the parents' spaces (not this space nor the central space), nearest first */
+  parentSpaces: KpiPickerSpace[];
+  /** the central space, if the site has one and it isn't this space: the Global KPIs entry */
+  globalSpace: KpiPickerSpace | null;
+}
+
+/** `listKpisInSpaces`: a parent space's or Global KPIs' KPIs (names, units, nesting; no readings). */
+export interface ListKpisInSpacesInput {
+  projectKeys: string[];
+}
+
+/** `searchKpis`: All KPIs' search, optionally in one space (its Space filter). */
+export interface SearchKpisInput {
+  text: string;
+  projectKey?: string;
+}
+
+export interface SearchKpisResult {
+  kpis: KpiOptionDto[];
+  /** more matched than were returned (the cap) */
+  truncated: boolean;
+}
+
+/** `listKpiSpaces`: spaces that can hold KPIs, filtered by key or name, paged. */
+export interface ListKpiSpacesInput {
+  query: string;
+  startAt?: number;
+}
+
+export interface ListKpiSpacesResult {
+  spaces: KpiPickerSpace[];
+  /** where the next page starts; null on the last page */
+  nextStartAt: number | null;
+}
+
+/** `lookupKpiRef`: a whole key, an old key of a moved KPI, an issue id or a `/browse/` URL. */
+export interface LookupKpiRefInput {
+  ref: string;
+}
+
+export type KpiRefLookup =
+  | { kind: 'kpi'; option: KpiOptionDto }
+  | { kind: 'notKpi'; item: WorkItemRefDto }
+  | { kind: 'hidden' };
+
+/** `getKpiCurrentValue`: the picked KPI's latest reading, for the form's preview. */
+export interface GetKpiCurrentValueInput {
+  kpiId: string;
+}
+
+export interface KpiCurrentValue {
+  kpiId: string;
+  value: number | null;
 }
 
 // ── Settings preview ────────────────────────────────────────────────────────

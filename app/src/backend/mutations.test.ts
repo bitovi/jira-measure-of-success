@@ -410,7 +410,7 @@ describe('updateKpi', () => {
   });
 });
 
-describe('getPanelList: targets on KPIs missing from the catalog', () => {
+describe('getPanelList: targets on KPIs the KPI search doesn’t return', () => {
   /** Targets on STORY, each `[id, key]` (migrated) or a bare key (a key-only reference). */
   const targetsOn = (jira: MockJira, ...refs: Array<[string, string] | string>) => {
     const base = assignmentsOf(jira, EPIC).assignments[0];

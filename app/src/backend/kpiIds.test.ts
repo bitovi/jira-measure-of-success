@@ -105,11 +105,13 @@ describe('reads use KPI ids (migrated data)', () => {
     vi.useRealTimers();
   });
 
-  it('the catalog, the timeline and the readings are keyed by issue id, with the key alongside', async () => {
+  it('the targeted KPIs, the timeline and the readings are keyed by issue id, with the key alongside', async () => {
     const list = await call<PanelListData>('getPanelList', { issueId: '200004' });
-    expect(list.basis!.catalog.find((c) => c.id === '1000')).toMatchObject({ key: 'KPI-1' });
+    const [targeted] = list.basis!.own.map((a) => a.kpiId);
+    expect(targeted).toMatch(/^\d+$/);
+    expect(list.basis!.kpis.find((c) => c.id === targeted)).toMatchObject({ key: `KPI-${Number(targeted) - 999}` });
     const values = await call<{ readings: Record<string, unknown[]> }>('getPanelValues', { issueId: '200004' });
-    expect(Object.keys(values.readings)).toContain('1000');
+    expect(Object.keys(values.readings)).toEqual([targeted]);
     const timeline = await call<TimelineData>('getTimelineSkeleton');
     expect(flatten(timeline.roots).find((n) => n.kpiId === '1000')).toMatchObject({ id: '1000', issueKey: 'KPI-1' });
   });
@@ -190,15 +192,17 @@ describe('same output as the key-based code', () => {
     // digest of `getPanelData` on the same issues taken before this change.
     const node = (n: TimelineNodeDto): TimelineNodeDto => ({ ...n, kpiId: n.issueKey, children: n.children.map(node) });
     // Spec 11 · 06: the panel no longer carries `access` (looked up per space when an
-    // action needs it) and catalog entries gained their `space`; put back / left out.
+    // action needs it); put back. Spec 11 · 07: the catalog of every KPI is gone (the
+    // rows' names, units and directions still come from the targeted KPIs); left out.
     const FULL = { browse: true, create: true, edit: true, link: true };
-    const asBefore = panels.map((p) => ({
+    const withoutKpiLists = (panel: PanelData): PanelData => {
+      const out: Record<string, unknown> = { ...panel };
+      for (const key of ['catalog', 'kpis', 'picker']) delete out[key];
+      return out as unknown as PanelData;
+    };
+    const asBefore = panels.map(withoutKpiLists).map((p) => ({
       ...p,
       rows: p.rows.map(({ kpiKey, ...r }) => ({ ...r, kpiId: kpiKey })),
-      catalog: p.catalog.map(({ key, space, ...c }) => {
-        void space;
-        return { ...c, id: key };
-      }),
       access: FULL,
       ...(p.kpiView
         ? {
@@ -214,8 +218,8 @@ describe('same output as the key-based code', () => {
         : {}),
     }));
     const digest = createHash('sha256').update(JSON.stringify(asBefore)).digest('hex');
-    // The digest of the code before spec 11 · 06 on these nine issues.
-    expect(digest).toBe('7f8f8d18b338d3f6d5e18c2edf9a12b3b506cc98cabfca6b048b098a206baf07');
+    // The digest of the code before spec 11 · 07 on these nine issues (catalog left out).
+    expect(digest).toBe('c9c1f1e0075a53804449b7a78d89bcf7201347b67d2389afd7e4a633a949ce3d');
   });
 });
 

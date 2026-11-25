@@ -121,9 +121,9 @@ describe('reads', () => {
     const { data } = await invoke<TimelineData>('pre-migration', 'getTimelineSkeleton');
     expect(metaOf(data!).every((m) => m.unit === '' && m.direction === null)).toBe(true);
     const panel = (await invoke<PanelListData>('pre-migration', 'getPanelList', { issueId: EPIC })).data!;
-    const catalog: CatalogEntryDto[] = panel.basis!.catalog;
-    expect(catalog).toHaveLength(SMALL.kpis);
-    expect(catalog.every((k) => k.unit === '' && k.direction === null)).toBe(true);
+    const kpis: CatalogEntryDto[] = panel.basis!.kpis;
+    expect(kpis.length).toBeGreaterThan(0);
+    expect(kpis.every((k) => k.unit === '' && k.direction === null)).toBe(true);
   });
 
   it('mixed: migrated KPIs show their values, the others are empty', async () => {

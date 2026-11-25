@@ -78,15 +78,15 @@ describe('issue panel load', () => {
     vi.useRealTimers();
   });
 
-  it('Phase 1 has the targets, grouping and catalog, with no readings and no rollup walk', async () => {
+  it('Phase 1 has the targets, grouping and the targeted KPIs, with no readings and no rollup walk', async () => {
     const { data, routes } = await invoke<PanelListData>('getPanelList', { payload: { issueId: EPIC_OWN_DUE } });
     expect(data.panel).toBeUndefined();
     const basis = data.basis!;
     expect(basis.issueKey).toBe('WEB-2');
     expect(basis.own.map((a) => a.kpiId)).toEqual(['1001']);
-    expect(basis.catalog).toHaveLength(40);
-    expect(basis.catalog.find((c) => c.id === '1000')).toMatchObject({ key: 'KPI-1', name: 'KPI 1' });
-    expect(basis.catalog.every((c) => c.currentValue === null)).toBe(true);
+    expect(basis.kpis.map((c) => c.id)).toEqual(['1001']);
+    expect(basis.kpis[0]).toMatchObject({ key: 'KPI-2', name: 'KPI 2' });
+    expect(basis.kpis.every((c) => c.currentValue === null)).toBe(true);
     // The issue's targets come inside the issue GET; no rollup walk, no readings.
     expect(routes.some((r) => r.includes(`/issue/${EPIC_OWN_DUE}/properties/`))).toBe(false);
     expect(routes.some((r) => /jql=(id|parent) in/.test(r))).toBe(false);

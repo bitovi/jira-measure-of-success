@@ -17,7 +17,7 @@ const basis: PanelBasis = {
     },
   ],
   parentKpiIds: [],
-  catalog: [{ id: '10001', key: 'KPI-1', name: 'Signups', unit: 'users', direction: 'increase', currentValue: null, depth: 0 }],
+  kpis: [{ id: '10001', key: 'KPI-1', name: 'Signups', unit: 'users', direction: 'increase', currentValue: null, depth: 0 }],
 };
 const list: PanelListData = { basis };
 const values: PanelValuesData = {
@@ -26,7 +26,7 @@ const values: PanelValuesData = {
   parent: null,
   readings: { '10001': [{ date: '2026-05-01', value: 150 }] },
 };
-const full: PanelData = { issueKey: 'APP-1', rows: [], catalog: [], issueDueDate: null, issueDueRolledUp: false };
+const full: PanelData = { issueKey: 'APP-1', rows: [], kpis: [], issueDueDate: null, issueDueRolledUp: false };
 
 describe('derivePanelView', () => {
   it('nothing yet: no data', () => {
@@ -46,7 +46,7 @@ describe('derivePanelView', () => {
     expect(v.valuesPending).toBe(false);
     expect(v.data?.resolving).toBeUndefined();
     expect(v.data?.issueDueDate).toBe('2026-09-30');
-    expect(v.data?.catalog[0].currentValue).toBe(150);
+    expect(v.data?.kpis[0].currentValue).toBe(150);
   });
 
   it('Phase 2 failure keeps the list, stops the shimmer and reports the error', () => {
@@ -67,7 +67,7 @@ describe('derivePanelView', () => {
       const v = derivePanelView({ ...state, mutated: { list, values: later } });
       expect(v.valuesPending).toBe(false);
       expect(v.valuesError).toBeNull();
-      expect(v.data?.catalog[0].currentValue).toBe(175);
+      expect(v.data?.kpis[0].currentValue).toBe(175);
     }
   });
 
@@ -80,10 +80,10 @@ describe('derivePanelView', () => {
     it('apply to the readings behind the target cards (no reload)', () => {
       const edit = { kpiId: '10001', date: '2026-06-10', value: 190 };
       const v = derivePanelView({ list, values, valuesError: null, readingEdits: [edit] });
-      expect(v.data?.catalog[0].currentValue).toBe(190);
+      expect(v.data?.kpis[0].currentValue).toBe(190);
       // ...and on top of a later save/remove result too
       const after = derivePanelView({ list, values, valuesError: null, mutated: { list, values }, readingEdits: [edit] });
-      expect(after.data?.catalog[0].currentValue).toBe(190);
+      expect(after.data?.kpis[0].currentValue).toBe(190);
     });
 
     it('a delete removes that date', () => {
@@ -93,7 +93,7 @@ describe('derivePanelView', () => {
         valuesError: null,
         readingEdits: [{ kpiId: '10001', date: '2026-05-01', value: null }],
       });
-      expect(v.data?.catalog[0].currentValue).toBeNull();
+      expect(v.data?.kpis[0].currentValue).toBeNull();
     });
 
     it("rebuild a KPI issue's chart: new series and re-classified target markers", () => {

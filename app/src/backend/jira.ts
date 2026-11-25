@@ -14,6 +14,7 @@ import {
   KPI_HIERARCHY_NOT_SET_UP,
   dateFieldSelection,
   encodeReadingValue,
+  kpiChildLinks,
   kpiParentLinkBody,
   kpiParentLinks,
   KPI_SPACE_REQUIRED,
@@ -36,6 +37,7 @@ import {
   type IssueLinkTypeInfo,
   type IssuePickerItem,
   type KpiFieldsConfig,
+  type KpiPickerSpace,
   type KpiHierarchyLink,
   type KpiSpaceAccess,
   type KpiSpaceRef,
@@ -628,6 +630,17 @@ export async function inlineIssueTypeIcons(
   return map;
 }
 
+/**
+ * `fetchIconDataUrl`, once per resolver invocation per URL (spec 11 · 07: the
+ * picker's icons are fetched once per distinct type, never per KPI). An
+ * already-inlined or missing URL is returned as is.
+ */
+export function inlineIconOnce(iconUrl: string | null | undefined): Promise<string | null> {
+  if (!iconUrl) return Promise.resolve(null);
+  if (iconUrl.startsWith('data:')) return Promise.resolve(iconUrl);
+  return perInvocation(`icon:${iconUrl}`, () => fetchIconDataUrl(iconUrl));
+}
+
 /** Direct children of an issue via JQL `parent = X`. */
 export async function fetchChildren(issueId: string): Promise<string[]> {
   const res = await asUser()
@@ -717,6 +730,10 @@ export interface KpiIssue {
   parentLinks: Array<{ id: string; key: string | null }>;
   /** Native LexoRank value for sibling ordering (null if the field is absent). */
   rank: string | null;
+  /** the work type's icon URL as Jira returns it (not inlined) */
+  typeIconUrl: string | null;
+  /** hierarchy links to its sub-KPIs (spec 11 · 07), lowest link id first */
+  childLinks: Array<{ id: string; key: string | null }>;
   /**
    * unit/direction, included in the search: from the KPI fields once chosen,
    * else the `kpi-meta` property (null if unset/invalid); see resolveKpiMeta
@@ -777,6 +794,7 @@ type RawKpiIssue = {
     summary?: string;
     issuelinks?: IssueLinkRef[];
     project?: { id?: string; key?: string; name?: string };
+    issuetype?: { id?: string; name?: string; iconUrl?: string };
     [field: string]: unknown;
   };
   properties?: Record<string, unknown>;
@@ -784,7 +802,7 @@ type RawKpiIssue = {
 
 /** The fields a KPI read asks Jira for. */
 function kpiFieldList(rankFieldId: string | null, kpiFields: KpiFieldsConfig | null): string {
-  return ['summary', 'issuelinks', 'project', ...(rankFieldId ? [rankFieldId] : []), ...kpiMetaFieldIds(kpiFields)].join(',');
+  return ['summary', 'issuelinks', 'project', 'issuetype', ...(rankFieldId ? [rankFieldId] : []), ...kpiMetaFieldIds(kpiFields)].join(',');
 }
 
 /** A raw KPI issue → KpiIssue, its parent resolved among `loadedIds`. */
@@ -803,6 +821,8 @@ function toKpiIssue(
     parentId: links.find((l) => loadedIds.has(l.parentId))?.parentId ?? null,
     parentLinks: links.map((l) => ({ id: l.parentId, key: l.parentKey })),
     rank: rankFieldId ? ((raw.fields?.[rankFieldId] as string | undefined) ?? null) : null,
+    typeIconUrl: raw.fields?.issuetype?.iconUrl ?? null,
+    childLinks: kpiChildLinks(raw.fields?.issuelinks, cfg.hierarchy, cfg.workTypeId),
     meta: resolveKpiMeta(cfg.kpiFields, { legacy: raw.properties?.[KPI_META_PROPERTY_KEY], fields: raw.fields }),
   };
 }
@@ -839,7 +859,7 @@ export async function fetchKpis(query: KpiQuery, cfg: KpiReadConfig): Promise<Kp
           : route`/rest/api/3/search/jql?jql=${jql}&fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}&maxResults=${maxResults}`,
       );
     // Fail loudly rather than return a partial list: callers treat a KPI that's
-    // absent here as non-existent (catalog, timeline tree).
+    // absent here as non-existent (the panel's targeted KPIs, the timeline tree).
     if (!res.ok) throw new Error(await jiraError(res, 'list the KPIs'));
     const data = (await res.json()) as { isLast?: boolean; nextPageToken?: string; issues?: RawKpiIssue[] };
     const batch = data.issues ?? [];
@@ -862,15 +882,128 @@ export async function fetchKpis(query: KpiQuery, cfg: KpiReadConfig): Promise<Kp
  * can't see it or it isn't of the KPI work type.
  */
 export async function fetchKpi(idOrKey: string, cfg: KpiReadConfig): Promise<KpiIssue | null> {
+  const found = await lookupIssueAsKpi(idOrKey, cfg);
+  return found.kind === 'kpi' ? found.kpi : null;
+}
+
+/** An issue as the picker names it: `{type icon} {key} {summary}` (icon not inlined). */
+export interface IssueRef {
+  id: string;
+  key: string;
+  summary: string;
+  typeName: string;
+  typeIconUrl: string | null;
+}
+
+/**
+ * One issue by id or key AS THE USER (one GET, no index lag; Jira follows a
+ * moved issue's old key): a KPI (what `fetchKpis` returns for it, its parent
+ * unresolved), another work item, or hidden (404/403: Jira doesn't say which).
+ */
+export async function lookupIssueAsKpi(
+  idOrKey: string,
+  cfg: KpiReadConfig,
+): Promise<{ kind: 'kpi'; kpi: KpiIssue } | { kind: 'notKpi'; item: IssueRef } | { kind: 'hidden' }> {
   const rankFieldId = await getRankFieldId();
-  const fieldList = `${kpiFieldList(rankFieldId, cfg.kpiFields)},issuetype`;
+  const fieldList = kpiFieldList(rankFieldId, cfg.kpiFields);
   const res = await asUser()
     .requestJira(route`/rest/api/3/issue/${idOrKey}?fields=${fieldList}&properties=${KPI_META_PROPERTY_KEY}`);
-  if (res.status === 404 || res.status === 403) return null;
+  if (res.status === 404 || res.status === 403) return { kind: 'hidden' };
   if (!res.ok) throw new Error(await jiraError(res, `look up ${idOrKey}`));
-  const raw = (await res.json()) as RawKpiIssue & { fields?: { issuetype?: { id?: string } } };
-  if (String(raw.fields?.issuetype?.id ?? '') !== cfg.workTypeId) return null;
-  return toKpiIssue(raw, cfg, rankFieldId, new Set());
+  const raw = (await res.json()) as RawKpiIssue;
+  if (String(raw.fields?.issuetype?.id ?? '') !== cfg.workTypeId) {
+    return {
+      kind: 'notKpi',
+      item: {
+        id: String(raw.id),
+        key: raw.key,
+        summary: raw.fields?.summary ?? raw.key,
+        typeName: raw.fields?.issuetype?.name ?? 'Work item',
+        typeIconUrl: raw.fields?.issuetype?.iconUrl ?? null,
+      },
+    };
+  }
+  return { kind: 'kpi', kpi: toKpiIssue(raw, cfg, rankFieldId, new Set()) };
+}
+
+/** One parent of a work item, as the KPI picker's chain walk reads it (spec 11 · 07). */
+export interface ChainIssue extends IssueRef {
+  parentId: string | null;
+  space: KpiSpaceRef | null;
+  assignments: Assignment[];
+}
+
+/**
+ * Walk a work item's parents to the top (spec 11 · 07 Q4): one
+ * `GET /issue/{id}?fields=parent,issuetype,project,summary&properties=kpi-assignments`
+ * per level, as the user, nearest first. Stops at `maxDepth`, at a parent seen
+ * before (a cycle), at one the user can't see, or at one Jira fails to return.
+ */
+export async function fetchParentChain(parentId: string | null, maxDepth: number, seen: Iterable<string> = []): Promise<ChainIssue[]> {
+  const chain: ChainIssue[] = [];
+  const visited = new Set<string>(seen);
+  let next = parentId;
+  while (next && !visited.has(next) && chain.length < maxDepth) {
+    visited.add(next);
+    const res = await asUser().requestJira(
+      route`/rest/api/3/issue/${next}?fields=parent,issuetype,project,summary&properties=${ASSIGNMENT_PROPERTY_KEY}`,
+    );
+    if (res.status === 404 || res.status === 403) break;
+    if (!res.ok) {
+      // The parents read so far still make good suggestions.
+      console.warn(`[measure-of-success] ${await jiraError(res, `load parent ${next}`)}`);
+      break;
+    }
+    const data = (await res.json()) as {
+      id: string | number;
+      key: string;
+      fields?: RawMetaFields & { summary?: string; issuetype?: { id?: string; name: string; iconUrl?: string } };
+      properties?: Record<string, unknown>;
+    };
+    visited.add(String(data.id));
+    chain.push({
+      id: String(data.id),
+      key: data.key,
+      summary: data.fields?.summary ?? data.key,
+      typeName: data.fields?.issuetype?.name ?? 'Work item',
+      typeIconUrl: data.fields?.issuetype?.iconUrl ?? null,
+      parentId: data.fields?.parent?.id ? String(data.fields.parent.id) : null,
+      space: spaceRefOf(data.fields?.project),
+      assignments: parseAssignments(data.properties?.[ASSIGNMENT_PROPERTY_KEY]),
+    });
+    next = data.fields?.parent?.id ? String(data.fields.parent.id) : null;
+  }
+  return chain;
+}
+
+/** One page of the spaces the KPI picker's Space filter lists. */
+export const KPI_SPACE_PAGE_SIZE = 50;
+
+/**
+ * Spaces the user can browse that can hold KPIs (their work types include the
+ * KPI work type, 01 B6), filtered by key or name: one page of
+ * `GET /project/search?action=browse&query=…&expand=issueTypes`, as the user.
+ */
+export async function listKpiSpaces(
+  query: string,
+  startAt: number,
+  workTypeId: string,
+): Promise<{ spaces: KpiPickerSpace[]; nextStartAt: number | null }> {
+  const res = await asUser().requestJira(
+    route`/rest/api/3/project/search?action=browse&query=${query}&expand=issueTypes&orderBy=key&startAt=${startAt}&maxResults=${KPI_SPACE_PAGE_SIZE}`,
+  );
+  if (!res.ok) throw new Error(await jiraError(res, 'list spaces'));
+  const data = (await res.json()) as {
+    isLast?: boolean;
+    values?: Array<{ key: string; name: string; issueTypes?: Array<{ id?: string | number }> }>;
+  };
+  const values = data.values ?? [];
+  return {
+    spaces: values
+      .filter((p) => (p.issueTypes ?? []).some((t) => String(t.id ?? '') === workTypeId))
+      .map((p) => ({ key: p.key, name: p.name })),
+    nextStartAt: data.isLast === false && values.length > 0 ? startAt + values.length : null,
+  };
 }
 
 /** One contributing issue's KPI targets, plus the fields needed to place them. */
@@ -1613,14 +1746,13 @@ async function deleteIssue(issueKey: string): Promise<void> {
 }
 
 /**
- * Sort the targeted KPIs the user's catalog doesn't list (KPI ids, spec 11 · 03) into:
+ * Sort the targeted KPIs the panel's KPI search didn't return (KPI ids, spec 11 · 03) into:
  * - `deleted`: the app can't find them either (404 asApp) — gone from Jira. A
  *   key-only reference is deleted without a request: after the migration, those
  *   are the only key-only references left;
  * - `noAccess`: they exist, but the user may not see them (404 asUser).
- * Anything else is just too new for the search index (or beyond the catalog's
- * cap) and is in neither list. `keys` has the current key of every one the app found,
- * for its label. The app lookup is needed because `asUser` alone answers 404 for
+ * Anything else is just too new for the search index and is in neither list.
+ * `keys` has the current key of every one the app found, for its label. The app lookup is needed because `asUser` alone answers 404 for
  * both cases; a transient error counts as "exists" so a hiccup never offers to
  * remove a target on a live KPI.
  */

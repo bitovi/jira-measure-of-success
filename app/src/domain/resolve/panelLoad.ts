@@ -9,9 +9,9 @@ import { isBaselineRelative } from './relativeTargetValue';
 /**
  * Progressive issue panel (specs/07-issue-panel-performance).
  *
- * Phase 1 (`PanelBasis`) has the issue's and its parent's targets and the KPI
- * catalog, so the target list and the "Set a KPI target" form can render right
- * away. Phase 2 (`PanelValuesData`) has the rolled-up due dates and the KPI
+ * Phase 1 (`PanelBasis`) has the issue's and its parent's targets, those KPIs'
+ * definitions and the KPI browser's opening views, so the target list and the
+ * "Set a KPI target" form can render right away. Phase 2 (`PanelValuesData`) has the rolled-up due dates and the KPI
  * readings that the estimate line, status pill and dates need. This pure
  * function turns basis (+ values once they arrive) into `PanelData`. The backend
  * (the one-shot `getPanelData` and the mutations) and the client (merging
@@ -50,13 +50,13 @@ export function baselineDueEndpoint(
  */
 export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null): PanelData {
   const readingsOf = (kpiId: string) => values?.readings[kpiId] ?? [];
-  const catalog: CatalogEntryDto[] = values
-    ? basis.catalog.map((c) => {
+  const kpis: CatalogEntryDto[] = values
+    ? basis.kpis.map((c) => {
         const series = readingsOf(c.id);
         return { ...c, currentValue: series.length ? series[series.length - 1].value : null };
       })
-    : basis.catalog;
-  const defOf = (kpiId: string) => catalog.find((k) => k.id === kpiId);
+    : basis.kpis;
+  const defOf = (kpiId: string) => kpis.find((k) => k.id === kpiId);
   const deleted = new Set(basis.deletedKpiIds ?? []);
   const noAccess = new Set(basis.noAccessKpiIds ?? []);
 
@@ -146,7 +146,8 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
   const data: PanelData = {
     issueKey: basis.issueKey,
     rows,
-    catalog,
+    kpis,
+    ...(basis.picker ? { picker: basis.picker } : {}),
     issueDueDate: ctx.issue.due.date,
     issueDueRolledUp: ctx.issue.due.source === 'children',
   };

@@ -2,7 +2,11 @@ import {
   kpiNotVisibleMessage,
   kpiPermissionMessage,
   type KpiAccessResult,
+  type KpiOptionDto,
+  type KpiRefLookup,
   type KpiSpaceAccess,
+  type KpiSuggestionsDto,
+  type SearchKpisResult,
   type PanelListData,
   type PanelParts,
   type PanelValuesData,
@@ -90,25 +94,57 @@ export function applyAccessToPanelList(
   }
   const basis = data.basis;
   const targeted = [...new Set([...basis.own.map((a) => a.kpiId), ...basis.parentKpiIds])];
-  // The real search never returns a hidden KPI, so it's out of every catalog;
-  // only targets on this issue (or its parent) are flagged "no permission".
+  // The real search never returns a hidden KPI, so it's in no list; only targets
+  // on this issue (or its parent) are flagged "no permission".
   const hidden = mode === 'none' ? targeted : targeted.filter((k) => k === hiddenId);
-  const catalog = mode === 'none' ? [] : basis.catalog.filter((c) => c.id !== hiddenId);
+  const kpis = mode === 'none' ? [] : basis.kpis.filter((c) => c.id !== hiddenId);
   // The backend's app lookup still finds a hidden KPI's key, for its label.
   const kpiKeys = Object.fromEntries(
     hidden.flatMap((id) => {
-      const key = basis.catalog.find((c) => c.id === id)?.key;
+      const key = basis.kpis.find((c) => c.id === id)?.key;
       return key ? [[id, key]] : [];
     }),
   );
+  const shown = (o: KpiOptionDto) => mode !== 'none' && o.id !== hiddenId;
   return {
     basis: {
       ...basis,
-      catalog,
+      kpis,
+      ...(basis.picker ? { picker: filterSuggestions(basis.picker, shown) } : {}),
       ...(hidden.length ? { noAccessKpiIds: hidden } : {}),
       ...(Object.keys(kpiKeys).length ? { kpiKeys: { ...basis.kpiKeys, ...kpiKeys } } : {}),
     },
   };
+}
+
+/** The KPI browser's opening views without the KPIs `shown` rejects. */
+function filterSuggestions(s: KpiSuggestionsDto, shown: (o: KpiOptionDto) => boolean): KpiSuggestionsDto {
+  return {
+    ...s,
+    trackedByParents: s.trackedByParents
+      .map((b) => ({
+        ...b,
+        targets: b.targets.filter((t) => shown(t.option)).map((t) => ({ ...t, subKpis: t.subKpis.filter(shown) })),
+      }))
+      .filter((b) => b.targets.length > 0),
+    inThisSpace: s.inThisSpace.filter(shown),
+  };
+}
+
+/** A picker list (a space, a search) as the backend answers this mode. */
+export function applyAccessToOptions(options: KpiOptionDto[], mode: AccessMode | null, hiddenKpiId: string | null): KpiOptionDto[] {
+  if (mode === 'none') return [];
+  return mode === 'hiddenKpi' && hiddenKpiId ? options.filter((o) => o.id !== hiddenKpiId) : options;
+}
+
+export function applyAccessToSearch(result: SearchKpisResult, mode: AccessMode | null, hiddenKpiId: string | null): SearchKpisResult {
+  return { ...result, kpis: applyAccessToOptions(result.kpis, mode, hiddenKpiId) };
+}
+
+/** A pasted key's lookup: a KPI the user may not see is "hidden" (Jira doesn't say which). */
+export function applyAccessToLookup(result: KpiRefLookup, mode: AccessMode | null, hiddenKpiId: string | null): KpiRefLookup {
+  if (result.kind !== 'kpi') return result;
+  return applyAccessToOptions([result.option], mode, hiddenKpiId).length ? result : { kind: 'hidden' };
 }
 
 export function applyAccessToPanelValues(data: PanelValuesData, mode: AccessMode | null, hiddenKpiId: string | null): PanelValuesData {

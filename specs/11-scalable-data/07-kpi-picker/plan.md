@@ -1,7 +1,7 @@
 # 07 — KPI picker: a two-pane KPI browser
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Design reviewed (gate G3, 2026-11-20); open
-questions below** · Depends on: 06.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check pending)** (design reviewed at
+gate G3, 2026-11-20; questions decided 2026-11-24) · Depends on: 06.
 
 Prototype: [kpi-picker.html](./kpi-picker.html). Open it in a browser; nothing talks to Jira. Its
 **Layout: Two-pane browser** is the chosen design. The other layouts (two-line list, columns) and the
@@ -412,3 +412,128 @@ _Still open after the G3 review._
 - **Type labels** ("Epic", "Initiative") and **connector glyphs** (`└`): Plans shows neither.
 - **Counts** in the menu and the Space filter: a request per lazy view on every open.
 - **Listing every space** in the menu: a site can have hundreds.
+
+## Implementation notes
+
+Done 2026-11-25 on `feat/11-scalable-data`, Steps 2–5. Step 6 (live check on dev) is pending.
+
+**Files added**
+
+- Domain: `resolve/kpiPicker.ts` (+ test): `buildKpiSuggestions`, `toKpiOptions` (a list in rank order,
+  nested within itself, cycle-safe), `kpiTree`, `visibleRows`, `kpiMatches`, `parseKpiRefInput` /
+  `kpiRefOf`, `KPI_CHAIN_DEPTH_CAP` (10, Q4), types `PickerKpi`, `PickerChainItem`. `resolve/kpiLinks.ts`
+  gained `kpiChildLinks` (a KPI's sub-KPIs from its `issuelinks`, the child end, KPI type only).
+- Backend: `kpiPicker.test.ts` (request-log tests through the real resolver on the multi-space fixture).
+- UI:
+  - `data/useKpiPicker/`: `KpiPickerApi`, `bridgeKpiPickerApi`, `cachedKpiPickerApi` (every load
+    remembered for the picker's life; failures forgotten), `useLoad` (keyed, debounced, latest wins).
+  - `components/WorkItemRef/` (`WorkItemRef`, `TypeIcon`: `{icon} {key} {summary}`, Atlaskit Tooltip naming
+    the type, optional match marking) and `components/SpaceFilter/` (`SpaceFilter`, `SpaceKey`: the
+    searchable, paged space chooser), each with stories and a runner.
+  - `surfaces/IssuePanel/components/KpiPicker/` (the field + browser, `pickerView.ts` (+ test) with the
+    menu, default view, per-place expand, All KPIs grouping, "where it came from"), `KpiRow/` (+
+    `kpiRowText.ts`: columns and the Target wording), `ParentBand/`, each with stories and a runner.
+- Harness: `fixtures/kpiPicker.ts` (a "picker world": `worldSuggestions`, `worldPickerApi`, the
+  prototype's site `PROTOTYPE_WORLD` / `PROTOTYPE_WORLD_NO_CENTRAL`, the scale world `scaleWorld()`),
+  `fixtures/typeIcons.ts` (the prototype's Story/Epic/Initiative icons and the KPI bullseye).
+
+**Files changed:** `contracts.ts` (below), `panelLoad.ts` (`kpis`, `picker`), `jira.ts`, `resolver.ts`,
+`testing/scaleFixture.ts` (parents' `issuelinks` list their KPI children; `/project/search` filters by
+`query` and the user's Browse, `orderBy=key`), `usePanelData` (`pickerApi`), `IssuePanel.tsx` (the form
+uses `KpiPicker`; the picked KPI's current value comes from `getKpiCurrentValue`), the harness
+(`mock-resolvers.ts`: `harnessPickerWorld`, `pickerApi`; `mock-bridge.ts`: the five resolvers,
+`?pickerDelayMs=` (default 400); `access-modes.ts`: the picker filtered per mode), and tests/stories
+that read `catalog` (`panel`, `kpiAccess`, `kpiFields`, `kpiIds` (digest recomputed on the previous
+commit with the catalog left out), `kpisByWorkType`, `mutations`, `panelLoad`, `panelView`,
+`usePanelData`, `access-modes`, IssuePanel stories).
+
+**Contracts**
+
+- `PanelBasis.catalog` / `PanelData.catalog` are gone (Step 5). `kpis: CatalogEntryDto[]` holds only the
+  KPIs the work item and its parent target (for the cards); `picker?: KpiSuggestionsDto` the browser's
+  opening views (absent when no KPI work type is configured: the panel then shows 06's
+  `NO_KPIS_MESSAGE` with Add KPI, and on a KPI's own panel). `PanelValuesData.readings` covers the own
+  targets only.
+- New DTOs as in *Data*, plus: `WorkItemRefDto.id`; `KpiSuggestionsDto.hasParents` (for the two empty
+  messages); `KpiPickerSpace = { key, name }`; `TargetSummaryDto = { target, targetType, due }` (the UI
+  words it with the cards' `betAmount` / `betWhen`: `+5% by Mar 31, 2026`, `145 · on the due date`);
+  `TrackedByParentDto`; `SearchKpisResult = { kpis, truncated }`; `ListKpiSpacesResult = { spaces,
+  nextStartAt }`; `KpiRefLookup`; `KpiCurrentValue = { kpiId, value }`.
+
+**Resolvers**
+
+| Resolver | Payload | Returns | Jira (as the user) |
+|---|---|---|---|
+| `getPanelList` (Phase 1) | `{ issueId? }` | `basis.picker`, `basis.kpis` | issue GET; This space `issuetype = X AND project in ("KEY")` (≤ 1,000); chain `GET /issue/{id}?fields=parent,issuetype,project,summary&properties=kpi-assignments` per level (≤ 10); ONE `issuetype = X AND id in (own + every parent's targets)`; one `id in (…)` per sub-KPI level; icons once per distinct type |
+| `getPanelValues` | `{ issueId? }` | readings of the own targets | one `changelog/bulkfetch` of those ids (no KPI search) |
+| `listKpisInSpaces` | `{ projectKeys }` | `KpiOptionDto[]` | `issuetype = X AND project in (…)`, ≤ 1,000, no readings |
+| `searchKpis` | `{ text, projectKey? }` | `SearchKpisResult` (50) | `issuetype = X [AND project in ("KEY")] AND summary ~ "text*"`, 51 asked to know `truncated`; empty text without a space answers nothing without a request |
+| `listKpiSpaces` | `{ query, startAt? }` | `ListKpiSpacesResult` (pages of 50) | `GET /project/search?action=browse&query=…&expand=issueTypes&orderBy=key`, keeping types with the KPI type id |
+| `lookupKpiRef` | `{ ref }` (key, id, `/browse/` or `selectedIssue=` URL) | `KpiRefLookup` | one `GET /issue/{ref}` (follows moved keys); free text answers `hidden` without a request |
+| `getKpiCurrentValue` | `{ kpiId }` | `KpiCurrentValue` | one `changelog/bulkfetch` |
+
+The four lazy views throw `KPI_WORK_TYPE_NOT_SET_UP` without a work type. `jira.ts`: `KpiIssue` gained
+`typeIconUrl` and `childLinks` (`issuetype` is now in every KPI search's fields); `fetchKpi` is
+`lookupIssueAsKpi` (also returns a non-KPI as `notKpi`); new `fetchParentChain`, `listKpiSpaces`,
+`inlineIconOnce` (per invocation, per URL).
+
+**For 08 to reuse:** `lookupKpiRef` + `parseKpiRefInput` / `kpiRefOf` (Parent search by key); `searchKpis`
+and `listKpiSpaces` (+ the `SpaceFilter` component and `SpaceKey` chip: a space chooser); `WorkItemRef` /
+`TypeIcon` (Plans-style `{icon} {key} {summary}`, Parent field and the created-KPI flag); `KpiRow` /
+`kpiTree` / `visibleRows` / `toKpiOptions` (a collapsible KPI list); `cachedKpiPickerApi` / `useLoad`;
+the harness `PickerWorld` fixtures.
+
+**Decisions and deviations**
+
+- **Already-targeted KPIs are filtered in the client too** (`withoutTracked`): a target saved since the
+  load drops out without a reload. `listKpisInSpaces` / `searchKpis` take no `issueId` (the client
+  filters), and `lookupKpiRef` has no "tracked" kind: the client says "… is already tracked on this
+  work item." A moved key is detected in the client (the answered key differs from the one typed).
+- **Phase 1 order:** the own target rows now wait for the chain walk (the one `id in` covers own and
+  every parent's targets, as specified), instead of a catalog search started at t=0. With the panel's
+  context naming the issue's space (`extension.project.key`), This space starts without waiting for
+  the issue GET.
+- **Best effort:** a parent Jira fails to return ends the walk (logged), and a failed sub-KPI load leaves
+  the targets without sub-KPIs (logged). This space and the targets still fail the load, as 06's catalog did.
+- **Sub-KPIs** are found from the targets' `issuelinks` child ends; a child whose key isn't in the target's
+  space isn't fetched, and a fetched one in another space is dropped. Sub-KPIs already loaded with This
+  space are reused.
+- **Readings** for Phase 2 are asked for every own target id; Jira leaves out KPIs the user can't see
+  (and deleted ones), which then get no series (verify on dev: bulkfetch with a deleted id).
+- **UI:** the browser opens on Tracked by parents each time it opens (Q1). Typing re-searches the view and
+  runs one every-space search (250 ms debounce) that feeds All KPIs and every view's "N more in other
+  spaces" (`50+` when capped); with the Space filter set and text typed, All KPIs adds that space's
+  search. A typed whole key or id runs the lookup alongside; a URL only the lookup. The empty This space
+  says "No KPIs in {space} yet. Find one in All KPIs." (Q3). All KPIs without text or space says "Type to
+  search every KPI you can access, or choose a space." Narrow (< 620px, a container query on the
+  picker) swaps the menu for a `KPI view` select (Q5). The browser also collapses when focus leaves it
+  (tabbing to the next field); Tab reaches the menu. Enter in the Space filter right after typing picks
+  the first match once it arrives. The right pane has the column header but no title; bands are
+  `role=group` sections of the listbox; chevrons are `tabIndex=-1` buttons with `aria-expanded`.
+- **Scale check (Q6):** the `AtScale` story (300 KPIs over 25 spaces; the Epic targets 6 KPIs with
+  sub-KPIs, the Initiative 2): two bands, every target collapsed, a five-entry menu.
+
+**Verification:** 882 unit tests (was 825) and 265 story tests (was 216) pass, story tests run twice;
+`typecheck` and `lint` clean. Harness checked in the browser (`?surface=issue`, `?issueId=10231`, light
+and dark, 1280px and 560px): Tracked by parents bands, expanding without picking, search with the path
+opened and "N more in other spaces", All KPIs grouped by space, the Space filter, pasted URL / key /
+non-KPI / missing key, keyboard pick with the current value line, a saved target leaving the lists, the
+KPI's own panel; no console errors besides the harness's missing favicon.
+
+**Live check (Step 6) should verify** on bitovi-training (deploy; no manifest change, so `forge deploy`
+alone): on a work item in ECOM / CLAIMS / STORE / SUNNYSUSHI whose parents have targets, the panel opens
+with one `getPanelList` whose `[perf]` log shows the issue GET, one `[issuetype]` search with
+`project in`, one `GET /issue/{id}` per parent, one `[issuetype]` `id in` search, ≤ 1 per sub-KPI level,
+1–3 icon fetches, and **no** `mypermissions`, `project/search` or search over all KPIs; Phase 2 makes
+one bulkfetch of the own target ids only. The picker opens on Tracked by parents with each parent's
+band and target values (worded like the cards); the bands' icons are the real Epic/Initiative icons and
+KPI rows show the KPI type's icon (the bullseye once 04 set the avatar); This space lists the work
+item's space's KPIs (or the empty message); Parent spaces and Global KPIs (KPI, 14 KPIs; KPI-1's
+sub-KPIs collapsed, KPI2-1 not under it there since it's in KPI2) load when clicked, once; All KPIs finds
+KPI2-1 by search and with the Space filter on KPI2 (the filter lists only spaces with the KPI type);
+pasting `KPI2-1`, its `/browse/` URL and a non-KPI key (an Epic) give the right messages, a moved KPI's
+old key shows its new key; `context.extension.project.key` is present (else This space just waits for
+the issue GET); `changelog/bulkfetch` with a deleted KPI's id still returns the others; a user without
+Browse on KPI2 never sees KPI2-1 (deferred with 06's non-admin checks); the panel stays usable at the
+issue view's narrow width (menu as a select).
+

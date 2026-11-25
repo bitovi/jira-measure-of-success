@@ -21,7 +21,7 @@ const basis: PanelBasis = {
   closed: false,
   own: [assignment('10001', ownDue), assignment('10002', parentDue)],
   parentKpiIds: ['10002', '10003'],
-  catalog: [
+  kpis: [
     { id: '10001', key: 'KPI-1', name: 'Signups', unit: 'users', direction: 'increase', currentValue: null, depth: 0 },
     { id: '10002', key: 'KPI-2', name: 'Churn', unit: '%', direction: 'decrease', currentValue: null, depth: 0 },
     { id: '10003', key: 'KPI-3', name: 'NPS', unit: 'pts', direction: 'increase', currentValue: null, depth: 1 },
@@ -55,7 +55,7 @@ describe('assemblePanel', () => {
     expect(signups).toMatchObject({ kpiKey: 'KPI-1', name: 'Signups', target: 10, targetType: 'percent', dueTiming: ownDue });
     expect(signups.resolvedValue).toBeNull();
     expect(signups.displayState).toBeNull();
-    expect(panel.catalog.every((c) => c.currentValue === null)).toBe(true);
+    expect(panel.kpis.every((c) => c.currentValue === null)).toBe(true);
   });
 
   it('with Phase 2: resolves dates and values, fills current values, clears resolving', () => {
@@ -63,7 +63,7 @@ describe('assemblePanel', () => {
     expect(panel.resolving).toBeUndefined();
     expect(panel.issueDueDate).toBe('2026-09-30');
     expect(panel.issueDueRolledUp).toBe(true);
-    expect(panel.catalog.map((c) => c.currentValue)).toEqual([120, 5, null]);
+    expect(panel.kpis.map((c) => c.currentValue)).toEqual([120, 5, null]);
 
     const signups = panel.rows.find((r) => r.kpiId === '10001')!;
     expect(signups.resolving).toBeUndefined();
@@ -192,7 +192,7 @@ describe('assemblePanel', () => {
     });
   });
 
-  describe('a KPI missing from the catalog but not confirmed deleted (e.g. search-index lag)', () => {
+  describe('a KPI missing from the targeted KPIs but not confirmed deleted (e.g. search-index lag)', () => {
     const lagging: PanelBasis = {
       ...basis,
       own: [assignment('10001', ownDue), assignment('10009', ownDue)],

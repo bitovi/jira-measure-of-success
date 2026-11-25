@@ -68,6 +68,8 @@ import {
   type KpiTreeNode,
 } from './hierarchy.js';
 import { createKpiSetupSim, kpiSetupScenario, type KpiSetupSim } from './kpiSetup.js';
+import { worldPickerApi, worldSuggestions, type PickerWorld, type WorldKpi } from './kpiPicker.js';
+import { TYPE_ICONS } from './typeIcons.js';
 import {
   createMockMigrations,
   migrationsMode,
@@ -259,14 +261,14 @@ export function getPanelData(issueId: string): PanelData {
   // KPI), return the single-KPI chart payload instead of the
   // associate/target-editor rows. In the harness, open it via
   // `?surface=issue&issueId=KPI-1` (or the KPI's issue id, e.g. `20001`).
-  // Since spec 11 · 06 it carries no catalog (the backend loads only this KPI).
+  // Since spec 11 · 06 it carries no other KPI (the backend loads only this KPI).
   const kpiNode = findKpiByRef(kpiTree, issueId);
   if (kpiNode) {
     timelineIdSeq = 1;
     return {
       issueKey: kpiNode.issueKey,
       rows: [],
-      catalog: [],
+      kpis: [],
       issueDueDate: null,
       issueDueRolledUp: false,
       kpiView: {
@@ -283,7 +285,7 @@ export function getPanelData(issueId: string): PanelData {
     return {
       issueKey: issueId,
       rows: [],
-      catalog: catalogDto(),
+      kpis: [],
       issueDueDate: null,
       issueDueRolledUp: false,
     };
@@ -394,16 +396,78 @@ export function getPanelData(issueId: string): PanelData {
   return {
     issueKey: issue.key,
     rows,
-    catalog: catalogDto(),
+    // Like Phase 2: current values for the issue's own targets only.
+    kpis: targetedKpis(issue).map((c) => (issue.assignments.some((a) => a.kpiId === c.id) ? c : { ...c, currentValue: null })),
+    picker: pickerSuggestions(issue),
     issueDueDate: ctx.issue.due.date,
     issueDueRolledUp: ctx.issue.due.source === 'children',
   };
 }
 
+// ── KPI picker (spec 11 · 07) ────────────────────────────────────────────────
+
+/** The work items' spaces (their key prefixes), by name. */
+const WORK_SPACES: Record<string, string> = { OUT: 'Outcomes', INIT: 'Initiatives', INC: 'Increments', EPIC: 'Delivery' };
+
+/** The harness site as a KPI picker world: its KPI tree, its work items and their targets. */
+export function harnessPickerWorld(): PickerWorld {
+  const kpis: WorldKpi[] = [];
+  const walk = (nodes: KpiTreeNode[], parentKey: string | null) => {
+    for (const n of nodes) {
+      kpis.push({ id: n.kpiId, key: n.issueKey, name: n.name, unit: n.unit, direction: n.direction, parentKey });
+      if (n.children) walk(n.children, n.issueKey);
+    }
+  };
+  walk(kpiTree, null);
+  return {
+    spaces: { ...WORK_SPACES, ...Object.fromEntries(Object.values(KPI_SPACES).map((sp) => [sp.key, sp.name])) },
+    kpis,
+    items: issues.map((i) => ({
+      id: i.id,
+      key: i.key,
+      summary: i.summary,
+      typeName: i.issueTypeName,
+      parentKey: i.parentId ? (findIssue(i.parentId)?.key ?? null) : null,
+      targets: i.assignments,
+    })),
+    centralKey: CENTRAL_SPACE.key,
+    hidden: new Set(),
+    moved: {},
+    currentValue: (kpiId) => {
+      const r = readingsFor(kpiId);
+      return r.length ? r[r.length - 1].value : null;
+    },
+    typeIcon: (typeName) => (typeName === 'KPI' ? TYPE_ICONS.KPI : issueTypeIconUri(typeName)),
+  };
+}
+
+/** What opening the panel on `issue` sends the KPI browser. */
+function pickerSuggestions(issue: FixtureIssue) {
+  return worldSuggestions(harnessPickerWorld(), issue.key, issue.assignments.map((a) => a.kpiId));
+}
+
+/** The KPIs `issue` and its parent target (their definitions, for the target cards). */
+function targetedKpis(issue: FixtureIssue): CatalogEntryDto[] {
+  const parent = issue.parentId ? findIssue(issue.parentId) : undefined;
+  const ids = new Set([...issue.assignments, ...(parent?.assignments ?? [])].map((a) => a.kpiId));
+  return catalogDto()
+    .filter((c) => ids.has(c.id))
+    .map(({ depth, ...c }) => {
+      void depth;
+      return c;
+    });
+}
+
+/** The KPI browser's lazy loads over the harness site (`?pickerDelayMs=`, default 400). */
+export function pickerApi(delayMs = 0) {
+  return worldPickerApi(harnessPickerWorld(), { delayMs });
+}
+
 /**
  * Phase 1 of the progressive issue panel — mirrors the backend `getPanelList`:
- * the issue's and its parent's targets and the catalog (no current values). A
- * KPI issue (or an unknown one) gets its complete panel instead.
+ * the issue's and its parent's targets, those KPIs' definitions (no current
+ * values) and the KPI browser's opening views. A KPI issue (or an unknown one)
+ * gets its complete panel instead.
  */
 export function getPanelList(issueId: string): PanelListData {
   const issue = findIssue(issueId);
@@ -415,8 +479,9 @@ export function getPanelList(issueId: string): PanelListData {
       closed: issue.closed ?? false,
       own: issue.assignments,
       parentKpiIds: [...new Set((parent?.assignments ?? []).map((a) => a.kpiId))],
-      catalog: catalogDto().map((c) => ({ ...c, currentValue: null })),
-      // The harness has no search-index lag: a targeted KPI outside the catalog is
+      kpis: targetedKpis(issue).map((c) => ({ ...c, currentValue: null })),
+      picker: pickerSuggestions(issue),
+      // The harness has no search-index lag: a targeted KPI that doesn't exist is
       // deleted (EPIC-231's key-only reference is one, read without asking Jira).
       deletedKpiIds: [
         ...new Set([...issue.assignments, ...(parent?.assignments ?? [])].map((a) => a.kpiId)),
@@ -425,11 +490,14 @@ export function getPanelList(issueId: string): PanelListData {
   };
 }
 
-/** Phase 2 of the progressive issue panel — mirrors the backend `getPanelValues`. */
+/** Phase 2 of the progressive issue panel — mirrors the backend `getPanelValues` (own targets' readings only). */
 export function getPanelValues(issueId: string): PanelValuesData {
   const issue = findIssue(issueId);
   const readings: PanelValuesData['readings'] = {};
-  for (const c of catalogDto()) readings[c.id] = readingsFor(c.id).map((r) => ({ date: r.date, value: r.value }));
+  const own = new Set(issue?.assignments.map((a) => a.kpiId) ?? []);
+  for (const c of catalogDto()) {
+    if (own.has(c.id)) readings[c.id] = readingsFor(c.id).map((r) => ({ date: r.date, value: r.value }));
+  }
   if (!issue) return { today: TODAY, issueDue: { date: null, source: 'pending' }, parent: null, readings };
   const ctx = targetContext(issue, timingNodes(), new Map());
   return { today: TODAY, issueDue: ctx.issue.due, parent: ctx.parent ?? null, readings };

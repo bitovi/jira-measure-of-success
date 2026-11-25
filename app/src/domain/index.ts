@@ -25,6 +25,7 @@ export * from './resolve/timelineProjectFilter';
 export * from './resolve/kpiLinks';
 export * from './resolve/kpiAccess';
 export * from './resolve/kpiSpaces';
+export * from './resolve/kpiPicker';
 export * from './resolve/migrations';
 export * from './resolve/kpiRef';
 export * from './resolve/kpiSiteConfig';

@@ -212,7 +212,13 @@ describe('Step 3: access per space, looked up only when an action needs it', () 
     const { data: timeline } = await call<TimelineData>('getTimelineData');
     expect(flatten(timeline!.roots).some((n) => n.space?.key === 'GROW')).toBe(false);
     const { data: list } = await call<PanelListData>('getPanelList', { issueId: spaces.crossSpaceTargetIssueId });
-    expect(list!.basis!.catalog.some((c) => c.space?.key === 'GROW')).toBe(false);
+    expect(list!.basis!.kpis.some((c) => c.space?.key === 'GROW')).toBe(false);
+    const picker = list!.basis!.picker!;
+    const listed = [
+      ...picker.inThisSpace,
+      ...picker.trackedByParents.flatMap((b) => b.targets.flatMap((t) => [t.option, ...t.subKpis])),
+    ];
+    expect(listed.some((o) => o.space.key === 'GROW')).toBe(false);
     // Its target on GROW-1 stays, flagged no-permission.
     expect(list!.basis!.noAccessKpiIds).toEqual([spaces.growUnderCentralId]);
     const { data: values } = await call<PanelValuesData>('getPanelValues', { issueId: spaces.crossSpaceTargetIssueId });
@@ -220,7 +226,7 @@ describe('Step 3: access per space, looked up only when an action needs it', () 
   });
 });
 
-describe('Step 4: Timeline, catalog and create across spaces', () => {
+describe('Step 4: Timeline, panel and create across spaces', () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-06-15T12:00:00Z'));
@@ -262,14 +268,13 @@ describe('Step 4: Timeline, catalog and create across spaces', () => {
     expect(flatten(data!.roots).some((n) => n.space?.key === 'PORT')).toBe(false);
   });
 
-  it('the panel catalog lists KPIs from every space, by work type, with their space', async () => {
+  it('the panel reads its targeted KPIs from every space, by work type, with their space', async () => {
     load();
-    const { data, count } = await call<PanelListData>('getPanelList', { issueId: spaces.crossSpaceTargetIssueId });
-    const catalog = data!.basis!.catalog;
-    expect(catalog.map((c) => c.key)).toEqual(expect.arrayContaining(['KPI-1', 'PORT-1', 'GROW-1', 'GROW-3']));
-    expect(catalog.map((c) => c.key)).not.toContain('TMP-1');
-    expect(catalog.find((c) => c.key === 'GROW-1')!.space).toEqual(GROWTH_PROJECT);
-    expect(count('GET /rest/api/3/search/jql [issuetype]')).toBe(1);
+    const { data } = await call<PanelListData>('getPanelList', { issueId: spaces.crossSpaceTargetIssueId });
+    const kpis = data!.basis!.kpis;
+    expect(kpis.map((c) => c.key)).toEqual(expect.arrayContaining(['GROW-1', 'PORT-2']));
+    expect(kpis.find((c) => c.key === 'GROW-1')!.space).toEqual(GROWTH_PROJECT);
+    expect(kpis.find((c) => c.key === 'PORT-2')!.space).toEqual(PORTFOLIO_PROJECT);
   });
 
   it('nests across spaces, checking Link Issues on the child’s space only', async () => {
@@ -409,7 +414,8 @@ describe('Step 5: a KPI’s own panel loads only that KPI', () => {
     expect(bodies).toEqual([[spaces.growUnderCentralId]]);
     expect(endpoints).not.toContain('GET /rest/api/3/issue/{id}/properties/kpi-assignments');
     const panel = data!.panel!;
-    expect(panel.catalog).toEqual([]);
+    expect(panel.kpis).toEqual([]);
+    expect(panel.picker).toBeUndefined();
     expect(panel.access).toEqual(READ_ONLY);
     expect(panel.kpiView!.node.targets.length + panel.kpiView!.node.undated.length).toBe(1);
   });
@@ -423,11 +429,20 @@ describe('Step 5: a KPI’s own panel loads only that KPI', () => {
     expect(bodies).toEqual([]);
   });
 
-  it('with the panel’s context naming the issue’s work type, a work item’s catalog search starts without waiting for the issue', async () => {
+  it('with the panel’s context naming the issue’s work type and space, a work item’s This space search starts without waiting for the issue', async () => {
     load();
-    const context = { extension: { issue: { id: spaces.crossSpaceTargetIssueId, typeId: '10302' } } };
+    const jql: string[] = [];
+    jira.intercept = (_method, path, _body, raw) => {
+      if (path === '/rest/api/3/search/jql') jql.push(new URLSearchParams(raw.split('?')[1]).get('jql') ?? '');
+      return undefined;
+    };
+    const context = {
+      extension: { issue: { id: spaces.crossSpaceTargetIssueId, typeId: '10302' }, project: { key: 'OPS' } },
+    };
     const { data } = await call<PanelListData>('getPanelList', { issueId: spaces.crossSpaceTargetIssueId }, context);
-    expect(data!.basis!.catalog.length).toBeGreaterThan(0);
+    expect(data!.basis!.kpis.length).toBeGreaterThan(0);
+    expect(data!.basis!.picker!.thisSpace.key).toBe('OPS');
+    expect(jql[0]).toMatch(/project in \("OPS"\)/);
   });
 
   it('flags a KPI linked under two parent KPIs, naming the one the Timeline shows it under', async () => {

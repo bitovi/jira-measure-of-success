@@ -199,6 +199,31 @@ export function kpiParentLinks(
 }
 
 /**
+ * A KPI's sub-KPIs from its `issuelinks` (spec 11 · 07): hierarchy links on
+ * which another issue is this one's CHILD, kept when Jira says the child is of
+ * the KPI work type (or doesn't say). Ids in link-id order, deduplicated.
+ */
+export function kpiChildLinks(
+  links: IssueLinkRef[] | undefined,
+  hierarchy: KpiHierarchyLink | null,
+  workTypeId: string | null,
+): Array<{ id: string; key: string | null }> {
+  if (!hierarchy) return [];
+  const out: Array<{ id: string; key: string | null; linkId: string }> = [];
+  for (const link of links ?? []) {
+    if (String(link.type?.id ?? '') !== hierarchy.linkTypeId) continue;
+    const child = hierarchy.parentEnd === 'outward' ? link.inwardIssue : link.outwardIssue;
+    if (!child?.id) continue;
+    const typeId = child.fields?.issuetype?.id ? String(child.fields.issuetype.id) : null;
+    if (workTypeId && typeId && typeId !== workTypeId) continue;
+    out.push({ id: String(child.id), key: child.key ?? null, linkId: link.id ? String(link.id) : '' });
+  }
+  out.sort((a, b) => compareLinkIds(a.linkId, b.linkId));
+  const seen = new Set<string>();
+  return out.filter((c) => !seen.has(c.id) && seen.add(c.id)).map(({ id, key }) => ({ id, key }));
+}
+
+/**
  * Resolve a KPI's parent id from its `issuelinks`: the **lowest-id** hierarchy
  * link whose parent is another loaded KPI (`inSetIds`), so every surface agrees
  * whatever order Jira lists the links in. Returns null for a root KPI (no
