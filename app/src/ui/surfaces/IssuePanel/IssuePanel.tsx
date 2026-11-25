@@ -12,7 +12,7 @@ import { kpiActionBlockedReason, NO_KPIS_MESSAGE, projectKeyOfIssueKey } from '@
 import type { Assignment, CatalogEntryDto, KpiOptionDto, KpiSuggestionsDto, PanelRowDto } from '@domain/index.js';
 import { TargetCard } from './components/TargetCard/index.js';
 import { TargetEditor } from './components/TargetEditor/index.js';
-import { KpiPicker, type CurrentValueState } from './components/KpiPicker/index.js';
+import { KpiPicker } from './components/KpiPicker/index.js';
 import { useMenuRoom } from './useMenuRoom.js';
 import {
   DEFAULT_DUE,
@@ -328,11 +328,10 @@ function AssociateForm({
   }, [picked, loads]);
 
   const currentValue = picked && current?.kpiId === picked.id ? current.value : null;
-  const currentState: CurrentValueState = !picked || !loads ? null : current?.kpiId === picked.id ? { pending: false, value: current.value } : { pending: true };
   const kpi: CatalogEntryDto | null = picked
     ? { id: picked.id, key: picked.key, name: picked.name, unit: picked.unit.trim(), direction: picked.direction, currentValue }
     : null;
-  const valueResolving = resolving || currentState?.pending === true;
+  const valueResolving = resolving || (!!picked && !!loads && current?.kpiId !== picked.id);
   const preview = kpi ? { ...previewRow(kpi, draft, issueDueDate, issueDueRolledUp), resolving: valueResolving || undefined } : null;
 
   const canSubmit = picked !== null && isValidDraft(draft);
@@ -361,7 +360,6 @@ function AssociateForm({
             value={picked}
             onChange={setPicked}
             api={loads}
-            currentValue={currentState}
           />
         </div>
 

@@ -763,14 +763,13 @@ export const FormPreview: Story = {
     await userEvent.click(form.getByRole('option', { name: /KPI-3/ }));
     // the picked KPI keeps showing its unit next to the name; its current value is fetched for it alone
     await expect(form.getByRole('combobox', { name: 'KPI' })).toHaveValue('KPI-3 Number of Stores (count)');
-    await waitFor(() => expect(form.getByTestId('picked-kpi')).toHaveTextContent('Current: 250 count'));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '+2');
     const preview = within(form.getByRole('group', { name: 'Number of Stores' }));
     await expect(preview.getByText('+2%')).toBeInTheDocument();
     await expect(preview.getByText('on the due date')).toBeInTheDocument();
     await expect(preview.getByText('Upcoming')).toBeInTheDocument();
     await expect(preview.queryByRole('button', { name: /Actions for/ })).not.toBeInTheDocument();
-    await expect(form.getByText(estimateLine(/^Estimated target 255 by Sep 30, 2026/))).toBeInTheDocument();
+    await expect(await form.findByText(estimateLine(/^Estimated target 255 by Sep 30, 2026/))).toBeInTheDocument();
     await expect(form.queryByText(/Double-check the sign/)).not.toBeInTheDocument();
     await userEvent.clear(form.getByRole('textbox', { name: 'Target value' }));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '-2');
@@ -793,13 +792,12 @@ export const FormAmountChange: Story = {
     await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
     await userEvent.click(form.getByRole('button', { name: 'Expand Revenue' }));
     await userEvent.click(form.getByRole('option', { name: /KPI-2/ }));
-    await waitFor(() => expect(form.getByTestId('picked-kpi')).toHaveTextContent('Current: 1,200 count'));
     await userEvent.click(form.getByRole('combobox', { name: 'Value type' }));
     await userEvent.click(await form.findByText('more'));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '+100');
     const preview = within(form.getByRole('group', { name: '# of Orders' }));
     await expect(preview.getByText('+100')).toBeInTheDocument();
-    await expect(form.getByText(estimateLine(/^Estimated target 1,300 by Sep 30, 2026 · from 1,200 now/))).toBeInTheDocument();
+    await expect(await form.findByText(estimateLine(/^Estimated target 1,300 by Sep 30, 2026 · from 1,200 now/))).toBeInTheDocument();
     await expect(form.queryByText(/Double-check the sign/)).not.toBeInTheDocument();
     await userEvent.clear(form.getByRole('textbox', { name: 'Target value' }));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '-100');

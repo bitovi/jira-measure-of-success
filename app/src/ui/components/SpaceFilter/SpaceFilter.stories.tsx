@@ -38,20 +38,19 @@ type Story = StoryObj<typeof Harness>;
 
 const change = fn();
 
-/** Opens a list with its own Find box; spaces load a page at a time; Enter picks the first match; × clears. */
+/** Opens a list with its own Find box (the first page of spaces; typing finds the rest); Enter picks the first match; × clears. */
 export const FindAndPick: Story = {
   args: { onChange: change },
   play: async ({ canvasElement }) => {
     change.mockClear();
     const c = within(canvasElement);
-    await userEvent.click(c.getByRole('button', { name: 'Space: Any space' }));
-    await waitFor(() => expect(c.getAllByRole('option')).toHaveLength(51));
-    await userEvent.click(c.getByRole('button', { name: 'More spaces…' }));
-    await waitFor(() => expect(c.getAllByRole('option')).toHaveLength(101));
+    await userEvent.click(c.getByRole('button', { name: 'Space: Select space' }));
+    await waitFor(() => expect(c.getAllByRole('option')).toHaveLength(50));
+    await expect(c.queryByRole('button', { name: 'More spaces…' })).toBeNull();
     await userEvent.type(c.getByRole('textbox', { name: 'Find a space' }), 'growth{Enter}');
     await waitFor(() => expect(change).toHaveBeenCalledWith({ key: 'S007', name: 'Growth Program' }));
     await expect(await c.findByRole('button', { name: 'Space: S007 Growth Program' })).toBeInTheDocument();
-    await userEvent.click(c.getByRole('button', { name: 'Any space' }));
+    await userEvent.click(c.getByRole('button', { name: 'Clear space' }));
     await expect(change).toHaveBeenLastCalledWith(null);
   },
 };
@@ -61,11 +60,11 @@ export const FindAndPickDark: Story = { ...FindAndPick, globals: { theme: 'dark'
 export const NoMatch: Story = {
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await userEvent.click(c.getByRole('button', { name: 'Space: Any space' }));
+    await userEvent.click(c.getByRole('button', { name: 'Space: Select space' }));
     await userEvent.type(c.getByRole('textbox', { name: 'Find a space' }), 'zzz');
     await waitFor(() => expect(c.getByText('No space matches “zzz”.')).toBeInTheDocument());
     await userEvent.keyboard('{Escape}');
     await expect(c.queryByRole('textbox', { name: 'Find a space' })).toBeNull();
-    await expect(c.getByRole('button', { name: 'Space: Any space' })).toHaveFocus();
+    await expect(c.getByRole('button', { name: 'Space: Select space' })).toHaveFocus();
   },
 };

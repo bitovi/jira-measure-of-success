@@ -54,9 +54,14 @@ describe('pickerView', () => {
     ]);
   });
 
-  it('opens on Tracked by parents, or This space when it is empty', () => {
+  it('opens on Tracked by parents, else This space, else Global KPIs', () => {
     expect(defaultView(S)).toBe('tracked');
     expect(defaultView({ ...S, trackedByParents: [] })).toBe('thisSpace');
+    expect(defaultView({ ...S, trackedByParents: [], inThisSpace: [] })).toBe('global');
+  });
+
+  it('with nothing in either and no Global KPIs space, opens on This space', () => {
+    expect(defaultView({ ...S, trackedByParents: [], inThisSpace: [], globalSpace: null })).toBe('thisSpace');
   });
 
   it('a target saved since the load leaves every list; a band left empty goes', () => {
@@ -75,6 +80,15 @@ describe('pickerView', () => {
       ['2', 1, false],
     ]);
     expect(listRows(options, 'a', new Set(), 'kpi 2').map((r) => r.option.id)).toEqual(['1', '2']);
+  });
+
+  it('All KPIs rows start expanded; toggling one collapses it', () => {
+    const options = [opt('1', 'PROG', null, true), opt('2', 'PROG', '1')];
+    expect(listRows(options, 'all|PROG', new Set(), '').map((r) => [r.option.id, r.open])).toEqual([
+      ['1', true],
+      ['2', false],
+    ]);
+    expect(listRows(options, 'all|PROG', new Set(['all|PROG|1']), '').map((r) => [r.option.id, r.open])).toEqual([['1', false]]);
   });
 
   it('groups All KPIs by space, in the order met', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tooltipPlacement } from './tooltipPlacement.js';
+import { tooltipPlacement, tooltipTop } from './tooltipPlacement.js';
 
 /** The tooltip's horizontal extent at its maximum width. */
 const extent = (p: ReturnType<typeof tooltipPlacement>, vw: number): [number, number] =>
@@ -42,5 +42,27 @@ describe('tooltipPlacement', () => {
         expect(to).toBeLessThanOrEqual(vw);
       }
     }
+  });
+});
+
+describe('tooltipTop', () => {
+  it('sits below the cursor when it fits', () => {
+    expect(tooltipTop(100, 800, 60)).toBe(114);
+  });
+
+  it('opens upward when it would be cut off by the bottom of the viewport', () => {
+    expect(tooltipTop(760, 800, 60)).toBe(760 - 14 - 60);
+  });
+
+  it('fits exactly above the bottom margin without flipping', () => {
+    expect(tooltipTop(800 - 8 - 60 - 14, 800, 60)).toBe(800 - 8 - 60);
+  });
+
+  it('too tall for either side: pins to the top margin when there is more room above', () => {
+    expect(tooltipTop(150, 200, 180)).toBe(8);
+  });
+
+  it('too tall for either side: stays below when there is more room below', () => {
+    expect(tooltipTop(40, 200, 180)).toBe(54);
   });
 });

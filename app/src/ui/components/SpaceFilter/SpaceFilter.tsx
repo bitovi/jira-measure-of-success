@@ -15,9 +15,10 @@ export function SpaceKey({ spaceKey, faded = false }: { spaceKey: string; faded?
 
 /**
  * A searchable space chooser (spec 11 · 07, All KPIs' Space filter): a button
- * (`Space: Any space ▾`) opening a list with its own "Find a space…" box,
- * because a site can have hundreds of spaces. Enter picks the first match, ×
- * clears the choice, Esc closes just the list. Spaces load a page at a time.
+ * (`Space: Select space ▾`) opening a list with its own "Find a space…" box,
+ * because a site can have hundreds of spaces: it lists the first page, and
+ * typing finds the rest. Enter picks the first match, × clears the choice, Esc
+ * closes just the list.
  */
 export function SpaceFilter({
   value,
@@ -34,7 +35,6 @@ export function SpaceFilter({
 }) {
   const [open, setOpenState] = useState(false);
   const [find, setFind] = useState('');
-  const [pages, setPages] = useState(1);
   /** Enter was pressed while the matches were loading: pick the first once they arrive */
   const [enterPending, setEnterPending] = useState(false);
   const listId = useId();
@@ -43,28 +43,16 @@ export function SpaceFilter({
   const setOpen = (next: boolean) => {
     setOpenState(next);
     onOpenChange?.(next);
-    if (!next) {
-      setFind('');
-      setPages(1);
-    }
+    if (!next) setFind('');
   };
   useEffect(() => {
     if (open) findRef.current?.focus();
   }, [open]);
 
   const query = find.trim();
-  const loaded = useLoad<KpiPickerSpace[] & { next?: number | null }>(
-    open ? `${pages}:${query.toLowerCase()}` : null,
-    async () => {
-      const out: KpiPickerSpace[] = [];
-      let next: number | null = 0;
-      for (let p = 0; p < pages && next !== null; p += 1) {
-        const page: ListKpiSpacesResult = await loadSpaces(query, next);
-        out.push(...page.spaces);
-        next = page.nextStartAt;
-      }
-      return Object.assign(out, { next });
-    },
+  const loaded = useLoad<KpiPickerSpace[]>(
+    open ? query.toLowerCase() : null,
+    async () => (await loadSpaces(query, 0)).spaces,
     query ? 200 : 0,
   );
   const spaces = loaded.status === 'ready' ? loaded.value : [];
@@ -105,7 +93,7 @@ export function SpaceFilter({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`${label}: ${value ? `${value.key} ${value.name}` : 'Any space'}`}
+        aria-label={`${label}: ${value ? `${value.key} ${value.name}` : 'Select space'}`}
         onClick={() => setOpen(!open)}
         className="inline-flex max-w-[260px] items-center gap-1.5 rounded border border-border bg-surface px-2 py-0.5 text-[13px] text-text hover:bg-[var(--ds-background-neutral-subtle-hovered,#091e420f)]"
       >
@@ -115,7 +103,7 @@ export function SpaceFilter({
             <span className="truncate">{value.name}</span>
           </>
         ) : (
-          'Any space'
+          <span className="text-text-subtle">Select space</span>
         )}
         <span aria-hidden className="text-[11px] text-text-subtle">
           ▾
@@ -124,8 +112,8 @@ export function SpaceFilter({
       {value && (
         <button
           type="button"
-          aria-label="Any space"
-          title="Any space"
+          aria-label="Clear space"
+          title="Clear space"
           onClick={() => pick(null)}
           className="px-1 text-[15px] leading-none text-text-subtle hover:text-text"
         >
@@ -139,7 +127,6 @@ export function SpaceFilter({
             value={find}
             onChange={(e) => {
               setFind(e.target.value);
-              setPages(1);
               setEnterPending(false);
             }}
             onKeyDown={onFindKey}
@@ -150,11 +137,6 @@ export function SpaceFilter({
             className="mx-2 mb-1.5 w-[calc(100%-16px)] rounded border-2 border-[var(--ds-border-focused,#388bff)] bg-surface px-1.5 py-0.5 text-sm text-text outline-none"
           />
           <div id={listId} role="listbox" aria-label="Spaces" className="max-h-[220px] overflow-auto">
-            {!query && (
-              <SpaceOption selected={value === null} onPick={() => pick(null)}>
-                Any space
-              </SpaceOption>
-            )}
             {spaces.map((s) => (
               <SpaceOption key={s.key} selected={value?.key === s.key} onPick={() => pick(s)}>
                 <SpaceKey spaceKey={s.key} />
@@ -165,15 +147,6 @@ export function SpaceFilter({
             {loaded.status === 'error' && <p className="px-3 py-1 text-[13px] text-danger">Couldn’t load spaces: {loaded.message}</p>}
             {loaded.status === 'ready' && spaces.length === 0 && query && (
               <p className="px-3 py-1 text-[13px] text-text-subtle">No space matches “{query}”.</p>
-            )}
-            {loaded.status === 'ready' && loaded.value.next != null && (
-              <button
-                type="button"
-                onClick={() => setPages((n) => n + 1)}
-                className="w-full px-3 py-1 text-left text-[13px] font-semibold text-[var(--ds-link,#1868db)]"
-              >
-                More spaces…
-              </button>
             )}
           </div>
         </div>

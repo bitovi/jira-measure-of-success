@@ -19,6 +19,7 @@ import {
   article,
   defaultView,
   groupBySpace,
+  isOpen,
   listRows,
   menuEntries,
   pickedLabel,
@@ -42,7 +43,6 @@ const NO_API: KpiPickerApi = {
 const TYPING_DELAY_MS = 250;
 
 /** The picked KPI's current value, for the line under the field. */
-export type CurrentValueState = { pending: true } | { pending: false; value: number | null } | null;
 
 /** One selectable row of the right pane, in keyboard order. */
 interface Selectable {
@@ -69,7 +69,6 @@ export function KpiPicker({
   value,
   onChange,
   api,
-  currentValue = null,
   inputId,
   defaultOpen = false,
 }: {
@@ -81,7 +80,6 @@ export function KpiPicker({
   value: KpiOptionDto | null;
   onChange: (option: KpiOptionDto | null) => void;
   api?: KpiPickerApi;
-  currentValue?: CurrentValueState;
   inputId?: string;
   /** start expanded (stories) */
   defaultOpen?: boolean;
@@ -340,9 +338,12 @@ export function KpiPicker({
   function toggle(toggleId: string, to?: boolean) {
     setExpanded((prev) => {
       const next = new Set(prev);
-      const opening = to ?? !next.has(toggleId);
-      if (opening) next.add(toggleId);
-      else next.delete(toggleId);
+      const opening = to ?? !isOpen(next, toggleId);
+      // the set holds the rows toggled away from how they start (startsOpen)
+      if (opening !== isOpen(next, toggleId)) {
+        if (next.has(toggleId)) next.delete(toggleId);
+        else next.add(toggleId);
+      }
       return next;
     });
   }
@@ -477,10 +478,6 @@ export function KpiPicker({
           ▼
         </button>
       </div>
-
-      {value && !open && (
-        <PickedLine option={value} suggestions={s} currentValue={currentValue} />
-      )}
 
       {open && (
         <div
@@ -694,41 +691,4 @@ function Spinner() {
 
 function ItemInline({ item }: { item: WorkItemRefDto }) {
   return <WorkItemRef typeIconUrl={item.typeIconUrl} typeName={item.typeName} itemKey={item.key} summary={item.summary} plain className="align-middle" />;
-}
-
-/** Under the picked KPI: its space · where it came from · its current value. */
-function PickedLine({
-  option,
-  suggestions,
-  currentValue,
-}: {
-  option: KpiOptionDto;
-  suggestions: KpiSuggestionsDto;
-  currentValue: CurrentValueState;
-}) {
-  return (
-    <div data-testid="picked-kpi" className="mt-1.5 flex min-h-4 flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-4 text-text-subtle">
-      <SpaceKey spaceKey={option.space.key} />
-      <span>{option.space.name}</span>
-      <span aria-hidden>·</span>
-      <span>{whereLabel(suggestions, option)}</span>
-      {currentValue && (
-        <>
-          <span aria-hidden>·</span>
-          {currentValue.pending ? (
-            <span>
-              <Spinner />
-              current value…
-            </span>
-          ) : (
-            <span>
-              Current:{' '}
-              <b className="font-semibold text-text">{currentValue.value === null ? 'no readings yet' : currentValue.value.toLocaleString('en-US')}</b>
-              {currentValue.value !== null && option.unit ? ` ${option.unit}` : ''}
-            </span>
-          )}
-        </>
-      )}
-    </div>
-  );
 }
