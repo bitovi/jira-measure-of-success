@@ -349,20 +349,26 @@ _Still open after the G3 review._
 
 1. **Remember the last view** each person used (per user, in the browser), or always open on Tracked by
    parents? Default: always open on Tracked by parents.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** the default: always open on Tracked by parents.
 2. **Current values in the list** (e.g. "Conversion rate · 3.1%")? It costs a readings fetch for every
    listed KPI. Default: no, only for the picked KPI.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** the default: no, only for the picked KPI.
 3. **A new team with no KPIs in its space.** Should the empty This space view offer "Create a KPI in
    {space}" (when the KPI type is available there) or "Create one in Global KPIs", or nothing? Today
    KPIs are only created from the Timeline. (The prototype shows a "Create one in NEW" link as a
    placeholder.) If yes, whether the user can create there is asked only when the empty view is shown,
    with 08's `getKpiCreateSpaces` (no permission lookup on panel open, overview Q10).
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** nothing for now: the empty view says there are no KPIs in this space yet and points to All KPIs. Creating KPIs stays on the Timeline.
 4. **Chain depth.** Walk to the top (capped at 10 for safety), or reuse Settings' rollup `depthCap`?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** walk to the top, capped at 10.
 5. **Narrow issue views.** The browser is designed for the issue's main column (~820px in the
    prototype; it was checked down to ~620px). Below that, should the left menu become a select or tabs
    above the list?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** yes: below ~620px the menu becomes a select above the list.
 6. **Scale check.** The prototype has ~30 KPIs. Before building, try the design against a scale
    fixture (e.g. 300 KPIs over 25 spaces, a parent targeting 6 KPIs) to confirm bands and collapsed trees
    stay readable.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review):** checked with a scale story (300 KPIs over 25 spaces, a parent targeting 6 KPIs) instead of the HTML prototype.
 
 ### Decided
 
