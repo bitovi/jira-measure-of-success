@@ -98,8 +98,10 @@ to the migration (it reconciles both values, below). It's removed in the cleanup
     KPI otherwise).
 - **The handler still checks**: it does nothing when `kpi-meta` already matches the fields, in case an
   event gets through the filter.
-- 01 A9 checks that the event fires for edits made in Jira's UI, and that the expression and `ignoreSelf`
-  behave as above. That includes whether `ignoreSelf` covers the app's requests made **as the user**.
+- **01 A9 confirmed this (2026-11-24):** the event fires for a person's edit of a marked KPI, with
+  `changelog.items` naming the field; the expression drops unmarked KPIs; `ignoreSelf` drops the app's
+  own field writes made `asUser` **and** `asApp`; property writes never fire it. Entity-property
+  filtering is a Forge *preview* feature.
 - A trigger module adds no scope, so it doesn't make the release a major version (overview Q11).
 
 ### Migration: `kpi-meta-to-fields`
@@ -107,8 +109,9 @@ to the migration (it reconciles both values, below). It's removed in the cleanup
 Registered on 02's framework. `applicable: false` while `fields` is `null` ("Choose the KPI fields in
 Settings first").
 
-- **Which issues:** every KPI on the site, in every space: `issuetype = {workTypeId} AND id > {cursor}
-  ORDER BY id ASC`. Not `project = KEY`, because 06 lets KPIs live anywhere.
+- **Which issues:** every KPI on the site, in every space: `issuetype = {workTypeId} ORDER BY id ASC`,
+  paged with `nextPageToken` (01 E2: `id > {cursor}` only works within one project). Not
+  `project = KEY`, because 06 lets KPIs live anywhere.
 - **Pure planner** `planKpiMetaToFields({ legacy, fields })`, per KPI:
 
   | `kpi-meta` | Plan |
@@ -206,7 +209,8 @@ Settings first").
    values, the migration keeps the field and rewrites `kpi-meta` to match, listing each one. OK? Or
    should `kpi-meta` win, or should 04 only put the fields on screens **after** this migration is
    done (the earlier draft's ordering)?
-3. **Sync trigger.** Add the `avi:jira:updated:issue` trigger so `kpi-meta` follows edits made in
+3. **Sync trigger.** (01 A9: the filtered trigger works as designed, so this is only a product
+   decision now.) Add the `avi:jira:updated:issue` trigger so `kpi-meta` follows edits made in
    Jira's UI (for the customer's report) until the cleanup release? Without it, the
    customer's report can show an old unit or direction after a Jira-side edit.
 4. **Migrating as the admin**: History names the admin for every migrated KPI. Fine, or migrate as the

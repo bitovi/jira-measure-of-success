@@ -191,7 +191,9 @@ section 3. Who does what (Jira admin vs space admin) comes from 01 B4. The same 
 
 _To be answered at gate G2. 01's findings are noted next to each where relevant._
 
-1. **Who owns the unit and direction fields?**
+1. **Who owns the unit and direction fields?** (01: admin-created fields work over REST, as the app or
+   the admin (A2, B3); Forge-owned fields appear in **every** field scheme and can't be removed from
+   one (B8), so with (a) every space and work type would carry KPI Unit and KPI Direction.)
    - **(a) Forge-owned** (`jira:customField` in the manifest, like `kpi-reading`): installed
      automatically, can have a formatter and validation, can't be a native dropdown. **Each Forge
      environment gets its own fields**, so a site with dev + staging + prod installs sees three
@@ -202,7 +204,12 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
 2. **Direction field type**: a single-select dropdown with an option mapping (v3), or text
    `increase` / `decrease` with a formatter, validation and custom editor (earlier draft; only
    possible with 1a)?
-3. **Making the fields usable in a space**: a **KPI field scheme** that spaces switch to (v3), or
+3. **Making the fields usable in a space** (01 A3/B2 answer most of this: **contexts can no longer
+   restrict a field**: Jira gives each field one global context that can't be narrowed or deleted, and
+   field configuration schemes are gone on bitovi-training. **Field schemes are the only way**, with the
+   field restricted to the KPI work type. The central space uses the shared *Default Field Scheme*, so
+   04 either adds the fields to that scheme for the KPI type only (harmless to other spaces' work types)
+   or gives KPI spaces their own scheme. Remaining question: which.): a **KPI field scheme** that spaces switch to (v3), or
    field **contexts** limited to the KPI work type in all projects (earlier draft), or both? Depends on
    01 A3 and B2. Note: Jira marks the field schemes REST API (`/rest/api/3/config/fieldschemes`)
    **experimental**, so it may change under us. Contexts and field configuration schemes are stable.
@@ -225,4 +232,4 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
     [picker prototype](../07-kpi-picker/kpi-picker.html). Should Settings also offer to set it on an
     **existing** KPI type (e.g. bitovi-training's, which has Jira's generic checkbox avatar), or leave
     existing types' icons alone? Changing it affects every space that uses the type. 01 B7 checks the
-    API.
+    API. (01 B7: PNG, GIF or JPEG only; SVG is rejected. Ship the bullseye as a PNG.)

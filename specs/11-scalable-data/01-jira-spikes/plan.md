@@ -1,6 +1,6 @@
 # 01 — Jira spikes
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft**.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done** (G1 review pending).
 
 ## Goal
 
@@ -123,6 +123,9 @@ pages (2026-11-21). F2–F4 are left for when space pages are picked up.
   *Clean-up*.
 - Update the *Questions* sections of stages 02–08 with what the findings answer.
 - **🔍 Gate G1: stop and ask Justin to review *Findings*.** Record his comments here.
+- **Status (2026-11-24):** Steps 1–5 done; Clean-up complete. Findings are **ready for Justin's
+  review**. Justin asked the implementer to keep going ("continue as far as you can"), so later stages
+  proceed on these findings; any G1 comments are folded in afterwards.
 
 ## Findings
 
@@ -210,7 +213,51 @@ Throwaway objects: fields `customfield_10907` *SPIKE KPI Unit* (short text) and 
     [102], restrictedToWorkTypes: [10436] }] }` → `success: true`; `GET
     /config/fieldschemes/102/fields?fieldId=…` shows `restrictedToWorkTypes: ['10436']`;
   - read: `GET /config/fieldschemes/{id}/fields` pages at `maxResults` ≤ 50 (200 → 400).
-  KPI Reading (dev and staging) is in the *Default Field Scheme* for **every** work type. (B8 follows.)
+  KPI Reading (dev and staging) is in the *Default Field Scheme* for **every** work type.
+- **B3 — every config call works `asApp`** with the current scopes (no `asUser` needed), on `SPIKEB`:
+  `POST /issuetypescheme { name, issueTypeIds: ['10436','10005'], defaultIssueTypeId }` → 201
+  `{ issueTypeSchemeId }`; `POST /screens { name }` → 201; `POST /screens/{id}/tabs { name }` → 200;
+  `POST /screens/{id}/tabs/{tab}/fields { fieldId }` (summary, unit, direction) → 200;
+  `POST /screenscheme { name, screens: { default: screenId } }` → 201; `POST /issuetypescreenscheme
+  { name, issueTypeMappings: [{ issueTypeId: 'default', screenSchemeId: <the project's current default> },
+  { issueTypeId: '10436', screenSchemeId }] }` → 201; `PUT /issuetypescreenscheme/project` and
+  `PUT /issuetypescheme/project { …SchemeId, projectId }` → 204; the field scheme calls (B2) → 204 as the
+  app; and `POST /field` → 201 as the app. **No new scope is needed** (overview Q11). 04 may still run
+  these as the admin (spec 10's "writes as the user") for the audit trail; both work.
+- **B4 — deferred** (non-admin).
+- **B5 — yes.** In `SPIKE` (KPI type added; unit, direction and KPI Reading in the space's field scheme,
+  on **no** screen), the app as the user created a KPI with unit, direction and `kpi-meta` in one
+  `POST`, recorded two readings with `PUT { fields: { customfield_10837: '{"d":…,"v":…}' } }`, and read
+  them back from `POST /changelog/bulkfetch { issueIdsOrKeys, fieldIds: [readingField] }` (as the app),
+  each naming the user. What a space needs: the **KPI type in its work type scheme** and **unit and
+  direction in its field scheme** for that type. Screens are only for people editing in Jira.
+- **B6 — yes.** `GET /project/search?action=create&expand=issueTypes&maxResults=100` as the user: 79
+  projects in **one page** (`isLast: true`, ~0.5 s); the KPI type (`10436`) appears only in `KPI`,
+  `SPIKE` and `SPIKEB`.
+- **B7 — PNG yes, SVG no.** `POST /universal_avatar/type/issuetype/owner/{typeId}?size=16` with
+  `Content-Type: image/svg+xml` → 400 *"not a supported image format. Please try a JPEG, GIF or PNG"*;
+  with `image/png` → 201 `{ id }`. `PUT /issuetype/{id} { avatarId }` → 200, and `iconUrl` becomes
+  `/rest/api/2/universal_avatar/view/type/issuetype/avatar/{id}?size=medium`, which serves the PNG (the
+  path the app already loads with `read:avatar:jira`). 04 ships the KPI icon as a **PNG**. (Run from
+  the browser as the admin; through Forge the body is binary, which `requestJira` accepts.)
+- **B8 — not possible, so not a risk.** Jira **won't remove a Forge-owned field from a field scheme**:
+  `DELETE /config/fieldschemes/fields { customfield_10837: { schemeIds: [102] } }` → *"Field ID
+  customfield_10837 cannot have associations removed"* (`allowedOperations: ['ADD','CHANGE_REQUIRED']`),
+  restricting it to another work type is ignored, and new schemes include it automatically. So **every
+  space has KPI Reading** (each install's) for every work type; recording a reading works anywhere the
+  user can edit the KPI. (R5)
+
+### C. Finding KPIs across spaces
+
+- **C1 — yes.** `issuetype = 10436` returns KPIs from `KPI` (14), `SPIKE` and `SPIKEB`.
+- **C2 — cross-space links work (admin half).** A *KPI Hierarchy* link from `SPIKE-1` to `SPIKEB-1`
+  (and a *Relates* one), created as the user → 201, and `SPIKEB-1`'s `issuelinks` lists both, the same
+  as a same-space link. The hidden-parent half is **deferred** (non-admin).
+- **C3 — fast at this size.** `issuetype = 10436 AND summary ~ "spike*"` / `"rev*"` / `"a*"`: 217–246 ms
+  each through Forge (68 KPIs in 3 spaces). The scale fixture covers size; nothing here suggests a problem.
+- **C4 — yes.** `issuetype = 10436 AND id in (…50 ids…)` → one request, all 18 KPIs among them, `isLast:
+  true`, 275 ms.
+
 
 ### D. Ids, keys and the targets index (partial: D1 in Step 3)
 
@@ -226,6 +273,32 @@ each with a `searchAlias`. Two work items had `kpi-assignments` written **before
   projects. Note it's a `text` path: `kpiIds ~ "SPIKE-2"` matches, **`kpiIds = "SPIKE-2"` doesn't**.
 - **D5 — yes.** `kpiIds IS NOT EMPTY AND refsVersion IS EMPTY` → `SPIKE-4` only, as the user and as the
   app; `refsVersion = 2` → `SPIKE-3`.
+- **D1 — yes.** Moved `SPIKE-2` (id 14954) to `SPIKEB` with `POST /bulk/issues/move {
+  targetToSourcesMapping: { '11033,10436': { inferFieldDefaults: true, …, issueIdsOrKeys: ['SPIKE-2'] } } }`
+  → task `COMPLETE`. `GET /issue/SPIKE-2`, as the user **and** as the app → 200, `id: '14954'`, `key:
+  'SPIKEB-2'`, fields and `kpi-meta` intact; `key = SPIKE-2` in JQL also finds it; `kpiIssueIds =
+  "14954"` still finds its target. (Both spaces share a field scheme here; a move into a space whose
+  field scheme lacks unit/direction would drop them, as Jira does for any field.)
+
+### E. Migrations at scale
+
+- **E1 — ~0.5 s per `PUT`; run them 5 at a time.** `spikeBatch` (one resolver invocation, `PUT
+  /issue/{id}` of a text field, as the user): 25 one after another 13.0 s; **50 one after another 23.8 s
+  (too close to the ~25 s limit)**; 50 five at a time 5.0 s; 50 ten at a time 3.3 s; 50 five at a time as
+  the app 4.4 s. No 429s. **Recommendation (02 Q1): batches of 25, five requests in parallel** (~2.5 s
+  per invocation, lots of headroom for reads and slower sites).
+- **E2 — `id > n` is not a safe cursor; use `nextPageToken`.** `id > {n}` compares **issue keys within
+  n's project**: `id > 10001` or `id > 14952` (issues in other spaces) returns **nothing**, silently, while
+  `id > 14953` (a SPIKE issue) returns later SPIKE issues. A cursor across spaces stops early. Instead,
+  `search/jql`'s **`nextPageToken`** paged `issuetype = 10436 ORDER BY id ASC` across 3 spaces (68 KPIs,
+  7 per page) with edits between pages: every KPI once, no duplicates. Note `ORDER BY id` came back in
+  key order, not strictly by id; that doesn't matter for coverage. 02 and 03 page with `nextPageToken` (the
+  token is a ~130-character string, fine to keep in a migration record between invocations) or, where
+  the query excludes finished items (`refsVersion IS EMPTY`), re-read the first page each batch.
+- **E3 — counts work as the app (admin half).** `POST /search/approximate-count` as the app and as the
+  user agree (52 KPIs in SPIKE) in ~150 ms, and `kpiIds IS NOT EMPTY AND refsVersion IS EMPTY` counts 15
+  pending targets site-wide. Whether the app's count includes issues the admin can't browse is
+  **deferred** (non-admin); the app's account has Browse on every project here.
 
 ### F1: space page context (2026-11-21, dev v9.0.0, space ECOM)
 
@@ -261,12 +334,14 @@ _What was created during the spikes and what happened to it._
 
 | Object | Where | Status |
 |---|---|---|
-| Fields `customfield_10907` SPIKE KPI Unit, `customfield_10908` SPIKE KPI Direction | site | to remove in Step 5 |
-| Projects `SPIKE` (11032), `SPIKEB` (11033) and their issues | site | to remove in Step 5 |
-| Field scheme 102 *SPIKE field scheme (temporary)* | site | to remove in Step 5 (after the projects) |
-| `app/src/backend/spike.ts`, its `registerSpikeResolvers` call, the `spike-trigger-*` triggers and `spike-fn-*` functions | branch, dev v10.2.0 | to remove in Step 5 |
-| `kpiIssueIds` / `refsVersion` index paths | manifest, dev v10.2.0 | kept for 03 (it adds them anyway) |
-| KVS key `spike:trigger-log` | dev install | to clear in Step 5 |
+| Fields `customfield_10907` SPIKE KPI Unit, `customfield_10908` SPIKE KPI Direction, `customfield_10909` SPIKE app-created field | site | **deleted** (`DELETE /field/{id}` → 200; Jira keeps deleted fields in its trash for 60 days) |
+| Projects `SPIKE` (11032), `SPIKEB` (11033) and their issues | site | **deleted** (`enableUndo=false`) |
+| Their work type schemes (11829–11831), work type screen schemes (10871–10873), screen schemes (10958–10960) and screens (10989, 10990, 10992, 10993, 10995) | site | **deleted** |
+| Field scheme 102 *SPIKE field scheme (temporary)* | site | **deleted** |
+| Work type 10488 *SPIKE avatar type* and its avatar | site | **deleted** |
+| `app/src/backend/spike.ts`, its resolvers, the `spike-trigger-*` triggers and `spike-fn-*` functions | branch, dev | **removed**; dev redeployed as v10.3.0 |
+| `kpiIssueIds` / `refsVersion` index paths | manifest, dev | **kept** for 03 (it adds them anyway) |
+| KVS key `spike:trigger-log` | dev install | **cleared** |
 
 ## Questions
 

@@ -17,7 +17,7 @@ prototype review (gate G2) and built in 04.
 MigrationRecord = {
   id: string;                          // e.g. 'kpi-target-refs-to-ids'
   state: 'pending' | 'running' | 'done' | 'failed';
-  cursor: string | null;               // resume point: last issue id processed
+  cursor: string | null;               // resume point: search/jql's nextPageToken (01 E2), null = start
   counts: { migrated: number; alreadyDone: number; skipped: number; failed: number };
   failures: Array<{ issueId: string; issueKey: string; message: string }>;  // last 50
   startedAt: string | null;
@@ -60,7 +60,11 @@ interface Migration {
 
 1. **Idempotent per item.** Running a batch twice, or two admins running it at once, gives the same
    result. Each item is re-checked just before it's written.
-2. **Batched and resumable.** A batch fits well inside one resolver invocation (01 E1 sets the size).
+2. **Batched and resumable.** A batch fits well inside one resolver invocation: **25 items, written five
+   at a time** (01 E1: ~0.5 s per `PUT`, 50 in a row took 24 s of the ~25 s limit). Migrations page with
+   `search/jql`'s **`nextPageToken`** over a **stable** query (one that doesn't drop items as they're
+   migrated) and skip finished items in code; `id > {cursor}` isn't usable, because Jira compares it as
+   a key within the cursor issue's project (01 E2).
    The record and cursor are saved after every batch, so closing the tab or a failed batch resumes
    where it stopped.
 3. **Copy only.** Migrations never delete the old data. Deleting it is the cleanup release's job (09).
@@ -131,6 +135,8 @@ trigger (see Q3), so no new manifest modules or scopes.
 ## Questions
 
 1. **Batch size.** The draft value is 25 items per `runMigrationBatch`. Use 01 E1's finding instead?
+   - **Answered by 01 E1 (2026-11-24):** 25 items, five `PUT`s in parallel (~2.5 s per batch). Paging by
+     `nextPageToken` (E2). *Incorporated: rule 2, `cursor`.*
 2. **Who writes: the admin or the app?** The draft lets each migration choose (`writeAs`). 05 writes
    KPI **fields** as the admin, so History names a person. 03 writes `kpi-assignments` **as the app**,
    because targets live on work items in every project and an admin may not be able to edit them all

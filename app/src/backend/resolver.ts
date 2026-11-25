@@ -80,7 +80,6 @@ import {
   type KpiSpaceIssue,
 } from './jira';
 import { stage, traced } from './requestLog';
-import { registerSpikeResolvers } from './spike';
 import {
   type KpiSpaceConfig,
   readKpiHierarchyConfig,
@@ -1031,8 +1030,5 @@ define('updateKpi', async ({ payload }) => {
   };
   return result;
 });
-
-// TEMPORARY (spec 11 · 01 spikes): removed in 01 Step 5.
-registerSpikeResolvers(resolver);
 
 export const handler = resolver.getDefinitions();

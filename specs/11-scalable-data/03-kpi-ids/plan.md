@@ -176,9 +176,13 @@ Only the places that **show or link** a KPI change:
 
 Registered on 02's framework.
 
-- **Which issues:** `issue.property[kpi-assignments].kpiIds IS NOT EMPTY AND
-  issue.property[kpi-assignments].refsVersion IS EMPTY ORDER BY id ASC`, cursor = last issue id.
-- **Pending** (`status().pending`, as the app, 02 rule 6): the count of that same search. One exact
+- **Which issues:** `issue.property[kpi-assignments].kpiIds IS NOT EMPTY ORDER BY id ASC`, paged with
+  `nextPageToken` (the cursor). The query is **stable**: it doesn't filter on `refsVersion`, because a
+  token over a set that shrinks as items are migrated could skip items, and `id > {cursor}` only works
+  within one project (01 E2). Issues already stamped `refsVersion: 2` are counted `alreadyDone` without
+  a write.
+- **Pending** (`status().pending`, as the app, 02 rule 6): the count (`search/approximate-count`) of
+  that search **plus** `AND issue.property[kpi-assignments].refsVersion IS EMPTY` (01 D5, E3). One exact
   request, whatever the data size. It's exact because the marker is per issue and means "nothing left
   to resolve": every key is resolved as the app (Backend), and deleted KPIs don't hold the marker back,
   so they never count as pending (02 rule 6, skipped items).
