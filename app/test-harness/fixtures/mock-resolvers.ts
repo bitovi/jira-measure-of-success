@@ -1,4 +1,12 @@
 import {
+  applyBatchResult,
+  migrationReadiness,
+  newMigrationRecord,
+  resetMigrationForRetry,
+  type MigrationDto,
+  type MigrationFailure,
+  type MigrationRecord,
+  type MigrationsData,
   baselineDueEndpoint,
   buildKpiTargets,
   dateFieldSelection,
@@ -869,3 +877,159 @@ export function addTarget(input: AddTargetInput): AddedTarget {
   const readings = readingsFor(node.kpiId).map((r) => ({ date: r.date, value: r.value }));
   return fixtureContribution(node, target, readings);
 }
+
+// ── Data migrations (spec 11 · 02) ───────────────────────────────────────────
+// In-memory stand-ins for 03's and 05's migrations, run with the same pure
+// bookkeeping as the backend (applyBatchResult etc.). The bridge adds a fake
+// batch delay. `?migrations=pending|running|done|failed` picks the starting
+// state; the second migration depends on the first (harness only), so the
+// blocked state shows too.
+export type MigrationsMode = 'pending' | 'running' | 'done' | 'failed';
+
+const MIGRATION_BATCH = 25;
+const MOCK_ADMIN = 'acc-jm';
+
+interface MockMigrationItem {
+  issueId: string;
+  issueKey: string;
+  state: 'todo' | 'migrated' | 'skip';
+  /** fails the next attempt (then succeeds, so a retry can finish) */
+  failOnce: boolean;
+}
+
+interface MockMigration {
+  dto: Pick<MigrationDto, 'id' | 'title' | 'description' | 'writeAs' | 'dependsOn'>;
+  items: MockMigrationItem[];
+  record: MigrationRecord;
+}
+
+const mockItems = (prefix: string, count: number, skip: number[] = []): MockMigrationItem[] =>
+  Array.from({ length: count }, (_, i) => ({
+    issueId: String(70_000 + i),
+    issueKey: `${prefix}-${i + 1}`,
+    state: skip.includes(i) ? 'skip' : 'todo',
+    failOnce: false,
+  }));
+
+let mockMigrations: MockMigration[] = [];
+
+export function migrationsMode(search: string = globalThis.location?.search ?? ''): MigrationsMode {
+  const mode = new URLSearchParams(search).get('migrations');
+  return mode === 'running' || mode === 'done' || mode === 'failed' ? mode : 'pending';
+}
+
+/** Put the harness migrations in a starting state (also used by the harness test). */
+export function resetMigrations(mode: MigrationsMode = migrationsMode()): void {
+  mockMigrations = [
+    {
+      dto: {
+        id: 'kpi-target-refs-to-ids',
+        title: 'Point targets at KPI ids',
+        description: 'Saves the KPI id next to the key on every target, so targets survive a KPI moving space.',
+        writeAs: 'app',
+        dependsOn: [],
+      },
+      items: mockItems('APP', 60, [59]),
+      record: newMigrationRecord('kpi-target-refs-to-ids'),
+    },
+    {
+      dto: {
+        id: 'kpi-meta-to-fields',
+        title: 'Move unit and direction into fields',
+        description: "Copies each KPI's unit and direction into the KPI fields chosen above.",
+        writeAs: 'user',
+        dependsOn: ['kpi-target-refs-to-ids'],
+      },
+      items: mockItems('KPI', 12),
+      record: newMigrationRecord('kpi-meta-to-fields'),
+    },
+  ];
+  const [first] = mockMigrations;
+  const now = '2026-07-10T09:00:00.000Z';
+  if (mode === 'running') {
+    runMockBatch(first, now);
+  } else if (mode === 'done') {
+    for (const m of mockMigrations) while (m.record.state !== 'done') runMockBatch(m, now);
+  } else if (mode === 'failed') {
+    first.items[3].failOnce = true;
+    first.items[40].failOnce = true;
+    while (first.record.state === 'pending' || first.record.state === 'running') runMockBatch(first, now);
+  }
+}
+
+const pendingCount = (m: MockMigration): number => m.items.filter((i) => i.state === 'todo').length;
+
+function runMockBatch(m: MockMigration, now: string): MigrationRecord {
+  const start = Number(m.record.cursor ?? 0);
+  const page = m.items.slice(start, start + MIGRATION_BATCH);
+  const result = { migrated: 0, alreadyDone: 0, skipped: 0, failures: [] as MigrationFailure[] };
+  for (const item of page) {
+    if (item.state === 'skip') result.skipped += 1;
+    else if (item.state === 'migrated') result.alreadyDone += 1;
+    else if (item.failOnce) {
+      item.failOnce = false;
+      result.failures.push({
+        issueId: item.issueId,
+        issueKey: item.issueKey,
+        message: `Jira 403: You do not have permission to edit ${item.issueKey}.`,
+      });
+    } else {
+      item.state = 'migrated';
+      result.migrated += 1;
+    }
+  }
+  const end = start + page.length;
+  const cursor = end < m.items.length ? String(end) : null;
+  m.record = applyBatchResult(m.record, { cursor, ...result }, now, {
+    runBy: MOCK_ADMIN,
+    pendingAtEnd: cursor === null ? pendingCount(m) : undefined,
+  });
+  return m.record;
+}
+
+function findMockMigration(id: string): MockMigration {
+  const m = mockMigrations.find((x) => x.dto.id === id);
+  if (!m) throw new Error(`There's no data migration called "${id}".`);
+  return m;
+}
+
+const recordsById = (): Record<string, MigrationRecord> =>
+  Object.fromEntries(mockMigrations.map((m) => [m.dto.id, m.record]));
+
+export function getMigrations(): MigrationsData {
+  const readiness = migrationReadiness(
+    mockMigrations.map((m) => m.dto),
+    recordsById(),
+  );
+  return {
+    migrations: mockMigrations.map((m) => ({
+      ...structuredClone(m.dto),
+      record: structuredClone(m.record),
+      ...readiness[m.dto.id],
+      status: m.record.state === 'done' ? null : { applicable: true, pending: pendingCount(m) },
+    })),
+  };
+}
+
+export function runMigrationBatch(id: string): MigrationRecord {
+  const m = findMockMigration(id);
+  if (m.record.state === 'done') return structuredClone(m.record);
+  if (m.record.state === 'failed') {
+    throw new Error(`${m.dto.title} finished with work items left to migrate. Retry it to run it again.`);
+  }
+  const { blockedBy } = migrationReadiness([m.dto], recordsById())[id];
+  if (blockedBy.length > 0) {
+    const names = blockedBy.map((dep) => findMockMigration(dep).dto.title).join(', ');
+    throw new Error(`${m.dto.title} can't run until ${names} ${blockedBy.length > 1 ? 'are' : 'is'} done.`);
+  }
+  return structuredClone(runMockBatch(m, new Date().toISOString()));
+}
+
+export function retryMigration(id: string): MigrationRecord {
+  const m = findMockMigration(id);
+  if (m.record.state === 'done') throw new Error(`${m.dto.title} is already done.`);
+  m.record = resetMigrationForRetry(m.record);
+  return structuredClone(m.record);
+}
+
+resetMigrations();

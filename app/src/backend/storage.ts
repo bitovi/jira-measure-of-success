@@ -1,6 +1,7 @@
 import { kvs } from '@forge/kvs';
 import {
   KpiHierarchyLink,
+  MigrationRecord,
   RollupConfig,
   DEFAULT_ROLLUP_METHOD,
   type RollupConfig as RollupConfigT,
@@ -65,4 +66,22 @@ export async function readKpiHierarchyConfig(): Promise<KpiHierarchyLink | null>
 
 export async function writeKpiHierarchyConfig(cfg: KpiHierarchyLink): Promise<void> {
   await kvs.set(KPI_HIERARCHY_KEY, KpiHierarchyLink.parse(cfg));
+}
+
+/**
+ * Data-migration records (spec 11 · 02): one key per migration, so two
+ * migrations never overwrite each other's record. Null until it first runs (or
+ * when what's stored doesn't parse).
+ */
+const migrationKey = (id: string): string => `kpi:migration:${id}`;
+
+export async function readMigrationRecord(id: string): Promise<MigrationRecord | null> {
+  const parsed = MigrationRecord.safeParse(await kvs.get(migrationKey(id)));
+  return parsed.success && parsed.data.id === id ? parsed.data : null;
+}
+
+export async function writeMigrationRecord(record: MigrationRecord): Promise<MigrationRecord> {
+  const valid = MigrationRecord.parse(record);
+  await kvs.set(migrationKey(valid.id), valid);
+  return valid;
 }

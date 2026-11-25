@@ -1,6 +1,6 @@
 # 02 — Migration framework
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft** · Depends on: 01.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done** · Depends on: 01.
 
 ## Goal
 
@@ -142,10 +142,74 @@ trigger (see Q3), so no new manifest modules or scopes.
    because targets live on work items in every project and an admin may not be able to edit them all
    (entity properties don't show in History anyway). OK? Or should 05 fall back to the app for KPIs
    the admin can't edit?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): the draft.** 05 writes as the
+     admin, 03 as the app. KPIs the admin can't edit are per-item failures, listed by key.
 3. **Run automatically after an upgrade?** The draft is admin-driven from Settings only. The
    alternative is an `avi:forge:upgraded:app` trigger plus an async-events queue, running **as the
    app**, so History would name the app, not the admin. It would remove a manual step from the upgrade
    runbook (09), and shorten the window where the app shows incomplete data (rule 7).
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): no**, admin-driven from Settings
+     only, as drafted. No new manifest modules.
 4. **Up-front permission check.** For `writeAs: 'user'` migrations, should a run first check that the
    admin has Edit Issues on every project with items to migrate, and stop with a message naming the
    spaces they're missing? Or just report per-item failures?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): report per-item failures.** The
+     failure list names each work item and Jira's message.
+
+## Implementation notes
+
+Done 2026-11-24 on `feat/11-scalable-data`.
+
+**Files added**
+
+- `app/src/domain/models/migration.ts`: `MigrationRecord` (Zod), `MigrationFailure`, `MigrationCounts`,
+  `MigrationBatchResult`, `MigrationStatus`, `newMigrationRecord`, `MAX_MIGRATION_FAILURES` (50).
+- `app/src/domain/resolve/migrations.ts` (+ test): `applyBatchResult(record, result, now, { runBy,
+  pendingAtEnd })`, `resetMigrationForRetry(record)`, `migrationReadiness(registry, records)`.
+- `app/src/backend/migrations/index.ts` (+ test): the `Migration` and `MigrationContext` interfaces,
+  the empty ordered registry (`migrationRegistry()`, `setMigrationRegistryForTests()`),
+  `MIGRATION_BATCH_SIZE` (25), `MIGRATION_WRITE_CONCURRENCY` (5), `mapWithConcurrency` and
+  `migrateItems(items, migrate)` (runs per-item writes five at a time; a thrown item becomes a failure).
+- `app/src/backend/migrations/runner.ts` (+ test): `listMigrations`, `runMigrationBatch`,
+  `retryMigration`, wired in `resolver.ts` as `getMigrations` (Settings page only),
+  `runMigrationBatch` and `retryMigration` (`defineSettingsWrite`).
+- `app/src/backend/testing/testMigration.ts`: the test-only migration (switches: fail an item, throw
+  part-way through a batch, skip items; hide items with `fixture.userView.hidden`).
+- `app/test-harness/fixtures/migrations.test.ts`: the harness test.
+
+**Files changed:** `storage.ts` (`readMigrationRecord` / `writeMigrationRecord`, key
+`kpi:migration:{id}`), `domain/contracts.ts` (`MigrationDto`, `MigrationsData`), `requestLog.ts`
+(exports the `RequestJira` type), the domain and models indexes, `mock-resolvers.ts` and
+`mock-bridge.ts`.
+
+**How a later stage registers a migration:** implement `Migration` in `backend/migrations/` and add it
+to the `MIGRATIONS` array in `backend/migrations/index.ts` (order = run order). `status(ctx)` counts
+with `ctx.app` (as the app); `runBatch(ctx, cursor)` pages with `ctx.writer` (asUser for
+`writeAs: 'user'`, asApp for `'app'`), at most `MIGRATION_BATCH_SIZE` items, and uses `migrateItems`
+for the writes. `ctx.accountId` is the admin running it.
+
+**Decisions made while implementing** (beyond the answered questions):
+
+- `getMigrations` returns `{ migrations: MigrationDto[] }`: each migration's metadata, its record (or a
+  fresh `pending` one), `ready` / `blockedBy`, and `status` (null for a `done` migration). A
+  `status()` that throws doesn't fail the list: that row gets `status: null` and `statusError`.
+- `runMigrationBatch` returns the saved record. The state machine:
+  - `pending`: the first batch calls `status()` first and refuses (with its `reason`) when it isn't
+    `applicable`.
+  - `running`: the next batch from the saved cursor.
+  - the final batch (cursor `null`) calls `status()` again and ends `done` only when `pending === 0`.
+    `null` (couldn't count) ends it `failed`.
+  - `done`: returned unchanged (rule 7), so a second admin's loop ends quietly.
+  - `failed`: refused ("Retry it to run it again"). `retryMigration` resets it to `pending`.
+- `retryMigration` also works on a `running` record (restarting from the beginning), but refuses a
+  `done` one.
+- A thrown batch saves nothing and the error goes to the client, so the next call redoes that batch
+  from the same cursor.
+- `runBy` is updated on every batch, so it names whoever ran the latest batch. Retry doesn't clear it.
+- Harness: two mock migrations named after 03's and 05's. The second `dependsOn` the first **in the
+  harness only**, so 04 can build the blocked state. `?migrationDelayMs=` (default 800) sets the
+  fake batch delay.
+- For 03/05: the pending count after the final batch runs right after the writes. If it uses a JQL
+  property index (03's `refsVersion`), Jira's search index may not have caught up, so a run could
+  end `failed` with nothing really left. Retry would then finish it as "already done". 03 should
+  check this live, and count the last page's writes directly if the lag shows up.

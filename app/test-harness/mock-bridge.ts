@@ -23,6 +23,9 @@ import {
   updateKpi,
   searchIssues,
   addTarget,
+  getMigrations,
+  runMigrationBatch,
+  retryMigration,
 } from './fixtures/mock-resolvers.js';
 import {
   accessMode,
@@ -81,6 +84,14 @@ const resolvers: Record<string, Handler> = {
   getKpiHierarchy: () => getKpiHierarchy(),
   saveKpiHierarchy: (p) => saveKpiHierarchy(p),
   createKpiHierarchyLinkType: () => createKpiHierarchyLinkType(),
+  // Data migrations (spec 11 · 02). `?migrations=pending|running|done|failed`
+  // picks the starting state; each batch takes `?migrationDelayMs=` (default 800).
+  getMigrations: () => getMigrations(),
+  runMigrationBatch: async (p) => {
+    await migrationDelay();
+    return runMigrationBatch(p?.id);
+  },
+  retryMigration: (p) => retryMigration(p?.id),
   // Timeline
   getTimelineData: () => applyAccessToTimeline(getTimelineData(), accessMode(), hiddenKpiId()),
   getTimelineSkeleton: () => applyAccessToTimeline(getTimelineSkeleton(), accessMode(), hiddenKpiId()),
@@ -127,6 +138,12 @@ async function simulateMutation(): Promise<void> {
   const delay = Number(params.get('mutationDelayMs') ?? 0);
   if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
   if (params.get('mutationFail') === '1') throw new Error('Simulated save failure');
+}
+
+async function migrationDelay(): Promise<void> {
+  const params = new URLSearchParams(globalThis.location?.search ?? '');
+  const delay = Number(params.get('migrationDelayMs') ?? 800);
+  if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 export async function invoke<T = unknown>(key: string, payload?: unknown): Promise<T> {

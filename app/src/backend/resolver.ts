@@ -79,6 +79,7 @@ import {
   type KpiIssueForEdit,
   type KpiSpaceIssue,
 } from './jira';
+import { listMigrations, retryMigration, runMigrationBatch } from './migrations/runner';
 import { stage, traced } from './requestLog';
 import {
   type KpiSpaceConfig,
@@ -586,6 +587,23 @@ defineSettingsWrite('createKpiHierarchyLinkType', async () => {
   await provisionDefaultHierarchy();
   return kpiHierarchyStatus();
 });
+
+// ── Data migrations (spec 11 · 02) ──────────────────────────────────────────
+// Settings → Upgrade data. The client loops `runMigrationBatch` until the
+// returned record's cursor is null.
+const accountIdOf = (context: unknown): string | null => (context as { accountId?: string } | undefined)?.accountId ?? null;
+const migrationIdOf = (payload: unknown): string => String((payload as { id?: string } | undefined)?.id ?? '');
+
+define('getMigrations', async ({ context }) => {
+  requireSettingsPage(context);
+  return listMigrations(accountIdOf(context));
+});
+
+defineSettingsWrite('runMigrationBatch', async ({ payload, context }) =>
+  runMigrationBatch(migrationIdOf(payload), accountIdOf(context)),
+);
+
+defineSettingsWrite('retryMigration', async ({ payload }) => retryMigration(migrationIdOf(payload)));
 
 /**
  * Order siblings by native LexoRank (same order a backlog drag produces); issues

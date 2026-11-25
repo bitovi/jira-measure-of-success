@@ -11,7 +11,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * wrappers are plain pass-throughs.
  */
 
-type RequestJira = ReturnType<typeof api.asApp>['requestJira'];
+export type RequestJira = ReturnType<typeof api.asApp>['requestJira'];
 interface Requester {
   requestJira: RequestJira;
 }

@@ -5,3 +5,4 @@ export * from './config';
 export * from './kpiReading';
 export * from './kpiMeta';
 export * from './kpiHierarchy';
+export * from './migration';

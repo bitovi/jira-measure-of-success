@@ -1,4 +1,14 @@
-import type { Assignment, DueTiming, IsoDate, KpiDirection, KpiHierarchyLink, KpiParentEnd, TargetType } from './models/index';
+import type {
+  Assignment,
+  DueTiming,
+  IsoDate,
+  KpiDirection,
+  KpiHierarchyLink,
+  KpiParentEnd,
+  MigrationRecord,
+  MigrationStatus,
+  TargetType,
+} from './models/index';
 import type { ResolvedEndpoint } from './resolve/effectiveTiming';
 import type { TargetStatus } from './resolve/targetStatus';
 import type { BaselineState, StackStep } from './resolve/baseline';
@@ -438,4 +448,28 @@ export interface AddTargetInput {
   /** ISO date the target is due */
   date: string;
   value: number;
+}
+
+// ── Data migrations (spec 11 · 02) ──────────────────────────────────────
+/** One registered migration, as `getMigrations` lists it for Settings → Upgrade data. */
+export interface MigrationDto {
+  id: string;
+  title: string;
+  description: string;
+  writeAs: 'user' | 'app';
+  dependsOn: string[];
+  /** the stored record, or a fresh `pending` one for a migration that has never run */
+  record: MigrationRecord;
+  /** every `dependsOn` is `done` */
+  ready: boolean;
+  /** the `dependsOn` ids that aren't `done` */
+  blockedBy: string[];
+  /** `status()`, counted as the app; null for a `done` migration (never re-counted) or when it couldn't be counted */
+  status: MigrationStatus | null;
+  /** why `status()` failed, when it did */
+  statusError?: string;
+}
+
+export interface MigrationsData {
+  migrations: MigrationDto[];
 }
