@@ -1,6 +1,6 @@
 # 09 — Release and cleanup
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft** · Depends on: every earlier stage.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Steps 1–2 done; stopped at G5** · Depends on: every earlier stage.
 
 ## Goal
 
@@ -104,6 +104,66 @@ our own sites runs this release.
 ### Step 5 — Cleanup release (separate branch, when the trigger is met)
 
 - Its own short spec, written from *Cleanup release* above when the time comes.
+
+## Progress (2026-11-24/25, implementer, autopilot)
+
+### Step 1 — done
+
+`app/scripts/legacy-report.ts`; baseline [legacy-report.before.txt](./legacy-report.before.txt).
+
+### Step 2 — whole-branch live run on dev: done (as Justin, a Jira admin)
+
+Each stage's live check is in its own plan (03–08). Across the branch, on `bitovi-training`:
+
+- Both migrations ran from Settings to `done`: *Point targets at KPI ids* (14 work items) and *Move unit
+  and direction into fields* (13 upgraded, 1 already up to date).
+- **Legacy reader report:** identical to the baseline after every migration, apart from one deliberate
+  test edit (a target on the throwaway `KPI2-3`). Two bugs were found this way and fixed before
+  continuing: 03's migration normalized a legacy `targetType` (`delta` → `percent`), and 04's screens step
+  widened the KPI fields to every work type (01 B9).
+- dev shows the same KPIs, units, directions and targets as before the first migration (14 KPIs, 17
+  targets with values), plus the test KPIs below.
+- **A KPI moved to another space keeps its targets:** KPI2-2 (with a target on KPI2-3) moved to `KPI3`
+  became `KPI3-1`; the Timeline shows the target under it, with the new key in its link. The stored
+  `kpiId` keeps the old key until the target is saved again (03 Q3, accepted).
+- **Left on dev for Justin's review** (delete when done): projects `KPI2` ("Team KPIs (spec 11
+  check)": KPI2-1, task KPI2-3) and `KPI3` ("Moved KPIs (spec 11 check)": KPI3-1). The `KPI Unit` /
+  `KPI Direction` fields (`customfield_10910` / `10911`) are the real configured fields, not test data.
+- **Not done yet (deferred by Justin, 2026-11-24): every check that needs a non-admin user** — 01 B4,
+  C2 (hidden parent), E3 (count of issues the admin can't browse); 06's "no Browse" and "Edit in one
+  space only"; 07's hidden KPI; 08's single-space creator.
+- **Found, not fixed (outside this spec):** the Timeline's *Add a target* issue search uses Jira's issue
+  picker, which on this site only returns issues in the user's history, so a work item they've never
+  opened can't be found, even by its key. A direct key lookup (as 07's `lookupKpiRef`) would fix it.
+
+### Step 3 — 🔍 Gate G5: **stopped here.** Waiting for Justin
+
+Nothing has been merged, pushed, or deployed to staging or production. For the review:
+
+**Release checklist** (from *Release order*):
+
+1. Merge `feat/11-scalable-data` into `main` (the branch is local; one PR per stage was planned, but the
+   stages were implemented as commits on the branch).
+2. Deploy staging, then **Upgrade** on staging's Settings (dev already migrated the shared data, so it
+   should be all "already done"; staging also needs **Use existing…** for the KPI fields, picking
+   `KPI Unit` / `KPI Direction`).
+3. On the customer site, before upgrading: `issuetype = KPI AND project != KPI` must be empty, and the
+   KPI project's work type scheme unshared (01 B1 found both true on bitovi-training).
+4. Deploy production. This branch adds **no scopes** (a new `trigger` module only), so it should be a
+   minor version; stop if `forge deploy` asks for a major one.
+5. The customer's admin follows the runbook (README, *Upgrading to scalable KPI data*).
+
+**Draft message to the customer** (overview Q1 and R10 are still open: how and when to tell them):
+
+> We're releasing an update to Measure of Success that lets KPIs live in any space and stores their
+> unit and direction in Jira fields (KPI Unit, KPI Direction). Your reporting app keeps working
+> unchanged: until you tell us you've switched, the app still writes everything your report reads today
+> (`kpi-meta` on each KPI; `kpiId` keys and the `kpiIds` index on each work item; KPIs in the KPI
+> project). New, for when you're ready: each target also stores the KPI's issue id (`kpiIssueId`, and a
+> `kpiIssueIds` index), which doesn't change when a KPI moves to another project, and unit and direction
+> are searchable fields. After the upgrade, a Jira admin runs **Upgrade data** in KPI Settings (a few
+> minutes, best outside working hours). Once your report reads the new fields, let us know and we'll
+> schedule a cleanup release that stops writing the old formats.
 
 ## Questions
 

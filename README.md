@@ -84,6 +84,17 @@ Then open any issue's **KPIs (dev)** panel, or **Apps → KPI Timeline (dev)**.
 
 > Run Forge commands through the npm scripts (or `npm run forge -- <command>`). They go through [`app/scripts/forge.sh`](./app/scripts/forge.sh), which loads `.env` so the manifest can resolve `${APP_ID}`. A bare `forge deploy` without `APP_ID` in the environment fails with a generic validation error.
 
+## Upgrading to scalable KPI data
+
+For a Jira admin on an install that already has KPIs (one KPI project), right after the upgrade is deployed ([spec 11](./specs/11-scalable-data/plan.md)):
+
+1. Open **KPI Settings**. The KPI work type and the central space are already filled in from the old setup.
+2. Under **KPI building blocks → KPI fields**, click **Create fields** (or **Use existing…**). This creates **KPI Unit** and **KPI Direction**, adds them to the central space's field scheme for the KPI work type only, and to its screens.
+3. Under **Upgrade data** (at the top), click **Upgrade**. It runs *Point targets at KPI ids*, then *Move unit and direction into fields*. Runs can be paused and resumed, and are safe to run again. Run them **when nobody is editing targets** (e.g. outside working hours): a target saved at the exact moment a work item is rewritten can be lost. If a run ends **failed**, use **Retry failed** until it's done.
+4. Optional: follow **Using KPIs in other spaces** to let teams hold their own KPIs.
+
+Until step 3 finishes, the app shows incomplete data: targets are missing from the Timeline, panels show targets as pointing at deleted KPIs, and once the fields are created (step 2), units and directions are empty until their migration runs. Reports that read the old formats (the `kpi-meta` property, keys in `kpi-assignments`, `project = KPI`) keep working throughout: every write still produces them.
+
 ## Everyday commands
 
 Run from `app/`:

@@ -106,6 +106,14 @@ graph LR
 
 03 and 04 can be worked on in parallel, except 04 Step 7's live check, which runs 03's migration from the card (R7). 07 and 08 can be worked on in parallel.
 
+### Implementation status (2026-11-25)
+
+Implemented on `feat/11-scalable-data` (local, not pushed) and checked live on dev, as Justin, a Jira
+admin. **Every stage through 08 is done; 09 stopped at gate G5.** Justin asked the implementer to keep
+going without stopping at the gates, so **G1, G2 and G4 were decided by the implementer** and are
+recorded as such in 01, 04 and 08, ready for his review. Checks that need a non-admin user were deferred
+by Justin and are listed in 09 (*Progress*).
+
 ### Review gates
 
 Prototypes and findings are **reviewed by Justin at the point they're needed, not assumed**. At each
