@@ -3,7 +3,7 @@ import { within, userEvent, expect, screen } from '@storybook/test';
 import Button from '@atlaskit/button/new';
 import { DisabledReason } from './DisabledReason.js';
 
-const REASON = 'Adding a KPI needs Create Issues permission on the KPI space project. Ask a Jira admin.';
+const REASON = 'Adding a KPI needs Create Issues permission on the Portfolio space. Ask a Jira admin.';
 
 const meta: Meta<typeof DisabledReason> = {
   component: DisabledReason,

@@ -19,9 +19,13 @@ Scope: where KPI definitions, per-issue targets, and recorded readings live, and
 ## Decisions (settled)
 
 - **KPI = a Jira work-item in a dedicated "KPI" space.** Each KPI is one issue (issue type `KPI`) in a project created/administered by the app. This makes KPIs first-class Jira objects: cross-project-referenceable, JQL-enumerable (`project = KPI`), permissioned, audited, and fully CascadeMCP-reachable.
+  > **Revised by [spec 11 · 06](../11-scalable-data/06-kpis-by-work-type/plan.md):** a KPI is an issue of the configured **KPI work type** (`issuetype = {id}`), in **any** company-managed space that offers the type; the app keeps no list of KPI spaces. The original KPI project stays the **central space** (Settings), so `project = KPI` still finds its KPIs. Permissions are asked per space (`mypermissions` for the KPI's own project), when an action needs them.
 - **The KPI space is provisioned from the admin/Settings surface.** An admin sets/confirms the project **key**; the app creates the project + `KPI` issue type if missing, or connects to an existing one. (Not auto-on-install; requires project-admin scope.)
 - **Targets stay on the contributing work issues**, in the existing `kpi-assignments` entity property, referencing the KPI by **`kpiKey`** (e.g. `KPI-1`). A target carries data (value, date, timing mode) that a native Jira issue link **cannot** hold — links have no fields — so the property is the source of truth. A native "contributes to" link is optional/deferred (navigational only, extra sync cost, no data).
 - **Readings are global per KPI**, stored on that KPI's issue. `recordValue(kpiId, date, value)` — no `issueId`.
+- **A KPI's definition**: its name is the issue summary; its unit and direction were the `kpi-meta` issue entity property (`{ unit, direction }`).
+
+> **Revised by [spec 11 · 05](../11-scalable-data/05-kpi-fields/plan.md):** unit and direction are **Jira fields** (the *KPI Unit* text field and the *KPI Direction* text or single-select field chosen in Settings, `KpiSiteConfig.fields`), so they show on the work item, in JQL, CSV export and History. Once fields are chosen the app reads only the fields. `kpi-meta` is kept as a **compatibility copy** for a customer's report until the cleanup release ([09](../11-scalable-data/09-release-and-cleanup/plan.md)): every KPI write sets it in the same request, marked `fields: true` once the KPI's fields hold its values; a Forge trigger (`kpi-meta-sync`) rewrites it when someone edits a marked KPI's fields in Jira; the `kpi-meta-to-fields` migration copies existing values into the fields. Before fields are chosen (`fields: null`), `kpi-meta` is still the only source.
 
 ---
 

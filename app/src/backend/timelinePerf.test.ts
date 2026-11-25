@@ -102,15 +102,18 @@ describe('getTimelineData at scale', () => {
       // per-issue `kpi-assignments` GETs (was one per contributing epic)
       // step 2: kpi-meta arrives with the KPI-space search; one shared /field lookup
       'GET /rest/api/3/field': 1,
-      // spec 10: the user's KPI-space permissions, fetched alongside the KPI search
-      'GET /rest/api/3/mypermissions': 1,
-      'GET /rest/api/3/search/jql [project]': 1,
+      // spec 11 · 06: no permission lookup on load (spec 10's one went with the KPI
+      // space); KPIs are found by work type, which an install with nothing saved
+      // derives from the site's work types (one GET, as the 04 config read does)
+      'GET /rest/api/3/issuetype': 1,
+      'GET /rest/api/3/search/jql [issuetype]': 1,
       'GET /rest/api/3/search/jql [kpi-assignments index]': ceil(epics, 100),
       // + the separate parent fetch in fetchTargetContributions
       'GET /rest/api/3/search/jql [id in]': ceil(o.initiatives, 40) + walkBatches,
       'GET /rest/api/3/search/jql [parent in]': walkBatches,
       'POST /rest/api/3/changelog/bulkfetch': 1,
-      'GET /rest/api/2/universal_avatar/view/type/issuetype/avatar/{id}': 1,
+      // the epics' type icon (Phase 2), and spec 11 · 08's KPI type icon (Phase 1, a KPI row is `{icon} {name}`)
+      'GET /rest/api/2/universal_avatar/view/type/issuetype/avatar/{id}': 2,
     };
     expect(summary.byEndpoint).toEqual(BUDGET);
     expect(jira.unhandled).toEqual([]);
@@ -131,7 +134,7 @@ describe('getTimelineData at scale', () => {
     const epic = jira.fixture.issues.get(epicId)!;
     expect(epic.key).toBe('APP-10');
     expect(epic.due).toBeNull();
-    const marker = nodes.find((n) => n.kpiId === 'KPI-10')!.targets.find((t) => t.source.issue === 'APP-10');
+    const marker = nodes.find((n) => n.issueKey === 'KPI-10')!.targets.find((t) => t.source.issue === 'APP-10');
     expect(marker?.date).toBe(latestDue(jira.fixture, epicId));
 
     // Changed by spec 08 (targets carry `relative`); identical to the previous digest with it stripped.
@@ -139,9 +142,21 @@ describe('getTimelineData at scale', () => {
     // Changed by PR #3 review (marker status uses the shared displayState rule); identical to the previous digest with `status` stripped.
     // `detail` (the tooltip's bet + resolution) is left out so this still guards the rest of the output.
     // Spec 10 added `access` (the user's KPI-space permissions); left out, so the digest is unchanged.
-    expect(data.access).toEqual({ browse: true, create: true, edit: true, link: true });
+    // Spec 11 · 03: a node's kpiId is its issue id. Read on the migrated fixture, the
+    // output with kpiId mapped back to the key matches the digest of the key-based code.
+    // Spec 11 · 06 removed `access` and added each KPI's `space` and the `centralSpace`;
+    // left out, the single-space output is unchanged. Spec 11 · 08 added `kpiTypeIconUrl`, left out too.
+    expect(data).not.toHaveProperty('access');
+    expect(data.centralSpace).toEqual({ id: '10000', key: 'KPI', name: 'KPIs (KPI)' });
+    expect(nodes.every((n) => n.space?.key === 'KPI')).toBe(true);
+    expect(nodes.every((n) => n.kpiId === n.id && /^\d+$/.test(n.kpiId))).toBe(true);
+    const asBefore = (n: TimelineNodeDto): TimelineNodeDto => ({ ...n, kpiId: n.issueKey, children: n.children.map(asBefore) });
     const digest = createHash('sha256')
-      .update(JSON.stringify(data, (key, value) => (key === 'detail' || key === 'access' ? undefined : value)))
+      .update(
+        JSON.stringify({ ...data, roots: data.roots.map(asBefore) }, (key, value) =>
+          key === 'detail' || key === 'space' || key === 'centralSpace' || key === 'kpiTypeIconUrl' ? undefined : value,
+        ),
+      )
       .digest('hex');
     expect(digest).toMatchInlineSnapshot(`"d1eb83616cf65f687391c5f7297dc8cb1cb2e9ca27f449acf3b3db414fdbe0ad"`);
   });
@@ -156,7 +171,7 @@ describe('getTimelineData at scale', () => {
   it('an unparseable kpi-assignments property yields no targets for that issue instead of failing', async () => {
     vi.resetModules();
     const fixture = buildScaleFixture({ initiatives: 1, epicsPerInitiative: 3 });
-    fixture.issues.get(fixture.contributorIds[1])!.properties['kpi-assignments'] = { assignments: 'nope' };
+    fixture.issues.get(fixture.contributorIds[1])!.properties['kpi-assignments'] = { assignments: 'nope', kpiIssueIds: ['1000'] };
     h.jira = createMockJira(fixture);
     const { fetchTargetContributions } = await import('./jira');
     const { issues } = await fetchTargetContributions();
@@ -170,14 +185,14 @@ describe('getTimelineData at scale', () => {
 
       expect(summary.byEndpoint).toEqual({
         'GET /rest/api/3/field': 1,
-        'GET /rest/api/3/mypermissions': 1,
-        'GET /rest/api/3/search/jql [project]': 1,
+        'GET /rest/api/3/issuetype': 1,
+        'GET /rest/api/3/search/jql [issuetype]': 1,
         'POST /rest/api/3/changelog/bulkfetch': 1,
+        // spec 11 · 08: the KPI type's icon, fetched with the readings
+        'GET /rest/api/2/universal_avatar/view/type/issuetype/avatar/{id}': 1,
       });
-      expect(summary.totalRequests).toBe(4);
-      expect(Object.keys(summary.stages)).toEqual(
-        expect.arrayContaining(['config', 'fields', 'kpiSpaceIssues', 'readings']),
-      );
+      expect(summary.totalRequests).toBe(5);
+      expect(Object.keys(summary.stages)).toEqual(expect.arrayContaining(['config', 'fields', 'kpis', 'readings']));
       expect(jira.unhandled).toEqual([]);
 
       // Every KPI is present with its readings and meta, marked resolving, with no targets yet.
@@ -189,25 +204,25 @@ describe('getTimelineData at scale', () => {
         expect(n.undated).toEqual([]);
         expect(n.readings).toHaveLength(DEFAULT_SCALE.readingsPerKpi);
       }
-      expect(nodes.find((n) => n.kpiId === 'KPI-1')).toMatchObject({ unit: '%', direction: 'increase' });
-      expect(nodes.find((n) => n.kpiId === 'KPI-2')).toMatchObject({ unit: 'count', direction: 'decrease' });
+      expect(nodes.find((n) => n.kpiId === '1000')).toMatchObject({ issueKey: 'KPI-1', unit: '%', direction: 'increase' });
+      expect(nodes.find((n) => n.kpiId === '1001')).toMatchObject({ issueKey: 'KPI-2', unit: 'count', direction: 'decrease' });
     });
 
     it('the /field lookup starts together with the config read (not after it)', async () => {
       const { trace } = await runResolver<TimelineData>('getTimelineSkeleton', { latencyMs: 5 });
       const field = trace.requests.find((r) => r.endpoint === 'GET /rest/api/3/field')!;
-      const search = trace.requests.find((r) => r.endpoint.endsWith('[project]'))!;
+      const search = trace.requests.find((r) => r.endpoint.endsWith('[issuetype]'))!;
       expect(field.startMs).toBeLessThan(search.startMs);
-      // the KPI-space search waited for the field lookup, it did not trigger a second one
+      // the KPI search waited for the field lookup, it did not trigger a second one
       expect(trace.requests.filter((r) => r.endpoint === 'GET /rest/api/3/field')).toHaveLength(1);
     });
 
-    it('Phase 2 (targets) needs no KPI space, readings or kpi-meta requests', async () => {
+    it('Phase 2 (targets) needs no KPI search, readings or kpi-meta requests', async () => {
       const { data, summary } = await runResolver<TimelineTargetsData>('getTimelineTargets');
       expect(Object.keys(summary.byEndpoint)).not.toEqual(
         expect.arrayContaining(['POST /rest/api/3/changelog/bulkfetch']),
       );
-      expect(summary.byEndpoint).not.toHaveProperty('GET /rest/api/3/search/jql [project]');
+      expect(summary.byEndpoint).not.toHaveProperty('GET /rest/api/3/search/jql [issuetype]');
       expect(summary.byEndpoint).not.toHaveProperty('GET /rest/api/3/field');
       expect(Object.values(data.contributions).flat()).toHaveLength(DEFAULT_SCALE.initiatives * DEFAULT_SCALE.epicsPerInitiative);
       expect(Object.keys(data.contributions)).toHaveLength(DEFAULT_SCALE.kpis);

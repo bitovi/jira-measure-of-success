@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useId, useRef, useState } from 'react';
 import Button from '@atlaskit/button/new';
 import AddIcon from '@atlaskit/icon/core/add';
-import Select from '@atlaskit/select';
 import { usePanelData, type UsePanel } from '@ui/data/usePanelData/index.js';
 import { getSiteUrl, openIssue, openKpiTimeline } from '@ui/bridge.js';
 import { RecordModal } from '@ui/plot/modals.js';
 import { KpiView } from '@ui/surfaces/KpiView/index.js';
-import { kpiPermissionMessage, kpiSpaceNoAccessMessage } from '@domain/index.js';
-import type { Assignment, CatalogEntryDto, PanelRowDto } from '@domain/index.js';
+import { AccessRefusal } from '@ui/components/AccessRefusal/index.js';
+import { useKpiAccess } from '@ui/data/useKpiAccess/index.js';
+import { cachedKpiPickerApi, type KpiPickerApi } from '@ui/data/useKpiPicker/index.js';
+import { kpiActionBlockedReason, NO_KPIS_MESSAGE, projectKeyOfIssueKey } from '@domain/index.js';
+import type { Assignment, CatalogEntryDto, KpiOptionDto, KpiSuggestionsDto, PanelRowDto } from '@domain/index.js';
 import { TargetCard } from './components/TargetCard/index.js';
 import { TargetEditor } from './components/TargetEditor/index.js';
-import { panelMenuProps, useMenuRoom } from './useMenuRoom.js';
+import { KpiPicker, type CurrentValueState } from './components/KpiPicker/index.js';
+import { useMenuRoom } from './useMenuRoom.js';
 import {
   DEFAULT_DUE,
   cleanDue,
@@ -31,13 +34,13 @@ import {
  * (`+2% · 3 months after due date`), editable in place (Atlaskit InlineEdit,
  * IP-8/Q10). Below it, the estimate line says whether the number is a locked
  * `Target` or an `Estimated target`. The "Set a KPI target" form uses the same
- * `TargetEditor` and previews the card it will create. Everything sizes to the
+ * `TargetEditor` and previews the card it will create; its KPI field is the
+ * two-pane KPI browser (spec 11 · 07, `KpiPicker`). Everything sizes to the
  * panel's width (container queries), not the viewport.
  */
 const GROUP_META: Record<PanelRowDto['relationship'], { title: string; order: number }> = {
   shared: { title: 'Shared with parent', order: 0 },
   onlyHere: { title: 'Only on this issue', order: 1 },
-  onParentNotTracked: { title: 'On parent, not tracked here', order: 2 },
 };
 
 function localToday(): string {
@@ -57,8 +60,24 @@ export function IssuePanel({
   onOpenIssue?: (issueKey: string) => void | Promise<void>;
   loadSiteUrl?: () => Promise<string>;
 }) {
-  const { data, pending, error, busy, actionError, dismissActionError, valuesError, retryValues, save, remove, record } =
-    usePanel(issueId);
+  const {
+    data,
+    pending,
+    error,
+    busy,
+    actionError,
+    dismissActionError,
+    valuesError,
+    retryValues,
+    save,
+    remove,
+    record,
+    getKpiAccess,
+    pickerApi,
+  } = usePanel(issueId);
+  // Spec 11 · 06: a target's KPI space access is looked up when "Record a value"
+  // is first used, and remembered per space for the page session.
+  const kpiAccess = useKpiAccess(getKpiAccess);
   const [siteUrl, setSiteUrl] = useState('');
   useEffect(() => {
     let cancelled = false;
@@ -70,8 +89,6 @@ export function IssuePanel({
     };
   }, [loadSiteUrl]);
   const [recordFor, setRecordFor] = useState<PanelRowDto | null>(null);
-  // "+ Track this" pre-selects the KPI in the form; `n` re-triggers a repeat click.
-  const [trackRequest, setTrackRequest] = useState<TrackRequest | null>(null);
   const menuRoomRef = useMenuRoom();
 
   const groups = useMemo(() => {
@@ -90,30 +107,49 @@ export function IssuePanel({
 
   const actionBanner = actionError && <ActionErrorBanner message={actionError} onDismiss={dismissActionError} />;
 
-  // This issue IS a KPI (it lives in the KPI space, Feature 04): render ONLY the
+  // This issue IS a KPI (of the KPI work type, Feature 04): render ONLY the
   // single-KPI chart — no group list, no "Set a KPI target" form. Authoring
-  // nested KPIs happens on the Timeline's add-child, not here.
+  // nested KPIs happens on the Timeline's add-child, not here. Its space's
+  // access comes with the load.
   if (data.kpiView) {
+    const { node } = data.kpiView;
     return (
       <>
         {actionBanner && <div className="px-4 pt-4">{actionBanner}</div>}
         <KpiView
-          node={data.kpiView.node}
+          node={node}
           today={data.kpiView.today}
           onRecord={record}
-          recordBlocked={data.access && !data.access.edit ? kpiPermissionMessage('record') : null}
+          recordBlocked={kpiActionBlockedReason('record', data.access, node.space?.name, node.issueKey)}
+          parentLinks={data.kpiView.parentLinks ?? null}
         />
       </>
     );
   }
 
-  const tracked = data.rows.filter((r) => r.relationship !== 'onParentNotTracked');
-  const isEmpty = tracked.length === 0;
-  const noCatalog = data.catalog.length === 0;
-  // Spec 10: no Browse on the KPI space — explain that instead of "define a KPI".
-  const noBrowse = data.access?.browse === false;
-  const recordBlocked = data.access && !data.access.edit ? kpiPermissionMessage('record') : null;
-  const currentValueOf = (kpiId: string) => data.catalog.find((c) => c.id === kpiId)?.currentValue ?? null;
+  const isEmpty = data.rows.length === 0;
+  // Spec 11 · 06 Q4 / 07: without a KPI work type there are no KPIs to pick from.
+  const noKpis = !data.picker;
+  const currentValueOf = (kpiId: string) => data.kpis.find((c) => c.id === kpiId)?.currentValue ?? null;
+  /** A target's KPI space: from its definition, else its key's prefix. */
+  const spaceOfRow = (row: PanelRowDto) => {
+    const space = data.kpis.find((c) => c.id === row.kpiId)?.space;
+    const key = space?.key ?? projectKeyOfIssueKey(row.kpiKey);
+    return { key, label: space?.name ?? key };
+  };
+  const recordBlockedFor = (row: PanelRowDto) => {
+    const space = spaceOfRow(row);
+    return kpiActionBlockedReason('record', kpiAccess.accessOf(space.key), space.label, row.kpiKey);
+  };
+  const recordOn = (row: PanelRowDto) => {
+    const space = spaceOfRow(row);
+    kpiAccess.guard(
+      `record:${row.kpiId}`,
+      space.key,
+      (a) => kpiActionBlockedReason('record', a, space.label, row.kpiKey),
+      () => setRecordFor(row),
+    );
+  };
   const today = localToday();
 
   return (
@@ -122,9 +158,15 @@ export function IssuePanel({
 
       {actionBanner}
 
+      {kpiAccess.refusal && (
+        <div className="mb-3">
+          <AccessRefusal message={kpiAccess.refusal} onDismiss={kpiAccess.dismissRefusal} />
+        </div>
+      )}
+
       {valuesError && <ValuesErrorBanner message={valuesError} onRetry={retryValues} />}
 
-      {isEmpty && !noCatalog && (
+      {isEmpty && !noKpis && (
         <p className="mb-3 rounded border border-dashed border-border p-3 text-sm text-text-subtle">
           No KPIs tracked on this issue yet. Set one below.
         </p>
@@ -134,52 +176,44 @@ export function IssuePanel({
         <section key={rel} className="mb-4" aria-label={GROUP_META[rel].title}>
           <h3 className="mb-1 text-xs font-medium leading-4 text-text-subtle">{GROUP_META[rel].title}</h3>
           <div className="flex flex-col gap-2">
-            {rows.map((row) =>
-              row.relationship === 'onParentNotTracked' ? (
-                <TrackThisRow
-                  key={row.kpiId}
-                  row={row}
-                  onTrack={() => setTrackRequest((prev) => ({ kpiId: row.kpiId, n: (prev?.n ?? 0) + 1 }))}
-                />
-              ) : (
-                <TargetCard
-                  key={row.kpiId}
-                  row={row}
-                  currentValue={currentValueOf(row.kpiId)}
-                  busy={busy}
-                  onSave={(draft) => save(buildAssignment(row.kpiId, draft, row.start))}
-                  onRemove={() => remove(row.kpiId)}
-                  onRecord={() => setRecordFor(row)}
-                  recordBlocked={recordBlocked}
-                  kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiId}` : `/browse/${row.kpiId}`}
-                  onOpenKpi={() => void onOpenIssue(row.kpiId)}
-                />
-              ),
-            )}
+            {rows.map((row) => (
+              <TargetCard
+                key={row.kpiId}
+                row={row}
+                currentValue={currentValueOf(row.kpiId)}
+                busy={busy}
+                onSave={(draft) => save(buildAssignment(row.kpiId, draft, row.start))}
+                onRemove={() => remove(row.kpiId)}
+                onRecord={() => recordOn(row)}
+                recordBlocked={recordBlockedFor(row)}
+                recordBusy={kpiAccess.pendingAction === `record:${row.kpiId}`}
+                kpiHref={siteUrl ? `${siteUrl}/browse/${row.kpiKey}` : `/browse/${row.kpiKey}`}
+                onOpenKpi={() => void onOpenIssue(row.kpiKey)}
+              />
+            ))}
           </div>
         </section>
       ))}
 
-      {noBrowse ? (
-        <p role="status" className="rounded border border-dashed border-border p-3 text-sm text-text-subtle">
-          {kpiSpaceNoAccessMessage()}
-        </p>
-      ) : noCatalog ? (
-        <p className="rounded border border-dashed border-border p-3 text-sm text-text-subtle">
-          KPIs are not defined yet. You must first{' '}
-          <Button appearance="default" spacing="compact" onClick={() => void openKpiTimeline()}>
-            define a KPI
+      {!data.picker ? (
+        <div
+          role="status"
+          className="flex flex-col items-start gap-2 rounded border border-dashed border-border p-3 text-sm text-text-subtle"
+        >
+          <span>{NO_KPIS_MESSAGE}</span>
+          <Button appearance="default" spacing="compact" iconBefore={AddIcon} onClick={() => void openKpiTimeline()}>
+            Add KPI
           </Button>
-          .
-        </p>
+        </div>
       ) : (
         <AssociateForm
-          catalog={data.catalog}
+          issueKey={data.issueKey}
+          suggestions={data.picker}
+          pickerApi={pickerApi}
           existing={data.rows}
           issueDueDate={data.issueDueDate}
           issueDueRolledUp={data.issueDueRolledUp}
           resolving={data.resolving === true}
-          trackRequest={trackRequest}
           onSave={save}
         />
       )}
@@ -246,74 +280,66 @@ function buildAssignment(kpiId: string, draft: TargetDraft, start: string | null
   };
 }
 
-type TrackRequest = { kpiId: string; n: number };
-
-/**
- * A KPI on the parent but not here. "+ Track this" doesn't save anything: it
- * picks the KPI in the "Set a KPI target" form and focuses its value, so the
- * user sets a real target (v1 targets are independent — nothing to inherit).
- */
-function TrackThisRow({ row, onTrack }: { row: PanelRowDto; onTrack: () => void }) {
-  return (
-    <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2">
-      <span className="text-sm text-text-subtle">{row.name}</span>
-      <div className="ml-auto">
-        <Button appearance="subtle" spacing="compact" iconBefore={AddIcon} onClick={onTrack}>
-          Track this
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-type KpiOption = { label: string; value: string; depth: number; unit: string };
-
 const EMPTY_DRAFT: TargetDraft = { targetType: 'percent', value: '', due: DEFAULT_DUE };
 
 function AssociateForm({
-  catalog,
+  issueKey,
+  suggestions,
+  pickerApi,
   existing,
   issueDueDate,
   issueDueRolledUp,
   resolving,
-  trackRequest,
   onSave,
 }: {
-  catalog: CatalogEntryDto[];
+  issueKey: string;
+  suggestions: KpiSuggestionsDto;
+  pickerApi?: KpiPickerApi;
   existing: PanelRowDto[];
   issueDueDate: string | null;
   issueDueRolledUp: boolean;
-  /** the issue's due date and the KPIs' current values are still loading */
+  /** the issue's due date is still loading */
   resolving: boolean;
-  /** a "+ Track this" click: pick this KPI and focus the target value */
-  trackRequest: TrackRequest | null;
   onSave: (a: Assignment) => void;
 }) {
-  const trackedIds = new Set(existing.filter((r) => r.relationship !== 'onParentNotTracked').map((r) => r.kpiId));
-  const [kpiId, setKpiId] = useState('');
+  const trackedIds = useMemo(
+    () => new Set(existing.map((r) => r.kpiId)),
+    [existing],
+  );
+  const loads = useMemo(() => (pickerApi ? cachedKpiPickerApi(pickerApi) : undefined), [pickerApi]);
+  const [picked, setPicked] = useState<KpiOptionDto | null>(null);
+  const [current, setCurrent] = useState<{ kpiId: string; value: number | null } | null>(null);
   const [draft, setDraft] = useState<TargetDraft>(EMPTY_DRAFT);
   const kpiInputId = useId();
   const titleId = useId();
   const amountRef = useRef<HTMLInputElement>(null);
 
+  // The picked KPI's current value (its readings): fetched for that KPI only.
   useEffect(() => {
-    if (!trackRequest) return;
-    setKpiId(trackRequest.kpiId);
-    amountRef.current?.focus();
-  }, [trackRequest]);
+    if (!picked || !loads) return;
+    let alive = true;
+    loads.getKpiCurrentValue(picked.id).then(
+      (v) => alive && setCurrent({ kpiId: picked.id, value: v.value }),
+      () => alive && setCurrent({ kpiId: picked.id, value: null }),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [picked, loads]);
 
-  const options: KpiOption[] = catalog
-    .filter((c) => !trackedIds.has(c.id))
-    .map((c) => ({ label: c.name, value: c.id, depth: c.depth ?? 0, unit: c.unit.trim() }));
-  const kpi = catalog.find((c) => c.id === kpiId);
-  const current = kpi?.currentValue ?? null;
-  const preview = kpi ? { ...previewRow(kpi, draft, issueDueDate, issueDueRolledUp), resolving: resolving || undefined } : null;
+  const currentValue = picked && current?.kpiId === picked.id ? current.value : null;
+  const currentState: CurrentValueState = !picked || !loads ? null : current?.kpiId === picked.id ? { pending: false, value: current.value } : { pending: true };
+  const kpi: CatalogEntryDto | null = picked
+    ? { id: picked.id, key: picked.key, name: picked.name, unit: picked.unit.trim(), direction: picked.direction, currentValue }
+    : null;
+  const valueResolving = resolving || currentState?.pending === true;
+  const preview = kpi ? { ...previewRow(kpi, draft, issueDueDate, issueDueRolledUp), resolving: valueResolving || undefined } : null;
 
-  const canSubmit = kpiId !== '' && isValidDraft(draft);
+  const canSubmit = picked !== null && isValidDraft(draft);
   const submit = () => {
-    if (!canSubmit) return;
-    onSave(buildAssignment(kpiId, draft, null));
-    setKpiId('');
+    if (!picked || !canSubmit) return;
+    onSave(buildAssignment(picked.id, draft, null));
+    setPicked(null);
     setDraft(EMPTY_DRAFT);
   };
 
@@ -327,23 +353,15 @@ function AssociateForm({
           <label htmlFor={kpiInputId} className="mb-0.5 block text-xs leading-4 text-text-subtle">
             KPI
           </label>
-          <Select<KpiOption>
+          <KpiPicker
             inputId={kpiInputId}
-            spacing="compact"
-            {...panelMenuProps}
-            options={options}
-            value={options.find((o) => o.value === kpiId) ?? null}
-            placeholder="Choose KPI…"
-            // Indent by KPI-tree depth in the menu so parent/child nesting reads.
-            // The unit is shown in the menu and once picked, so a "total" or
-            // "more" value is typed in the right unit (hours vs. minutes, % points).
-            formatOptionLabel={(o, { context }) => (
-              <>
-                <span style={context === 'menu' ? { paddingLeft: o.depth * 12 } : undefined}>{o.label}</span>
-                {o.unit && <span className="text-text-subtle"> ({o.unit})</span>}
-              </>
-            )}
-            onChange={(o) => setKpiId(o?.value ?? '')}
+            suggestions={suggestions}
+            issueKey={issueKey}
+            trackedIds={trackedIds}
+            value={picked}
+            onChange={setPicked}
+            api={loads}
+            currentValue={currentState}
           />
         </div>
 
@@ -352,8 +370,8 @@ function AssociateForm({
         {kpi && preview && (
           <div>
             <div className="mb-1 text-xs font-medium leading-4 text-text-subtle">Preview</div>
-            <TargetCard row={preview} currentValue={current} preview />
-            {!resolving && isWrongWay(preview, current) && (
+            <TargetCard row={preview} currentValue={currentValue} preview />
+            {!valueResolving && isWrongWay(preview, currentValue) && (
               <p className="mt-1.5 rounded bg-[var(--ds-background-warning,#fff7d6)] px-2 py-1.5 text-xs font-medium leading-4 text-warning">
                 This {preview.direction === 'increase' ? 'lowers' : 'raises'} {kpi.name}, where{' '}
                 {preview.direction === 'increase' ? 'higher' : 'lower'} is better. Double-check the sign.

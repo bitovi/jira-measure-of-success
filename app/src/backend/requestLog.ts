@@ -11,7 +11,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * wrappers are plain pass-throughs.
  */
 
-type RequestJira = ReturnType<typeof api.asApp>['requestJira'];
+export type RequestJira = ReturnType<typeof api.asApp>['requestJira'];
 interface Requester {
   requestJira: RequestJira;
 }
@@ -104,6 +104,8 @@ function jqlKind(jql: string): string {
   if (/^parent\s+in\b/i.test(q)) return 'parent in';
   if (/^parent\s*=/i.test(q)) return 'parent =';
   if (/^project\s*=/i.test(q)) return 'project';
+  if (/^issuetype\s*=/i.test(q)) return 'issuetype';
+  if (/issue\.property\[kpi-assignments\]\.kpiIssueIds\s*=/i.test(q)) return 'kpi-assignments id';
   if (/issue\.property\[kpi-assignments\]/i.test(q)) return 'kpi-assignments index';
   return 'other';
 }
@@ -180,4 +182,35 @@ export function summarizeTrace(trace: Trace): TraceSummary {
     byEndpoint,
     stages,
   };
+}
+
+const invocationCaches = new WeakMap<Trace, Map<string, Promise<unknown>>>();
+
+/**
+ * `load()` once per resolver invocation (per trace): later calls in the same
+ * invocation share the result. Outside a trace (a plain call) nothing is
+ * cached. A failed load is forgotten so the next call tries again.
+ */
+export function perInvocation<T>(key: string, load: () => Promise<T>): Promise<T> {
+  const trace = current.getStore();
+  if (!trace) return load();
+  let cache = invocationCaches.get(trace);
+  if (!cache) {
+    cache = new Map();
+    invocationCaches.set(trace, cache);
+  }
+  const hit = cache.get(key) as Promise<T> | undefined;
+  if (hit) return hit;
+  const pending = load();
+  cache.set(key, pending);
+  pending.catch(() => {
+    if (cache.get(key) === pending) cache.delete(key);
+  });
+  return pending;
+}
+
+/** Drop a `perInvocation` result after a write changed what it read. */
+export function forgetPerInvocation(key: string): void {
+  const trace = current.getStore();
+  if (trace) invocationCaches.get(trace)?.delete(key);
 }

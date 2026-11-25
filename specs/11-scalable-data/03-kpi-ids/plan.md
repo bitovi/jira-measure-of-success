@@ -1,6 +1,6 @@
 # 03 — KPI ids, not keys
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft** · Depends on: 02.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Done (live check with 04)** · Depends on: 02.
 
 ## Problem
 
@@ -28,11 +28,13 @@ With KPIs in many spaces (06), moves happen whenever teams reorganise. Issue **i
   and `Assignment.kpiId` in the domain model.
 - **The key is display-only.** DTOs carry it next to the id (`kpiKey` / `key`) for labels and
   `/browse/{key}` links. It always comes fresh from Jira.
-- **Stored targets carry both**, so old readers keep working (overview, *Compatibility*). The id is
-  stored in a **new** field, and `kpiId` keeps meaning "the KPI's key".
-- **Reads accept key-only references** until the cleanup release (09).
-- **Every target write rewrites all of that issue's references** with the id and the current key, so
-  data heals as people use the app. A migration (on 02's framework) does the rest.
+- **Stored targets carry both**, so the customer's app keeps working (overview, *Compatibility*). The
+  id is stored in a **new** field, and `kpiId` keeps meaning "the KPI's key".
+- **Reads use the id only.** A reference without a `kpiIssueId` is read as a **deleted KPI**: after
+  the migration, those are the only key-only references left. Before an admin runs the migration,
+  every target reads that way; that's accepted (overview).
+- **Writes** store the id and the KPI's current key for every reference that has an id. They never
+  resolve key-only references: the migration (on 02's framework) does that, once, as the app.
 
 ## Design
 
@@ -41,29 +43,48 @@ With KPIs in many spaces (06), moves happen whenever teams reorganise. Issue **i
 `kpi-assignments` keeps its shape and gains two fields:
 
 ```jsonc
-// written by older installs (and today's data)
+// today's data (before the migration)
 { "assignments": [{ "kpiId": "KPI-5", ... }], "kpiIds": ["KPI-5"] }
 
 // written from this stage on
 { "assignments": [{ "kpiIssueId": "10234", "kpiId": "KPI-5", ... }],
-  "kpiIssueIds": ["10234"],     // new index path, exact-match (string)
-  "kpiIds": ["KPI-5"] }         // unchanged meaning: keys, for old readers + today's discovery search
+  "kpiIssueIds": ["10234"],     // new index path, exact-match (string): discovery + lookups
+  "kpiIds": ["KPI-5"],          // unchanged meaning: keys, for the customer's app
+  "refsVersion": 2 }            // new index path: "migrated"
 ```
 
 - `kpiId` is the KPI's **current key at the time of the write**. If the KPI moves later, it goes stale
   until the issue's targets are next saved. Jira still resolves the old key, and the customer's report
   only covers the original KPI project, so that's acceptable during the transition (Q3).
+- **Why both `kpiIssueId` and `kpiIssueIds`:** the per-assignment field is the data; the top-level
+  array is a deduped copy for the index. A `jira:entityProperty` path can index an array of plain
+  values but not a field inside an array of objects (the same reason `kpiIds` exists today, see
+  `writeAssignments`). Discovery searches it (below), and exact "who targets KPI X" lookups will too.
+- **`refsVersion: 2`** marks an issue as migrated. The migration writes it once every reference on the
+  issue has a `kpiIssueId`, **except** keys that resolve to no issue as the app (deleted KPIs, which
+  stay key-only by design), so an issue whose only references are deleted KPIs is stamped too. App
+  writes **stamp** an issue when it was already stamped, **or** when its stored property had **no
+  key-only references** before the write (including an issue with no property yet, getting its first
+  target). Every reference the app adds has an id, so either way nothing is left to migrate. An issue
+  that still holds key-only references stays unstamped until the migration reaches it. Without the
+  second rule, a work item that gets its first target after the release would never be stamped. It
+  would count as pending forever, since the migration is `done` and never re-runs (02 rule 7), and
+  block the cleanup release (09).
+  `refsVersion` exists only for the migration's pending count (*Migration*, below).
 - After the cleanup release, `kpiId` / `kpiIds` stop being written (09).
 
-**Index** ([manifest.yml](../../../app/manifest.yml)): keep the `kpiIds` `text` path as it is (older
-installs and the Timeline's `IS NOT EMPTY` discovery use it), and **add** a `kpiIssueIds` path with
-`type: string` for exact lookups. 01 D2–D4 confirm that adding the path is safe and whether existing
-properties get indexed under it without being rewritten.
+**Index** ([manifest.yml](../../../app/manifest.yml)): keep the `kpiIds` `text` path as it is (the
+customer's app searches it), and **add** a `kpiIssueIds` path with `type: string` (discovery and exact
+lookups) and a `refsVersion` path with `type: number` (the migration's pending count). 01 D2–D5
+confirm that adding the paths is safe and that `IS EMPTY` works on the number path.
 
-**Discovery during the transition** keeps using `kpiIds IS NOT EMPTY`, since both old and new writes
-fill it. An exact "which work items target KPI 10234" query (`kpiIssueIds = "10234"`) only becomes
-complete once the migration has run and older installs have upgraded. Nothing in this spec needs that
-query. A future feature that does would have to combine it with the key during the transition.
+**Discovery** (the Timeline's `fetchTargetContributions`) searches `kpiIssueIds IS NOT EMPTY` from this
+stage on, so the cleanup release's removal of `kpiIds` (09) doesn't affect it. Before the migration it
+only finds issues this version has written; that's accepted. An issue whose only references are
+deleted KPIs has no `kpiIssueIds` and isn't discovered, which is right: those targets have no KPI to
+show under. The central Timeline keeps searching every targeted work item, because it shows every KPI
+(overview Q5); searching only the shown KPIs' targets (R3) waits for space pages. A KPI's own panel
+searches the exact `kpiIssueIds = {id}` instead (06, KPI View).
 
 ### Domain (`@domain`, pure: `domain/resolve/kpiRef.ts`)
 
@@ -73,46 +94,58 @@ type KpiRef = { kind: 'id'; id: string } | { kind: 'key'; key: string } | { kind
 /** Ids are digits; keys are PROJECT-123. */
 function parseKpiRef(raw: string): KpiRef;
 
-/** Stored → domain. Prefers kpiIssueId; else parses kpiId; keys resolve via the map. */
-function readStoredAssignments(
-  stored: StoredAssignments,
-  idOfKey: ReadonlyMap<string, string>,
-): { assignments: Assignment[]; unresolvedKeys: string[]; needsRewrite: boolean };
+/** Stored → domain, for reads. Uses kpiIssueId only; a reference without one is a deleted KPI,
+ *  kept by its key. */
+function readStoredAssignments(stored: StoredAssignments): { assignments: Assignment[]; deletedKeys: string[] };
 
-/** Domain → stored. Writes kpiIssueId + current key for every assignment, and both index arrays. */
+/** Domain → stored, for app writes. kpiIssueId + current key for every id reference, key-only ones
+ *  kept as they are, both index arrays, and `refsVersion: 2` when `stamp` is true. The caller passes
+ *  `stamp` = the stored property was stamped, or held no key-only references (Stored format). */
 function toStoredAssignments(
   assignments: Assignment[],
   keyOfId: ReadonlyMap<string, string>,
+  stamp: boolean,
 ): StoredAssignments;
+
+/** The migration's planner: resolves key-only references via `idOfKey` (keys missing from it are
+ *  deleted), and stamps `refsVersion: 2`. */
+function migrateStoredAssignments(
+  stored: StoredAssignments,
+  idOfKey: ReadonlyMap<string, string>,
+  keyOfId: ReadonlyMap<string, string>,
+): { outcome: 'migrated' | 'alreadyDone' | 'skipped'; stored: StoredAssignments; deletedKeys: string[] };
 ```
 
-- `Assignment.kpiId` (domain) **is the issue id**. The two functions above are the only code that knows
-  about the stored `kpiIssueId` / `kpiId` split.
-- An unresolved key (a deleted KPI) is kept **as is**, with `kpiId` = that key, so it still shows as
-  "deleted" instead of vanishing.
+- `Assignment.kpiId` (domain) **is the issue id**. These functions are the only code that knows about
+  the stored `kpiIssueId` / `kpiId` split.
+- A key-only reference (a deleted KPI, after the migration) is kept **as is**, with `kpiId` = that
+  key, so it still shows as "deleted" instead of vanishing.
 - `updatedBy` / `updatedAt` are **not** changed by rewriting a reference: the target itself didn't
   change.
 
 ### Backend
 
-**Resolving keys to ids** (`jira.ts`, `resolveKpiKeys(keys) → Map<key, id>`, cached per invocation):
+**Resolving keys to ids** (`jira.ts`, `resolveKpiKeys(keys) → Map<key, id>`, cached per invocation)
+is used **only by the migration**:
 
-1. Look in the KPI issues the request already loaded. That covers every unmoved KPI at no cost.
-2. For the rest, `GET /issue/{key}?fields=issuetype` as the user. Jira follows a moved issue's old key
-   (01 D1).
-3. Anything still unresolved stays a key. The existing deleted / no-access classification handles it.
+1. `GET /issue/{key}?fields=issuetype` **as the app**, once per distinct key in the batch. Jira follows
+   a moved issue's old key (01 D1). As the app, so a KPI in a project the admin can't see still gets
+   its id stored (the id is only written, never shown).
+2. A key that's still unresolved (404 as the app) is a deleted KPI: it stays a key.
 
-**Reads that resolve before use:**
+**Reads** make no key-resolution requests:
 
 | Read | Change |
 |---|---|
 | `fetchTargetSourceIssue` / panel `fetchAssignments` (own + parent) | `readStoredAssignments` before grouping rows |
-| `fetchTargetContributions` (Timeline discovery) | Same, then group `byKpi[a.kpiId]` by id |
-| `classifyUnlistedKpis` | Takes ids. `GET /issue/{id}` 404 as the app = deleted. No more old-key limbo |
+| `fetchTargetContributions` (Timeline discovery) | Searches `kpiIssueIds IS NOT EMPTY` (was `kpiIds`), then `readStoredAssignments`, grouping `byKpi[a.kpiId]` by id |
+| `classifyUnlistedKpis` | Takes ids. `GET /issue/{id}` 404 as the app = deleted. A key-only reference is deleted without a request. No more old-key limbo |
 
-**Writes** (`writeAssignments`): build `keyOfId` for **every** assignment on the issue (the KPIs
-already loaded, plus one `id in (…)` search for any others), then `toStoredAssignments`.
-`requireTargetableKpi` takes an id.
+**Writes** (`writeAssignments`): build `keyOfId` for **every** id reference on the issue: the KPIs
+already loaded, plus one `id in (…)` search **as the app** for any others. As the app, so a KPI the user
+can't see still gets its current key written for the customer's app. Only keys are written, never shown.
+An id whose KPI no longer exists (missing from that search) keeps the `kpiId` key already stored with
+it. Then `toStoredAssignments`, stamping per *Stored format*. `requireTargetableKpi` takes an id.
 
 **Ids everywhere else:** `buildKpiCatalog` returns `id: issue.id, key: issue.key`. The readings map is
 keyed by id. `createKpi` / `updateKpi` take `parentKpiId` as an id. `recordValue` already fetches
@@ -143,56 +176,80 @@ Only the places that **show or link** a KPI change:
 
 Registered on 02's framework.
 
-- **Which issues:** `issue.property[kpi-assignments].kpiIds IS NOT EMPTY ORDER BY id ASC`, cursor = last
-  issue id. If 01 D3 shows `kpiIssueIds IS EMPTY` works, `status().pending` uses it; otherwise it pages
-  and counts from the returned properties.
-- **Pure planner:** `readStoredAssignments` decides each issue's outcome:
+- **Which issues:** `issue.property[kpi-assignments].kpiIds IS NOT EMPTY ORDER BY id ASC`, paged with
+  `nextPageToken` (the cursor). The query is **stable**: it doesn't filter on `refsVersion`, because a
+  token over a set that shrinks as items are migrated could skip items, and `id > {cursor}` only works
+  within one project (01 E2). Issues already stamped `refsVersion: 2` are counted `alreadyDone` without
+  a write.
+- **Pending** (`status().pending`, as the app, 02 rule 6): the count (`search/approximate-count`) of
+  that search **plus** `AND issue.property[kpi-assignments].refsVersion IS EMPTY` (01 D5, E3). One exact
+  request, whatever the data size. It's exact because the marker is per issue and means "nothing left
+  to resolve": every key is resolved as the app (Backend), and deleted KPIs don't hold the marker back,
+  so they never count as pending (02 rule 6, skipped items).
+- **Pure planner:** `migrateStoredAssignments` decides each issue's outcome:
   - **migrated**: at least one assignment gained a `kpiIssueId`;
-  - **already done**: every assignment has one;
-  - **skipped (unresolved)**: a key matches no issue (a deleted KPI). Left as is, counted and listed.
+  - **already done**: every assignment has one (the issue is only re-stamped);
+  - **skipped (unresolved)**: a key matches no issue (a deleted KPI). The key is left as is, counted
+    and listed, and the issue is still stamped once its other references have ids.
 - **Writes** one `PUT /issue/{id}/properties/kpi-assignments` per changed issue, `writeAs: 'app'`
-  (02 Q2). To avoid overwriting a concurrent save, it re-reads the property just before writing and
-  skips the issue if it changed since the batch read. That save already wrote ids.
+  (02 Q2). The `PUT` replaces the whole property, so to avoid overwriting a target saved since the
+  batch read, it re-reads the property **immediately** before writing (nothing else awaited in between)
+  and skips the issue if it changed, counting it as "changed during the run". An app save doesn't stamp
+  an issue that still held key-only references (*Stored format*), so the skipped issue is still
+  unstamped and pending: the run ends `failed`, and **Retry failed** picks it up (02 rules 4 and 6).
+- **Known race (accepted).** Jira's single-issue property `PUT` has no conditional write, so a save
+  that lands between that re-read and the `PUT` (one request's round trip) is overwritten. It's the
+  same race every target save already has today when two people save targets on the same work item at
+  once (each save is read-modify-write). The upgrade runbook (09) says to run the migration when nobody
+  is editing targets.
 
 ### Test infrastructure
 
-- **Scale fixture:** targets stored three ways (keys only, as today; ids + keys; and a mix on one
-  issue), a **moved** KPI (old key resolves to the new issue), and a deleted KPI.
-- **Harness fixtures** ([mock-resolvers.ts](../../../app/test-harness/fixtures/mock-resolvers.ts)): numeric
-  ids with separate keys, plus one issue with a key-only legacy reference.
+- **Scale fixture:** a **pre-migration** shape (keys only, as today) and a **migrated** shape (ids +
+  keys, stamped), with a **moved** KPI (old key resolves to the new issue), a deleted KPI (next to live
+  ones on one issue, and alone on another), and a KPI the user can't see (the app can).
+- **Harness fixtures** ([mock-resolvers.ts](../../../app/test-harness/fixtures/mock-resolvers.ts)): the
+  migrated shape (numeric ids with separate keys), plus one deleted KPI's key-only reference.
 
 ## Implementation steps
 
-### Step 1 — Domain: `parseKpiRef`, `readStoredAssignments`, `toStoredAssignments`
+### Step 1 — Domain: `parseKpiRef`, `readStoredAssignments`, `toStoredAssignments`, `migrateStoredAssignments`
 
-- **Verify:** table tests: ids only; keys only; a mix; a key missing from the map (kept, reported);
-  an invalid value; duplicates; a digits-only `kpiId` (someone wrote an id there) read as an id;
-  `updatedBy`/`updatedAt` untouched; `needsRewrite` false when nothing changed; round trip
-  (`read(to(x)) == x`).
+- **Verify:** table tests. Reads: ids only; a key-only reference read as deleted (kept by key); an
+  invalid value; duplicates; a digits-only `kpiId` (someone wrote an id there) read as an id. Writes:
+  `updatedBy`/`updatedAt` untouched; key-only references kept as they are; `refsVersion: 2` written
+  when `stamp` is true and not otherwise; round trip (`read(to(x)) == x`). Migration:
+  keys only, ids only (already done), a mix; a key missing from `idOfKey` (deleted, kept, reported);
+  `refsVersion: 2` written when every reference has an id or the only key-only ones are deleted
+  (including an issue with nothing but deleted KPIs).
 
-### Step 2 — Contracts and backend reads accept both
+### Step 2 — Contracts and backend reads by id
 
-- `resolveKpiKeys`, the three reads, catalog / readings / Timeline keyed by id, `kpiKey` in DTOs,
-  `classifyUnlistedKpis` by id.
-- **Verify:** backend tests on the scale fixture with **key-only** targets (today's live data): the
-  panel and Timeline show the same rows and markers as before (compare against snapshots taken before
+- The three reads, discovery on `kpiIssueIds`, catalog / readings / Timeline keyed by id, `kpiKey` in
+  DTOs, `classifyUnlistedKpis` by id.
+- **Verify:** backend tests on the **migrated** fixture: the panel and Timeline show the same rows and
+  markers as today's code on the matching pre-migration data (compare against snapshots taken before
   the change). A target pointing at a **moved** KPI shows under it. A deleted KPI is still reported
-  deleted. Request-log tests: unmoved KPIs add **no** requests; one moved key adds exactly one
-  `GET /issue/{key}`.
+  deleted, with no request. A target on a KPI the user can't see shows as "no access". Request-log
+  tests: reads make **no** key-resolution requests. On the **pre-migration** fixture, the documented
+  degraded behaviour (targets read as deleted, Timeline discovers nothing) is pinned by a test.
 
 ### Step 3 — Writes store ids and keys (+ index path)
 
-- `writeAssignments` via `toStoredAssignments`. Add the `kpiIssueIds` index path.
-- **Verify:** saving one target on an issue whose property has key-only references writes
-  `kpiIssueId` + current key for **all** of them, and fills both `kpiIssueIds` and `kpiIds`. Other
-  targets keep `updatedBy`/`updatedAt`. The written property still parses with **today's**
-  `Assignment` schema and gives the same `kpiId` keys (an older install can read it).
+- `writeAssignments` via `toStoredAssignments`. Add the `kpiIssueIds` and `refsVersion` index paths.
+- **Verify:** saving one target on a migrated issue writes `kpiIssueId` + current key for **all** its
+  id references (including a KPI the user can't see, looked up as the app), fills both `kpiIssueIds` and
+  `kpiIds`, and keeps `refsVersion: 2`. An id reference to a deleted KPI keeps its stored key. On an
+  unstamped issue with key-only references, those are kept as they are and the issue stays unstamped.
+  An issue with **no** property, or with only id references, is stamped by its first app write, and the
+  migration's pending count doesn't include it. Other targets keep `updatedBy`/`updatedAt`. The written
+  `kpiId` / `kpiIds` are exactly what the customer's app reads (the current keys).
 
 ### Step 4 — UI uses `kpiKey`
 
 - The IssuePanel and TargetCard changes; harness fixtures switch to ids.
 - **Verify:** in the harness (`?surface=issue`), light and dark: KPI names link to `/browse/{key}`,
-  never `/browse/{numeric id}`; the legacy key-only fixture issue renders its target. Clean console.
+  never `/browse/{numeric id}`; the deleted KPI's key-only reference renders as deleted. Clean console.
   Story tests pass.
 
 ### Step 5 — Migration
@@ -200,26 +257,135 @@ Registered on 02's framework.
 - Register `kpi-target-refs-to-ids`.
 - **Verify:** mock-Jira tests: mixed data migrates; a second run is all "already done"; an issue
   changed between read and write is skipped and counted; a deleted KPI's key is reported unresolved;
-  the cursor resumes after a failed batch; an issue the admin can't see is still migrated (written as
-  the app); after the migration, an **older-format write** (key only) on one issue is read correctly
-  and shows up as one new pending item.
+  an issue whose only targets are deleted KPIs is stamped and **not** pending, so the run reaches
+  `done`; the cursor resumes after a failed batch; an issue the admin can't see is still migrated
+  (written as the app); `pending` is the one `refsVersion IS EMPTY` search and is `0` at the end; an
+  issue saved between the batch read and the write stays pending, the run ends `failed`, and a retry
+  ends `done`.
 
 ### Step 6 — Live check (dev)
 
-- Deploy the branch to dev; staging stays on `main`. Run the migration through the `runMigrationBatch`
-  resolver (no UI until 04; use the harness-style loop from a temporary script or wait for 04).
-- **Verify** on `bitovi-training`: the Timeline and panels look identical in dev before and after the
-  migration, and identical to **staging** (the older install). Move one throwaway KPI to another
-  project: dev keeps all its targets in both surfaces, and the panel link opens the new key.
+- Deploy the branch to dev. Run the migration through the `runMigrationBatch` resolver (no UI until
+  04; use the harness-style loop from a temporary script or wait for 04).
+- **Verify** on `bitovi-training`: after the migration, dev's Timeline and panels match screenshots of
+  `main` taken before it, and the legacy reader report (09) is unchanged. Move one throwaway KPI to
+  another project: dev keeps all its targets in both surfaces, and the panel link opens the new key.
 
 ## Questions
 
 1. **Field names.** `kpiIssueId` (per assignment) and `kpiIssueIds` (index), OK? After cleanup, these
    become the only reference, so the names are permanent.
-2. **Healing on save.** Saving any target on an issue rewrites *all* of that issue's references (adds
-   the id, refreshes the key). Values and authorship don't change. OK?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): yes**, `kpiIssueId` / `kpiIssueIds`.
+2. **Key-only references read as deleted.** After the migration, the only key-only references are
+   deleted KPIs, so reads treat any key-only reference as deleted, without asking Jira. Before an admin
+   runs the migration, every target reads that way. OK? Saving a target still refreshes the stored keys
+   of the issue's other references (for the customer's app); values and authorship don't change.
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): yes**, as drafted.
 3. **Stale keys for old readers.** After a KPI moves, `kpiId` keeps its old key until that issue's
    targets are saved again. Fine for the customer (they only report on the original KPI project, and
    Jira resolves old keys), or should moving be detected and the keys refreshed in bulk?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): fine as drafted**; no bulk refresh.
 4. **Live run before 04.** Step 6 runs the migration without the Settings UI. OK to use a temporary
    script for that, or should the live check wait until 04's card exists?
+   - **Decided (2026-11-24, implementer, autopilot; revisit at review): wait for 04's card.** Step 6 runs as part of 04 Step 7 (R7).
+
+## Live check (2026-11-24, dev v10.4.0, run from 04's Upgrade data card)
+
+- `kpi-target-refs-to-ids` migrated all **14** work items in one click and ended `done`.
+- **Bug found and fixed:** the legacy reader report changed for ECOM-2 (`targetType: delta` → `percent`).
+  The migration wrote the **parsed** property, and parsing normalizes the legacy `delta` to `percent`
+  (and would drop unknown keys). It now merges only the reference fields into the **raw** stored JSON
+  (`mergeRefsIntoRaw`), with a test. ECOM-2 was restored by hand; the report then matched the baseline.
+- dev's Timeline shows the 14 KPIs and all 17 targets with values (18 stored, one has no value).
+
+## Implementation notes
+
+Done 2026-11-24 on `feat/11-scalable-data`, Steps 1–5. Step 6 (live check) runs with 04 Step 7 (Q4).
+
+**Files added**
+
+- `app/src/domain/resolve/kpiRef.ts` (+ test): `parseKpiRef`, `isKpiIssueId`, `readStoredAssignments`,
+  `toStoredAssignments`, `migrateStoredAssignments`, plus `shouldStampRefs(stored)` (the *Stored format*
+  stamping rule) and `storedKeysById(stored)` (the key last written for each id, the fallback for a
+  deleted KPI's id reference).
+- `app/src/backend/migrations/kpiTargetRefsToIds.ts` (+ test): the `kpi-target-refs-to-ids` migration.
+- `app/src/backend/kpiIds.test.ts`: reads and writes on the migrated and pre-migration fixtures.
+
+**Files changed**
+
+- Domain: `models/assignment.ts` (`StoredAssignment`, `StoredAssignments` replaces `AssignmentProperty`,
+  `REFS_VERSION`), `contracts.ts`, `resolve/panelLoad.ts` (`kpiKey` on rows), `resolve/kpiAccess.ts`
+  (`kpiNotVisibleMessage` says "This KPI" for an id), `resolve/kpiLinks.ts` (`kpiParentLinkBody` names
+  an issue by `{ id }` or `{ key }`), doc comments in `kpiMeta.ts`, `kpiReading.ts`, `kpiDefinition.ts`,
+  `timelineLoad.ts`.
+- Backend: `jira.ts` (reads via `readStoredAssignments`; `fetchStoredAssignments`;
+  `fetchTargetSourceIssue` also returns `stored`; `writeAssignments(issueId, assignments, previous,
+  loadedKeys?)`; `fetchIssueKeysAsApp`; discovery on `kpiIssueIds IS NOT EMPTY`, id references only;
+  `classifyUnlistedKpis` by id, returning `keys`; `resolveKpiKeys`; `createKpiIssue` returns the id),
+  `resolver.ts` (catalog / readings / Timeline by id, `requireTargetableKpi` returns `{ id, key }` and
+  targets store `kpi.id`, `updateKpi` returns ids), `migrations/index.ts` (registers the migration),
+  `testing/scaleFixture.ts` (`refs: 'migrated' | 'keys'` option, `addRefEdgeCases`, `storedTargets`,
+  `fixtureTarget`, `DELETED_KPI_KEY`, `formerKeys` on issues, property-path JQL with `AND` / `ORDER BY
+  id ASC`, `POST /search/approximate-count`, issue links by id).
+- UI: `IssuePanel.tsx` (`kpiHref` / `onOpenIssue` use `row.kpiKey`), `TargetCard.tsx` (tooltip and
+  no-access reason use `kpiKey`), `targetText.ts` (`previewRow` sets `kpiKey`), `plot/targetTooltip.tsx`.
+- Harness: `fixtures/hierarchy.ts` (KPI ids `20001`…`20011`, keys `KPI-1`…`KPI-11`; EPIC-231 keeps
+  the deleted `KPI-404` as a key-only reference), `fixtures/mock-resolvers.ts` (catalog `key`, row
+  `kpiKey`, numeric ids for new KPIs, `kpiKeyOf`), `access-modes.ts` / `mock-bridge.ts` (permission
+  messages name the key; hidden KPIs get `kpiKeys`).
+- `manifest.yml`: comments on the `kpi-index` paths only (the paths were added in 01).
+- Tests/stories switched from keys-as-ids to ids: `panel`, `mutations`, `kpiAccess`, `timelinePerf`,
+  `jira`, `runner` tests, `panelLoad` / `panelView` / `targetText` tests, the IssuePanel, TargetCard,
+  Timeline and KpiView stories, `test-e2e/jira-api.e2e.ts`.
+
+**API later stages rely on**
+
+- `Assignment.kpiId`, `CatalogEntryDto.id`, `PanelRowDto.kpiId`, `TimelineNodeDto.kpiId` (= `id`),
+  `PanelValuesData.readings` keys, `contributions` keys, `RecordValueInput.kpiId`,
+  `AddTargetInput.kpiId`, `CreateKpiInput.parentKpiId`, `UpdateKpiInput.kpiId/parentKpiId`,
+  `CreatedKpi` / `UpdatedKpi` `kpiId` and `parentKpiId`: all **issue ids**.
+- New: `CatalogEntryDto.key`, `PanelRowDto.kpiKey` (both required), `PanelBasis.kpiKeys?` (id → key
+  for targeted KPIs the catalog doesn't list but Jira found).
+- A deleted KPI's key-only reference stays in `Assignment.kpiId` as its key (`isKpiIssueId` is false);
+  it's always in `deletedKpiIds`.
+- Every `kpi-assignments` write goes through `writeAssignments(issueId, assignments, previous,
+  loadedKeys)`: pass the stored property read before the change (`fetchStoredAssignments` /
+  `fetchTargetSourceIssue().stored`) so the stamping rule and stored keys work.
+- Exact "who targets KPI X": `issue.property[kpi-assignments].kpiIssueIds = "{id}"` (06's KPI panel).
+
+**Decisions made while implementing**
+
+- Invalid stored values (neither an id nor a key) are treated like key-only ones: kept, read as
+  deleted, reported unresolved by the migration (no lookup).
+- Two references to the same KPI (possible after a move, `KPI-5` and `PORT-20`): reads keep the first;
+  the migration keeps both (copy only), and the next app write drops the second.
+- `PanelBasis.kpiKeys` (not in the draft): `classifyUnlistedKpis` already GETs each unlisted id as the
+  app, and keeps the key it returns, so a no-access or not-yet-indexed KPI is labelled `KPI-4`, not
+  `10234`, as it was labelled before (the key is on the work item's own property anyway). A KPI deleted
+  after the migration has no key left and is labelled with its id.
+- The migration also writes the KPI's **current** key into `kpiId` (from the same lookup), like app
+  writes. Its outcome is `migrated` when a reference gained an id, else `skipped` when a key was
+  unresolved, else `alreadyDone` (the latter two still write the stamp when it's missing).
+- Unresolved (deleted) keys are counted in `counts.skipped` and logged (`console.info`, Forge logs):
+  the 02 record has no list for skipped items. A key lookup that fails with anything but a 404 fails
+  that batch's items that use the key (listed), instead of treating the KPI as deleted.
+- `writeAssignments` looks keys up with `id in (…)` as the app; if Jira refuses the JQL (e.g. naming
+  a deleted issue) it falls back to one `GET /issue/{id}` per id. The live behaviour of `id in` with a
+  deleted id is unverified: check it in 04 Step 7.
+- The registry is a function (`MIGRATIONS()`), because the migration imports the registry module's
+  helpers (an import cycle would otherwise leave the list uninitialised).
+- `createKpi`'s link-failure message names the parent by id (`under "10234"`), as `parentKpiId` is
+  now an id; nesting links the parent by `{ id }`.
+
+**Verification:** 629 unit tests (was 572) and 149 story tests pass; `typecheck` and `lint` clean.
+On the migrated fixture, the Timeline output with ids mapped back to keys matches the existing
+pre-change digest, and `getPanelData` for ten issues matches a digest taken from the previous commit.
+Harness checked in the browser (`?surface=issue`, light and dark, `?access=hiddenKpi`,
+`?surface=timeline`): links go to `/browse/KPI-n`, never a numeric id; EPIC-231's key-only reference
+renders as "KPI deleted"; no console errors besides the harness's missing favicon.
+
+**For 04 Step 7 (live):** the pending count runs right after the last batch's writes; if the property
+index lags, a run can end `failed` with nothing left, and a retry finishes it (02's note). Also check
+`id in (…)` with a deleted id, and that the legacy reader report only differs for moved KPIs (their
+`kpiId` becomes the current key).
+

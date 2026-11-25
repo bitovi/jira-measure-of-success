@@ -1,4 +1,6 @@
 import {
+  type MigrationRecord,
+  type MigrationsData,
   baselineDueEndpoint,
   buildKpiTargets,
   dateFieldSelection,
@@ -9,8 +11,11 @@ import {
   readOwnDates,
   encodeReadingValue,
   groupByRelationship,
+  isKpiIssueId,
   isValidProjectKey,
+  KPI_SPACE_REQUIRED,
   normalizeProjectKey,
+  projectKeyOfIssueKey,
   readingsFromChangelog,
   resolveRelativeTargetDate,
   resolvePanelTarget,
@@ -24,6 +29,7 @@ import {
   type IssueLinkTypeInfo,
   type KpiHierarchyLink,
   type KpiHierarchyStatus,
+  type KpiSpaceRef,
   type KpiSpaceStatus,
   type SaveKpiHierarchyInput,
   type PanelData,
@@ -45,10 +51,15 @@ import {
   type DateFieldCatalog,
   type HierarchyLevel,
   type RollupConfig,
+  kpiCreateSpacePreselect,
+  type KpiCreateSpaces,
+  type TimelineReadingsData,
 } from '@domain/index.js';
 import {
   CATALOG,
+  CENTRAL_SPACE,
   DATE_FIELDS,
+  KPI_SPACES,
   HIERARCHY_LEVELS,
   START_DATE_FIELD_ID,
   ISSUES,
@@ -59,6 +70,17 @@ import {
   type FixtureIssue,
   type KpiTreeNode,
 } from './hierarchy.js';
+import { createKpiSetupSim, kpiSetupScenario, type KpiSetupSim } from './kpiSetup.js';
+import { worldPickerApi, worldSuggestions, type PickerWorld, type WorldKpi } from './kpiPicker.js';
+import { TYPE_ICONS } from './typeIcons.js';
+import {
+  createMockMigrations,
+  migrationsMode,
+  SECOND_MIGRATION,
+  type MigrationsMode,
+  type MockMigrations,
+  type MockMigrationsOptions,
+} from './mockMigrations.js';
 
 /**
  * Mock resolver functions — the local stand-in for the Forge backend resolver.
@@ -96,6 +118,12 @@ const readingChangelog = new Map<string, ReadingChange[]>();
   walk(kpiTree);
 })();
 
+/** A KPI's space: its key's prefix (spec 11 · 06). */
+export function spaceOfKey(issueKey: string): KpiSpaceRef {
+  const key = projectKeyOfIssueKey(issueKey);
+  return KPI_SPACES[key] ?? { id: key, key, name: key };
+}
+
 function readingsFor(kpiId: string) {
   return readingsFromChangelog(readingChangelog.get(kpiId) ?? []);
 }
@@ -113,7 +141,16 @@ function catalogDto(): CatalogEntryDto[] {
     for (const n of nodes) {
       const readings = readingsFor(n.kpiId);
       const latest = readings.length ? readings[readings.length - 1].value : null;
-      out.push({ id: n.kpiId, name: n.name, unit: n.unit, direction: n.direction, currentValue: latest, depth });
+      out.push({
+        id: n.kpiId,
+        key: n.issueKey,
+        name: n.name,
+        unit: n.unit,
+        direction: n.direction,
+        currentValue: latest,
+        depth,
+        space: spaceOfKey(n.issueKey),
+      });
       if (n.children) walk(n.children, depth + 1);
     }
   };
@@ -223,21 +260,23 @@ function findKpiByRef(nodes: KpiTreeNode[], ref: string): KpiTreeNode | undefine
 }
 
 export function getPanelData(issueId: string): PanelData {
-  // Feature 04: when the panel is opened ON a KPI issue (its id/key names a KPI
-  // in the KPI space), return the single-KPI chart payload instead of the
+  // Feature 04: when the panel is opened ON a KPI issue (its id/key names a
+  // KPI), return the single-KPI chart payload instead of the
   // associate/target-editor rows. In the harness, open it via
-  // `?surface=issue&issueId=KPI-1` (or the KPI id, e.g. `revenue`).
+  // `?surface=issue&issueId=KPI-1` (or the KPI's issue id, e.g. `20001`).
+  // Since spec 11 · 06 it carries no other KPI (the backend loads only this KPI).
   const kpiNode = findKpiByRef(kpiTree, issueId);
   if (kpiNode) {
     timelineIdSeq = 1;
     return {
       issueKey: kpiNode.issueKey,
       rows: [],
-      catalog: catalogDto(),
+      kpis: [],
       issueDueDate: null,
       issueDueRolledUp: false,
       kpiView: {
-        node: toTimelineNode(kpiNode, 0),
+        // Like the backend, only this KPI: no sub-KPIs.
+        node: { ...toTimelineNode(kpiNode, 0), children: [] },
         today: TODAY,
         contributions: nodeContributions(kpiNode),
       },
@@ -249,7 +288,7 @@ export function getPanelData(issueId: string): PanelData {
     return {
       issueKey: issueId,
       rows: [],
-      catalog: catalogDto(),
+      kpis: [],
       issueDueDate: null,
       issueDueRolledUp: false,
     };
@@ -265,38 +304,15 @@ export function getPanelData(issueId: string): PanelData {
   const pushRow = (
     kpiId: string,
     relationship: PanelRowDto['relationship'],
-    assignment?: Assignment,
+    assignment: Assignment,
   ) => {
     const def = CATALOG.find((k) => k.id === kpiId);
-    if (!assignment) {
-      // Don't offer to track a parent's target on a KPI that no longer exists.
-      if (!def) return;
-      rows.push({
-        kpiId,
-        name: def?.name ?? kpiId,
-        unit: def?.unit ?? '',
-        direction: def?.direction ?? null,
-        target: null,
-        targetType: null,
-        targetDate: null,
-        dueTiming: null,
-        start: null,
-        relationship,
-        resolvedValue: null,
-        displayState: null,
-        warning: null,
-        frozen: false,
-        dueDate: null,
-        dueDateRolledUp: false,
-        actual: null,
-      });
-      return;
-    }
-
+    const kpiKey = findKpiNode(kpiTree, kpiId)?.issueKey ?? kpiId;
     if (!def) {
       rows.push({
         kpiId,
-        name: kpiId,
+        kpiKey,
+        name: kpiKey,
         unit: '',
         direction: null,
         target: assignment.target,
@@ -330,7 +346,8 @@ export function getPanelData(issueId: string): PanelData {
     });
     rows.push({
       kpiId,
-      name: def?.name ?? kpiId,
+      kpiKey,
+      name: def?.name ?? kpiKey,
       unit: def?.unit ?? '',
       direction: def?.direction ?? null,
       target: assignment.target,
@@ -351,21 +368,82 @@ export function getPanelData(issueId: string): PanelData {
 
   for (const r of grouped.sharedWithParent) pushRow(r.kpiId, 'shared', r.assignment);
   for (const r of grouped.onlyHere) pushRow(r.kpiId, 'onlyHere', r.assignment);
-  for (const r of grouped.onParentNotTracked) pushRow(r.kpiId, 'onParentNotTracked');
 
   return {
     issueKey: issue.key,
     rows,
-    catalog: catalogDto(),
+    // Like Phase 2: current values for the issue's own targets only.
+    kpis: targetedKpis(issue).map((c) => (issue.assignments.some((a) => a.kpiId === c.id) ? c : { ...c, currentValue: null })),
+    picker: pickerSuggestions(issue),
     issueDueDate: ctx.issue.due.date,
     issueDueRolledUp: ctx.issue.due.source === 'children',
   };
 }
 
+// ── KPI picker (spec 11 · 07) ────────────────────────────────────────────────
+
+/** The work items' spaces (their key prefixes), by name. */
+const WORK_SPACES: Record<string, string> = { OUT: 'Outcomes', INIT: 'Initiatives', INC: 'Increments', EPIC: 'Delivery' };
+
+/** The harness site as a KPI picker world: its KPI tree, its work items and their targets. */
+export function harnessPickerWorld(): PickerWorld {
+  const kpis: WorldKpi[] = [];
+  const walk = (nodes: KpiTreeNode[], parentKey: string | null) => {
+    for (const n of nodes) {
+      kpis.push({ id: n.kpiId, key: n.issueKey, name: n.name, unit: n.unit, direction: n.direction, parentKey });
+      if (n.children) walk(n.children, n.issueKey);
+    }
+  };
+  walk(kpiTree, null);
+  return {
+    spaces: { ...WORK_SPACES, ...Object.fromEntries(Object.values(KPI_SPACES).map((sp) => [sp.key, sp.name])) },
+    kpis,
+    items: issues.map((i) => ({
+      id: i.id,
+      key: i.key,
+      summary: i.summary,
+      typeName: i.issueTypeName,
+      parentKey: i.parentId ? (findIssue(i.parentId)?.key ?? null) : null,
+      targets: i.assignments,
+    })),
+    centralKey: CENTRAL_SPACE.key,
+    hidden: new Set(),
+    moved: {},
+    currentValue: (kpiId) => {
+      const r = readingsFor(kpiId);
+      return r.length ? r[r.length - 1].value : null;
+    },
+    typeIcon: (typeName) => (typeName === 'KPI' ? TYPE_ICONS.KPI : issueTypeIconUri(typeName)),
+  };
+}
+
+/** What opening the panel on `issue` sends the KPI browser. */
+function pickerSuggestions(issue: FixtureIssue) {
+  return worldSuggestions(harnessPickerWorld(), issue.key, issue.assignments.map((a) => a.kpiId));
+}
+
+/** The KPIs `issue` and its parent target (their definitions, for the target cards). */
+function targetedKpis(issue: FixtureIssue): CatalogEntryDto[] {
+  const parent = issue.parentId ? findIssue(issue.parentId) : undefined;
+  const ids = new Set([...issue.assignments, ...(parent?.assignments ?? [])].map((a) => a.kpiId));
+  return catalogDto()
+    .filter((c) => ids.has(c.id))
+    .map(({ depth, ...c }) => {
+      void depth;
+      return c;
+    });
+}
+
+/** The KPI browser's lazy loads over the harness site (`?pickerDelayMs=`, default 400). */
+export function pickerApi(delayMs = 0) {
+  return worldPickerApi(harnessPickerWorld(), { delayMs });
+}
+
 /**
  * Phase 1 of the progressive issue panel — mirrors the backend `getPanelList`:
- * the issue's and its parent's targets and the catalog (no current values). A
- * KPI issue (or an unknown one) gets its complete panel instead.
+ * the issue's and its parent's targets, those KPIs' definitions (no current
+ * values) and the KPI browser's opening views. A KPI issue (or an unknown one)
+ * gets its complete panel instead.
  */
 export function getPanelList(issueId: string): PanelListData {
   const issue = findIssue(issueId);
@@ -377,8 +455,10 @@ export function getPanelList(issueId: string): PanelListData {
       closed: issue.closed ?? false,
       own: issue.assignments,
       parentKpiIds: [...new Set((parent?.assignments ?? []).map((a) => a.kpiId))],
-      catalog: catalogDto().map((c) => ({ ...c, currentValue: null })),
-      // The harness has no search-index lag: a targeted KPI outside the catalog is deleted.
+      kpis: targetedKpis(issue).map((c) => ({ ...c, currentValue: null })),
+      picker: pickerSuggestions(issue),
+      // The harness has no search-index lag: a targeted KPI that doesn't exist is
+      // deleted (EPIC-231's key-only reference is one, read without asking Jira).
       deletedKpiIds: [
         ...new Set([...issue.assignments, ...(parent?.assignments ?? [])].map((a) => a.kpiId)),
       ].filter((id) => !CATALOG.some((k) => k.id === id)),
@@ -386,11 +466,14 @@ export function getPanelList(issueId: string): PanelListData {
   };
 }
 
-/** Phase 2 of the progressive issue panel — mirrors the backend `getPanelValues`. */
+/** Phase 2 of the progressive issue panel — mirrors the backend `getPanelValues` (own targets' readings only). */
 export function getPanelValues(issueId: string): PanelValuesData {
   const issue = findIssue(issueId);
   const readings: PanelValuesData['readings'] = {};
-  for (const c of catalogDto()) readings[c.id] = readingsFor(c.id).map((r) => ({ date: r.date, value: r.value }));
+  const own = new Set(issue?.assignments.map((a) => a.kpiId) ?? []);
+  for (const c of catalogDto()) {
+    if (own.has(c.id)) readings[c.id] = readingsFor(c.id).map((r) => ({ date: r.date, value: r.value }));
+  }
   if (!issue) return { today: TODAY, issueDue: { date: null, source: 'pending' }, parent: null, readings };
   const ctx = targetContext(issue, timingNodes(), new Map());
   return { today: TODAY, issueDue: ctx.issue.due, parent: ctx.parent ?? null, readings };
@@ -559,28 +642,58 @@ function toTimelineNode(node: KpiTreeNode, depth: number): TimelineNodeDto {
     undated,
     readings: readings.map((r) => ({ date: r.date, value: r.value })),
     children: (node.children ?? []).map((c) => toTimelineNode(c, depth + 1)),
+    space: spaceOfKey(node.issueKey),
   };
 }
 
 export function getTimelineData(): TimelineData {
   timelineIdSeq = 1;
-  return { today: TODAY, roots: kpiTree.map((n) => toTimelineNode(n, 0)) };
+  return {
+    today: TODAY,
+    roots: kpiTree.map((n) => toTimelineNode(n, 0)),
+    centralSpace: CENTRAL_SPACE,
+    kpiTypeIconUrl: TYPE_ICONS.KPI,
+  };
 }
 
 /**
  * Phase 1 of the progressive load — mirrors the backend `getTimelineSkeleton`:
- * the KPI tree and readings, every node `resolving`, no targets yet.
+ * the KPI tree, every node `resolving`, no targets yet; readings only for KPIs
+ * in `readingSpaces` (none = every KPI, spec 11 · 08), the others `readingsPending`.
  */
-export function getTimelineSkeleton(): TimelineData {
-  const strip = (n: TimelineNodeDto): TimelineNodeDto => ({
-    ...n,
-    targets: [],
-    undated: [],
-    children: n.children.map(strip),
-    resolving: true,
-  });
+export function getTimelineSkeleton(readingSpaces: string[] = []): TimelineData {
+  const scope = new Set(readingSpaces);
+  const strip = (n: TimelineNodeDto): TimelineNodeDto => {
+    const loaded = scope.size === 0 || scope.has(spaceOfKey(n.issueKey).key);
+    return {
+      ...n,
+      targets: [],
+      undated: [],
+      children: n.children.map(strip),
+      resolving: true,
+      ...(loaded ? {} : { readings: [], readingsPending: true }),
+    };
+  };
   const full = getTimelineData();
   return { ...full, roots: full.roots.map(strip) };
+}
+
+/** Readings of KPIs that came into scope — mirrors the backend `getTimelineReadings`. */
+export function getTimelineReadings(kpiIds: string[]): TimelineReadingsData {
+  const readings: TimelineReadingsData['readings'] = {};
+  for (const id of kpiIds) {
+    if (readingChangelog.has(id)) readings[id] = readingsFor(id).map((r) => ({ date: r.date, value: r.value }));
+  }
+  return { readings };
+}
+
+/**
+ * Add KPI's spaces — mirrors the backend `getKpiCreateSpaces`: the harness KPI
+ * spaces the user can create in (`canCreate`), filled in by the preselect rule.
+ */
+export function getKpiCreateSpaces(kpiSpaceKeys: string[], canCreate: (spaceKey: string) => boolean): KpiCreateSpaces {
+  const spaces = Object.values(KPI_SPACES).filter((sp) => canCreate(sp.key));
+  return { spaces, preselect: kpiCreateSpacePreselect(spaces, kpiSpaceKeys) };
 }
 
 /**
@@ -653,6 +766,11 @@ export function recordValue(kpiId: string, date: string, value: number | null): 
   return null;
 }
 
+/** A KPI's issue key, for messages (null when the id names no KPI). */
+export function kpiKeyOf(kpiId: string | null | undefined): string | null {
+  return kpiId ? (findKpiNode(kpiTree, kpiId)?.issueKey ?? null) : null;
+}
+
 function findKpiNode(nodes: KpiTreeNode[], kpiId: string): KpiTreeNode | undefined {
   for (const n of nodes) {
     if (n.kpiId === kpiId) return n;
@@ -662,43 +780,49 @@ function findKpiNode(nodes: KpiTreeNode[], kpiId: string): KpiTreeNode | undefin
   return undefined;
 }
 
-function slugifyKpi(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'kpi';
-}
-
-function uniqueKpiId(base: string): string {
-  let id = base;
-  let n = 2;
-  while (findKpiNode(kpiTree, id)) id = `${base}-${n++}`;
-  return id;
-}
-
-/** Generate a fresh, plausible KPI issue key (KPI-N) for a newly created KPI. */
-function nextIssueKey(): string {
-  let count = 0;
+/** A fresh numeric issue id for a newly created KPI (KPI ids are issue ids). */
+function nextKpiId(): string {
+  let max = 20_000;
   const walk = (nodes: KpiTreeNode[]) => {
     for (const n of nodes) {
-      count++;
+      if (isKpiIssueId(n.kpiId)) max = Math.max(max, Number(n.kpiId));
       if (n.children) walk(n.children);
     }
   };
   walk(kpiTree);
-  return `KPI-${count + 1}`;
+  return String(max + 1);
+}
+
+/** Generate a fresh, plausible issue key (`{space}-N`) for a KPI created in `space`. */
+function nextIssueKey(space: string): string {
+  let max = 0;
+  const walk = (nodes: KpiTreeNode[]) => {
+    for (const n of nodes) {
+      if (projectKeyOfIssueKey(n.issueKey) === space) max = Math.max(max, Number(n.issueKey.split('-')[1]) || 0);
+      if (n.children) walk(n.children);
+    }
+  };
+  walk(kpiTree);
+  return `${space}-${max + 1}`;
 }
 
 /**
- * Create a KPI (an issue in the KPI space). Appends a new tree node at the root
- * or under `parentKpiId`, with an empty reading changelog. Returns just the new
- * KPI, like the backend.
+ * Create a KPI (an issue of the KPI work type) in the space `projectId`
+ * (required, spec 11 · 06). Appends a new tree node at the root or under
+ * `parentKpiId`, with an empty reading changelog. Returns just the new KPI,
+ * like the backend.
  */
 export function createKpi(input: CreateKpiInput): CreatedKpi {
+  if (!input.projectId) throw new Error(`${KPI_SPACE_REQUIRED}.`);
+  const space = Object.values(KPI_SPACES).find((sp) => sp.id === input.projectId);
+  if (!space) throw new Error(`There's no space with id "${input.projectId}".`);
   if (input.parentKpiId && getKpiHierarchy().state !== 'ready') {
     throw new Error(`${KPI_HIERARCHY_NOT_SET_UP} — choose how KPIs nest in Settings first.`);
   }
-  const kpiId = uniqueKpiId(slugifyKpi(input.name));
+  const kpiId = nextKpiId();
   const node: KpiTreeNode = {
     kpiId,
-    issueKey: nextIssueKey(),
+    issueKey: nextIssueKey(space.key),
     name: input.name.trim() || 'Untitled KPI',
     unit: input.unit.trim(),
     direction: input.direction ?? null,
@@ -711,13 +835,14 @@ export function createKpi(input: CreateKpiInput): CreatedKpi {
   if (parent) (parent.children ??= []).push(node);
   else kpiTree.push(node);
   return {
-    id: `created-${node.issueKey}`,
+    id: kpiId,
     kpiId,
     issueKey: node.issueKey,
     name: node.name,
     unit: node.unit,
     direction: node.direction,
     parentKpiId: parent ? parent.kpiId : null,
+    space,
   };
 }
 
@@ -785,7 +910,7 @@ export function updateKpi(payload: unknown): UpdateKpiResult {
   if (input.direction !== undefined) node.direction = input.direction;
   return {
     kpi: {
-      id: `kpi-${node.kpiId}`,
+      id: node.kpiId,
       kpiId: node.kpiId,
       issueKey: node.issueKey,
       name: node.name,
@@ -869,3 +994,45 @@ export function addTarget(input: AddTargetInput): AddedTarget {
   const readings = readingsFor(node.kpiId).map((r) => ({ date: r.date, value: r.value }));
   return fixtureContribution(node, target, readings);
 }
+
+// ── KPI building blocks (spec 11 · 04) ────────────────────────────────────────
+// `?setup=fresh|upgraded|blocks|configured|broken` picks the site (default
+// upgraded: KPI type and space from an older version, fields not chosen).
+// Setting up a central space also sets up KPI nesting, as the backend does.
+export const kpiSetup: KpiSetupSim = createKpiSetupSim(kpiSetupScenario(), {
+  onCentralSpace: () => {
+    if (!hierarchyLink) createKpiHierarchyLinkType();
+  },
+});
+
+// ── Data migrations (spec 11 · 02) ───────────────────────────────────────────
+// In-memory stand-ins for 03's and 05's migrations (fixtures/mockMigrations).
+// `?migrations=pending|running|done|failed` picks the starting state. 05's
+// applies only once the KPI fields are chosen, as the real `kpi-meta-to-fields` does.
+export { migrationsMode, type MigrationsMode };
+
+let mockMigrations: MockMigrations = createMockMigrations();
+
+/** Put the harness migrations in a starting state (also used by the harness test). */
+export function resetMigrations(mode: MigrationsMode = migrationsMode(), options?: MockMigrationsOptions): void {
+  mockMigrations = createMockMigrations(mode, options ?? { applicability: fieldsApplicability });
+}
+
+function fieldsApplicability(id: string): { applicable: boolean; reason?: string } {
+  if (id !== SECOND_MIGRATION || kpiSetup.config().fields) return { applicable: true };
+  return { applicable: false, reason: 'Choose the KPI fields in Settings first (KPI building blocks).' };
+}
+
+export function getMigrations(): MigrationsData {
+  return mockMigrations.getMigrations();
+}
+
+export function runMigrationBatch(id: string): MigrationRecord {
+  return mockMigrations.runMigrationBatch(id);
+}
+
+export function retryMigration(id: string): MigrationRecord {
+  return mockMigrations.retryMigration(id);
+}
+
+resetMigrations();

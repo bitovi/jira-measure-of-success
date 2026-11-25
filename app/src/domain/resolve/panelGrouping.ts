@@ -3,15 +3,16 @@ import type { Assignment, KpiDefinition } from '../models/index';
 /**
  * Group an issue's KPI assignments by their relationship to the parent — Issue
  * panel IP-1.4 (requirements §4.1). v1 authors INDEPENDENT targets (no value
- * inheritance, Q11); this only classifies which KPIs are shared / local / on the
- * parent but not yet tracked here.
+ * inheritance, Q11); this only classifies which of the issue's KPIs are shared
+ * with the parent and which are local. KPIs on the parent but not here are
+ * offered by the KPI browser's "Tracked by parents" view instead.
  */
 export interface PanelRow {
   kpiId: string;
   /** catalog entry, if the KPI is defined (untrusted data may reference gaps) */
   definition: KpiDefinition | undefined;
-  /** the issue's own assignment (absent for `onParentNotTracked`) */
-  assignment?: Assignment;
+  /** the issue's own assignment */
+  assignment: Assignment;
 }
 
 export interface GroupedPanel {
@@ -19,8 +20,6 @@ export interface GroupedPanel {
   sharedWithParent: PanelRow[];
   /** tracked here only */
   onlyHere: PanelRow[];
-  /** on the parent, not tracked here — offer "+ Track this" */
-  onParentNotTracked: PanelRow[];
 }
 
 export function groupByRelationship(
@@ -29,7 +28,6 @@ export function groupByRelationship(
   catalog: KpiDefinition[],
 ): GroupedPanel {
   const byId = new Map(catalog.map((k) => [k.id, k]));
-  const ownIds = new Set(ownAssignments.map((a) => a.kpiId));
   const parentIds = new Set(parentAssignments.map((a) => a.kpiId));
 
   const sharedWithParent: PanelRow[] = [];
@@ -40,12 +38,5 @@ export function groupByRelationship(
     else onlyHere.push(row);
   }
 
-  const onParentNotTracked: PanelRow[] = [];
-  for (const a of parentAssignments) {
-    if (ownIds.has(a.kpiId)) continue;
-    if (onParentNotTracked.some((r) => r.kpiId === a.kpiId)) continue;
-    onParentNotTracked.push({ kpiId: a.kpiId, definition: byId.get(a.kpiId) });
-  }
-
-  return { sharedWithParent, onlyHere, onParentNotTracked };
+  return { sharedWithParent, onlyHere };
 }

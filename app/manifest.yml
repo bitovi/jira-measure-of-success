@@ -29,9 +29,21 @@ modules:
       entityType: issue
       propertyKey: kpi-assignments
       values:
+        # KPI keys. The customer's reporting app searches it (spec 11, Compatibility);
+        # this app no longer does. No longer written after the cleanup release (09).
         - path: kpiIds
           type: text
           searchAlias: kpiIds
+        # Spec 11 · 03: KPI issue ids, exact match — Timeline discovery
+        # (`kpiIssueIds IS NOT EMPTY`) and "who targets KPI X" lookups. And
+        # `refsVersion: 2`, stamped once a work item's references have ids: the
+        # `kpi-target-refs-to-ids` migration counts `refsVersion IS EMPTY` as pending.
+        - path: kpiIssueIds
+          type: string
+          searchAlias: kpiIssueIds
+        - path: refsVersion
+          type: number
+          searchAlias: refsVersion
   jira:customField:
     - key: kpi-reading
       name: KPI Reading${TITLE_SUFFIX}
@@ -46,9 +58,24 @@ modules:
       # and the changelog names who recorded each value. The field is on no
       # screen, so Jira doesn't show it.
       readOnly: false
+  # Spec 11 · 05: keeps the `kpi-meta` property (read by a customer's report) in
+  # step when someone edits a KPI's unit or direction field in Jira's own UI.
+  # Only marked KPIs (`kpi-meta.fields == true`, entity-property filtering, a
+  # Forge preview feature) and not the app's own writes. Removed in the cleanup
+  # release (09). The trigger key and its function key must differ.
+  trigger:
+    - key: kpi-meta-sync
+      function: kpi-meta-sync-fn
+      events:
+        - avi:jira:updated:issue
+      filter:
+        ignoreSelf: true
+        expression: "event.runtime.issue.properties['kpi-meta'].fields == true"
   function:
     - key: resolver
       handler: index.handler
+    - key: kpi-meta-sync-fn
+      handler: index.kpiMetaSync
 
 resources:
   - key: issue-panel

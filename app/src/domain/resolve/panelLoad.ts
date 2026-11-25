@@ -9,9 +9,9 @@ import { isBaselineRelative } from './relativeTargetValue';
 /**
  * Progressive issue panel (specs/07-issue-panel-performance).
  *
- * Phase 1 (`PanelBasis`) has the issue's and its parent's targets and the KPI
- * catalog, so the target list and the "Set a KPI target" form can render right
- * away. Phase 2 (`PanelValuesData`) has the rolled-up due dates and the KPI
+ * Phase 1 (`PanelBasis`) has the issue's and its parent's targets, those KPIs'
+ * definitions and the KPI browser's opening views, so the target list and the
+ * "Set a KPI target" form can render right away. Phase 2 (`PanelValuesData`) has the rolled-up due dates and the KPI
  * readings that the estimate line, status pill and dates need. This pure
  * function turns basis (+ values once they arrive) into `PanelData`. The backend
  * (the one-shot `getPanelData` and the mutations) and the client (merging
@@ -50,13 +50,13 @@ export function baselineDueEndpoint(
  */
 export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null): PanelData {
   const readingsOf = (kpiId: string) => values?.readings[kpiId] ?? [];
-  const catalog: CatalogEntryDto[] = values
-    ? basis.catalog.map((c) => {
+  const kpis: CatalogEntryDto[] = values
+    ? basis.kpis.map((c) => {
         const series = readingsOf(c.id);
         return { ...c, currentValue: series.length ? series[series.length - 1].value : null };
       })
-    : basis.catalog;
-  const defOf = (kpiId: string) => catalog.find((k) => k.id === kpiId);
+    : basis.kpis;
+  const defOf = (kpiId: string) => kpis.find((k) => k.id === kpiId);
   const deleted = new Set(basis.deletedKpiIds ?? []);
   const noAccess = new Set(basis.noAccessKpiIds ?? []);
 
@@ -70,11 +70,13 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
   );
 
   const rows: PanelRowDto[] = [];
-  const push = (kpiId: string, relationship: PanelRowDto['relationship'], a?: Assignment) => {
+  const push = (kpiId: string, relationship: PanelRowDto['relationship'], a: Assignment) => {
     const def = defOf(kpiId);
+    const kpiKey = def?.key ?? basis.kpiKeys?.[kpiId] ?? kpiId;
     const head = {
       kpiId,
-      name: def?.name ?? kpiId,
+      kpiKey,
+      name: def?.name ?? kpiKey,
       unit: def?.unit ?? '',
       direction: def?.direction ?? null,
     };
@@ -87,13 +89,6 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
       dueDateRolledUp: false,
       actual: null,
     } satisfies Partial<PanelRowDto>;
-    if (!a) {
-      // Don't offer to track a parent's target on a KPI that no longer exists or
-      // that the user may not see.
-      if (deleted.has(kpiId) || noAccess.has(kpiId)) return;
-      rows.push({ ...head, target: null, targetType: null, targetDate: null, dueTiming: null, start: null, relationship, ...empty });
-      return;
-    }
     const bet = { target: a.target, targetType: a.targetType, dueTiming: a.timing.due, start: a.timing.start, relationship };
     if (deleted.has(kpiId)) {
       // A deleted KPI has no readings, so Phase 2 can't resolve anything for it.
@@ -139,15 +134,14 @@ export function assemblePanel(basis: PanelBasis, values: PanelValuesData | null)
   };
   for (const r of grouped.sharedWithParent) push(r.kpiId, 'shared', r.assignment);
   for (const r of grouped.onlyHere) push(r.kpiId, 'onlyHere', r.assignment);
-  for (const r of grouped.onParentNotTracked) push(r.kpiId, 'onParentNotTracked');
 
   const data: PanelData = {
     issueKey: basis.issueKey,
     rows,
-    catalog,
+    kpis,
+    ...(basis.picker ? { picker: basis.picker } : {}),
     issueDueDate: ctx.issue.due.date,
     issueDueRolledUp: ctx.issue.due.source === 'children',
-    ...(basis.access ? { access: basis.access } : {}),
   };
   return values ? data : { ...data, resolving: true };
 }

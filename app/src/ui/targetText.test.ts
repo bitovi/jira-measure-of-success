@@ -21,7 +21,8 @@ import {
 
 /** Number of Stores, +10%, 3 months after a (rolled-up) due date — the mock's gallery bet. */
 const row = (over: Partial<PanelRowDto>): PanelRowDto => ({
-  kpiId: 'stores',
+  kpiId: '10003',
+  kpiKey: 'KPI-3',
   name: 'Number of Stores',
   unit: 'stores',
   direction: 'increase',
@@ -202,7 +203,7 @@ describe('drafts', () => {
   });
 
   test('previewRow reads like a new saved card', () => {
-    const kpi = { id: 'stores', name: 'Number of Stores', unit: 'stores', direction: 'increase' as const, currentValue: 250 };
+    const kpi = { id: '10003', key: 'KPI-3', name: 'Number of Stores', unit: 'stores', direction: 'increase' as const, currentValue: 250 };
     const draft = { targetType: 'percent' as const, value: '+2', due: { mode: 'relative' as const, absolute: null, anchor: 'issueDueDate' as const, offsetMonths: 3 } };
     const p = previewRow(kpi, draft, '2027-01-15', true);
     expect(text(p)).toBe('Estimated target 255 by Apr 15, 2027 · from 250 now');
@@ -213,7 +214,7 @@ describe('drafts', () => {
   });
 
   test('previewRow for an amount change resolves latest + amount and flags the wrong way', () => {
-    const kpi = { id: 'orders', name: '# of Orders', unit: 'orders', direction: 'increase' as const, currentValue: 1200 };
+    const kpi = { id: '10002', key: 'KPI-2', name: '# of Orders', unit: 'orders', direction: 'increase' as const, currentValue: 1200 };
     const draft = { targetType: 'relative' as const, value: '+100', due: { mode: 'relative' as const, absolute: null, anchor: 'issueDueDate' as const, offsetMonths: 0 } };
     const p = previewRow(kpi, draft, '2027-01-15', false);
     expect(text(p, 1200)).toBe('Estimated target 1,300 by Jan 15, 2027 · from 1,200 now');

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { call } from '@ui/bridge.js';
 import type { Assignment, PanelData, PanelListData, PanelParts, PanelValuesData, RecordValueInput } from '@domain/index.js';
+import { bridgeFetchKpiAccess, type FetchKpiAccess } from '@ui/data/useKpiAccess/index.js';
+import { bridgeKpiPickerApi, type KpiPickerApi } from '@ui/data/useKpiPicker/index.js';
 import { derivePanelView } from './panelView.js';
 
 /**
@@ -13,8 +15,8 @@ import { derivePanelView } from './panelView.js';
  * `.claude/skills/implement-feature/SKILL.md` and tech-choices §5.
  *
  * The load is progressive (specs/07-issue-panel-performance): Phase 1
- * (`getPanelList`) has the targets, their grouping and the KPI catalog, so the
- * list and the form render first. Phase 2 (`getPanelValues`) brings the readings
+ * (`getPanelList`) has the targets, their grouping and the KPI browser's opening
+ * views (spec 11 · 07), so the list and the form render first. Phase 2 (`getPanelValues`) brings the readings
  * and rolled-up due dates that the estimates, status pills and dates need.
  */
 export interface PanelController {
@@ -42,6 +44,17 @@ export interface PanelController {
    * failure, which the record modal shows.
    */
   record(kpiId: string, date: string, value: number | null): Promise<void>;
+  /**
+   * One space's KPI permissions, for a target card's "Record a value" (spec
+   * 11 · 06; null = Jira couldn't answer). Absent (stories): access stays unknown.
+   */
+  getKpiAccess?: FetchKpiAccess;
+  /**
+   * The KPI browser's lazy loads (spec 11 · 07): the views that aren't sent
+   * with the panel, search, the Space filter, a pasted key's lookup and the
+   * picked KPI's current value. Absent (stories): only the opening views work.
+   */
+  pickerApi?: KpiPickerApi;
 }
 
 export type UsePanel = (issueId: string) => PanelController;
@@ -200,5 +213,7 @@ export const usePanelData: UsePanel = (issueId) => {
     save: (assignment) => void mutate('saveAssignment', { issueId, assignment }),
     remove: (kpiId) => void mutate('removeAssignment', { issueId, kpiId }),
     record,
+    getKpiAccess: bridgeFetchKpiAccess,
+    pickerApi: bridgeKpiPickerApi,
   };
 };

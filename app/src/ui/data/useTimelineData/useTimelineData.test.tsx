@@ -68,7 +68,11 @@ function bridge(handlers: Record<string, (payload: unknown) => Promise<unknown>>
 
 async function loaded() {
   const hook = renderHook(() => useTimelineData());
-  await waitFor(() => expect(hook.result.current.targetsPending).toBe(false));
+  // `targetsPending` is also false before the skeleton arrives, so wait for data too.
+  await waitFor(() => {
+    expect(hook.result.current.data).not.toBeNull();
+    expect(hook.result.current.targetsPending).toBe(false);
+  });
   return hook;
 }
 
@@ -81,7 +85,7 @@ describe('useTimelineData mutations', () => {
 
   it.each([
     ['record', (c: ReturnType<typeof useTimelineData>) => c.record('KPI-1', '2026-07-01', 130), 'recordValue'],
-    ['createKpi', (c: ReturnType<typeof useTimelineData>) => c.createKpi({ name: 'X', unit: '', direction: null, parentKpiId: 'KPI-1' }), 'createKpi'],
+    ['createKpi', (c: ReturnType<typeof useTimelineData>) => c.createKpi({ projectId: '10000', name: 'X', unit: '', direction: null, parentKpiId: 'KPI-1' }), 'createKpi'],
     ['updateKpi', (c: ReturnType<typeof useTimelineData>) => c.updateKpi({ kpiId: 'KPI-1', name: 'X' }), 'updateKpi'],
     ['addTarget', (c: ReturnType<typeof useTimelineData>) => c.addTarget(addInput), 'addTarget'],
   ] as const)('a failed %s rejects and leaves the timeline untouched', async (_name, run, key) => {
@@ -117,7 +121,7 @@ describe('useTimelineData mutations', () => {
     bridge({ createKpi: () => Promise.resolve(created) });
     const { result } = await loaded();
 
-    await act(async () => result.current.createKpi({ name: 'Churn', unit: '%', direction: 'decrease', parentKpiId: 'KPI-1' }));
+    await act(async () => result.current.createKpi({ projectId: '10000', name: 'Churn', unit: '%', direction: 'decrease', parentKpiId: 'KPI-1' }));
     expect(kpi1(result.current.data).children.map((c) => c.kpiId)).toEqual(['KPI-9']);
   });
 
@@ -219,5 +223,72 @@ describe('useTimelineData mutations', () => {
     await act(async () => targets.resolve({ contributions: {} }));
     expect(result.current.targetsPending).toBe(false);
     expect(kpi1(result.current.data).targets.map((t) => t.value)).toEqual([200]);
+  });
+});
+
+describe('useTimelineData readings in scope (spec 11 · 08)', () => {
+  beforeEach(() => {
+    call.mockReset();
+    window.localStorage.clear();
+  });
+
+  it('asks the skeleton for every KPI’s readings when no KPI space filter is remembered', async () => {
+    bridge();
+    await loaded();
+    expect(call).toHaveBeenCalledWith('getTimelineSkeleton', {});
+  });
+
+  it('asks only for the remembered spaces’ readings', async () => {
+    window.localStorage.setItem('kpi-timeline:filters', JSON.stringify({ spaces: ['PORT'], workFrom: [] }));
+    bridge();
+    await loaded();
+    expect(call).toHaveBeenCalledWith('getTimelineSkeleton', { readingSpaces: ['PORT'] });
+  });
+
+  it('loads a KPI’s readings once when it comes into scope, and lays them over the tree', async () => {
+    const pending: TimelineData = {
+      today: '2026-07-10',
+      roots: [node('KPI-1', { readings: [], readingsPending: true }), node('KPI-2', { readings: [], readingsPending: true })],
+    };
+    const readings = vi.fn(() => Promise.resolve({ readings: { 'KPI-1': [{ date: '2026-02-01', value: 5 }] } }));
+    bridge({ getTimelineSkeleton: () => Promise.resolve(pending), getTimelineReadings: readings });
+    const { result } = await loaded();
+
+    act(() => result.current.loadReadings(['KPI-1', 'KPI-2']));
+    act(() => result.current.loadReadings(['KPI-1']));
+    await waitFor(() => expect(kpi1(result.current.data).readingsPending).toBeUndefined());
+    expect(readings).toHaveBeenCalledTimes(1);
+    expect(readings).toHaveBeenCalledWith({ kpiIds: ['KPI-1', 'KPI-2'] });
+    expect(kpi1(result.current.data).readings).toEqual([{ date: '2026-02-01', value: 5 }]);
+    // Jira left KPI-2 out: an empty series, no longer waiting.
+    expect(result.current.data!.roots[1]).toMatchObject({ readings: [] });
+    expect(result.current.data!.roots[1].readingsPending).toBeUndefined();
+  });
+
+  it('a failed readings load shows its error and can be retried', async () => {
+    const pending: TimelineData = { today: '2026-07-10', roots: [node('KPI-1', { readings: [], readingsPending: true })] };
+    let fail = true;
+    bridge({
+      getTimelineSkeleton: () => Promise.resolve(pending),
+      getTimelineReadings: () =>
+        fail ? Promise.reject(new Error('Jira 500')) : Promise.resolve({ readings: { 'KPI-1': [{ date: '2026-02-01', value: 5 }] } }),
+    });
+    const { result } = await loaded();
+
+    act(() => result.current.loadReadings(['KPI-1']));
+    await waitFor(() => expect(result.current.readingsError).toBe('Jira 500'));
+    fail = false;
+    act(() => result.current.retryReadings());
+    await waitFor(() => expect(kpi1(result.current.data).readings).toHaveLength(1));
+    expect(result.current.readingsError).toBeNull();
+  });
+
+  it('createKpi resolves with the created KPI (for the flag)', async () => {
+    const created: CreatedKpi = { id: '9', kpiId: '9', issueKey: 'PORT-9', name: 'Churn', unit: '%', direction: null, parentKpiId: null };
+    bridge({ createKpi: () => Promise.resolve(created) });
+    const { result } = await loaded();
+    await act(async () => {
+      await expect(result.current.createKpi({ projectId: '10400', name: 'Churn', unit: '%', direction: null })).resolves.toEqual(created);
+    });
   });
 });

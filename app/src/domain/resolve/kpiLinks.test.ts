@@ -8,6 +8,8 @@ import {
   kpiParentLinkBody,
   linkLabelsForParentEnd,
   parentFromIssueLinks,
+  compareLinkIds,
+  kpiParentLinks,
   wouldCreateKpiCycle,
   type IssueLinkRef,
 } from './kpiLinks';
@@ -48,18 +50,54 @@ describe('parentFromIssueLinks', () => {
     expect(parentFromIssueLinks(links, inProject, HIER)).toBe('200');
   });
 
-  it('ignores a link whose parent is outside the KPI space', () => {
+  it('ignores a link whose parent is not a loaded KPI', () => {
     const links: IssueLinkRef[] = [{ type: { id: '10500' }, inwardIssue: { id: '999' } }];
     expect(parentFromIssueLinks(links, inProject, HIER)).toBeNull();
   });
 
-  it('picks the first qualifying in-project link', () => {
+  it('picks the first qualifying link when Jira gives no link ids', () => {
     const links: IssueLinkRef[] = [
       { type: { id: '10003' }, inwardIssue: { id: '300' } },
       { type: { id: '10500' }, inwardIssue: { id: '200' } },
       { type: { id: '10500' }, inwardIssue: { id: '300' } },
     ];
     expect(parentFromIssueLinks(links, inProject, HIER)).toBe('200');
+  });
+
+  it('one parent: the lowest link id wins, whatever order Jira lists the links in (spec 11 · 06)', () => {
+    const links: IssueLinkRef[] = [
+      { id: '10021', type: { id: '10500' }, inwardIssue: { id: '200' } },
+      { id: '9999', type: { id: '10500' }, inwardIssue: { id: '300' } },
+      { id: '10020', type: { id: '10500' }, inwardIssue: { id: '100' } },
+    ];
+    expect(parentFromIssueLinks(links, inProject, HIER)).toBe('300');
+    expect(parentFromIssueLinks([...links].reverse(), inProject, HIER)).toBe('300');
+  });
+
+  it('the lowest-id link to a KPI that was NOT loaded (hidden, unreturned) is skipped', () => {
+    const links: IssueLinkRef[] = [
+      { id: '1', type: { id: '10500' }, inwardIssue: { id: '999' } },
+      { id: '2', type: { id: '10500' }, inwardIssue: { id: '200' } },
+    ];
+    expect(parentFromIssueLinks(links, inProject, HIER)).toBe('200');
+  });
+});
+
+describe('kpiParentLinks', () => {
+  it('counts a parent as a KPI by its work type when it was not loaded (a KPI loaded alone)', () => {
+    const links: IssueLinkRef[] = [
+      { id: '7', type: { id: '10500' }, inwardIssue: { id: '500', key: 'PORT-2', fields: { issuetype: { id: '10300' } } } },
+      { id: '5', type: { id: '10500' }, inwardIssue: { id: '400', key: 'PORT-1', fields: { issuetype: { id: '10300' } } } },
+      { id: '6', type: { id: '10500' }, inwardIssue: { id: '600', key: 'APP-1', fields: { issuetype: { id: '10002' } } } },
+    ];
+    expect(kpiParentLinks(links, HIER, { workTypeId: '10300' }).map((l) => l.parentKey)).toEqual(['PORT-1', 'PORT-2']);
+    expect(kpiParentLinks(links, HIER, { workTypeId: null })).toEqual([]);
+  });
+});
+
+describe('compareLinkIds', () => {
+  it('orders numerically, not as text', () => {
+    expect(['10020', '9999', '100000'].sort(compareLinkIds)).toEqual(['9999', '10020', '100000']);
   });
 });
 
@@ -73,8 +111,8 @@ describe('hierarchyParentLinks', () => {
       { type: { id: '10500' }, inwardIssue: { id: '300' } },
     ];
     expect(hierarchyParentLinks(links, HIER)).toEqual([
-      { linkId: 'l1', parentId: '100', parentKey: 'KPI-1' },
-      { linkId: 'l4', parentId: '999', parentKey: 'APP-9' },
+      { linkId: 'l1', parentId: '100', parentKey: 'KPI-1', parentTypeId: null },
+      { linkId: 'l4', parentId: '999', parentKey: 'APP-9', parentTypeId: null },
     ]);
   });
 
@@ -123,7 +161,7 @@ describe('kpiParentLinkBody', () => {
     for (const hierarchy of [HIER, BLOCKS_CHILD_BLOCKS_PARENT]) {
       const body = kpiParentLinkBody(hierarchy, 'P', 'C');
       const onChild: IssueLinkRef =
-        body.inwardIssue.key === 'C'
+        'key' in body.inwardIssue && body.inwardIssue.key === 'C'
           ? { type: { id: hierarchy.linkTypeId }, outwardIssue: { id: '100' } }
           : { type: { id: hierarchy.linkTypeId }, inwardIssue: { id: '100' } };
       expect(body.type).toEqual({ id: hierarchy.linkTypeId });
@@ -133,6 +171,10 @@ describe('kpiParentLinkBody', () => {
 
   it('parentEnd inward reads "parent <outward> child"', () => {
     expect(kpiParentLinkBody(HIER, 'P', 'C')).toMatchObject({ inwardIssue: { key: 'P' }, outwardIssue: { key: 'C' } });
+  });
+
+  it('names an issue id by id and a key by key', () => {
+    expect(kpiParentLinkBody(HIER, '10234', 'KPI-9')).toMatchObject({ inwardIssue: { id: '10234' }, outwardIssue: { key: 'KPI-9' } });
   });
 });
 

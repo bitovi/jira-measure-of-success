@@ -10,7 +10,7 @@ const { usePanelData } = await import('./usePanelData.js');
 const panel = (issueKey: string): PanelData => ({
   issueKey,
   rows: [],
-  catalog: [],
+  kpis: [],
   issueDueDate: null,
   issueDueRolledUp: false,
 });

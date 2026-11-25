@@ -5,6 +5,7 @@ import {
   extraKpiLinkId,
   KPI_HIERARCHY_LINK_TYPE,
   kpiLinkId,
+  storedTargets,
   type MockJira,
 } from './testing/scaleFixture';
 import type {
@@ -13,6 +14,7 @@ import type {
   CreatedKpi,
   KpiHierarchyStatus,
   PanelListData,
+  StoredAssignment,
   TimelineData,
   UpdateKpiInput,
   UpdateKpiResult,
@@ -74,10 +76,15 @@ async function invoke<T>(
 }
 
 const assignmentsOf = (jira: MockJira, id: string) =>
-  (jira.fixture.issues.get(id)!.properties['kpi-assignments'] as { assignments: Array<{ kpiId: string; target: number }>; kpiIds: string[] });
+  jira.fixture.issues.get(id)!.properties['kpi-assignments'] as {
+    assignments: Array<{ kpiId: string; kpiIssueId?: string; target: number }>;
+    kpiIds: string[];
+    kpiIssueIds: string[];
+    refsVersion?: number;
+  };
 
 const addTargetInput = (over: Partial<AddTargetInput> = {}): AddTargetInput => ({
-  kpiId: 'KPI-2',
+  kpiId: '1001',
   issueId: EPIC,
   issueKey: 'APP-1',
   issueType: 'Epic',
@@ -92,7 +99,7 @@ describe('addTarget', () => {
   it('returns just the saved contribution, with an inlined icon', async () => {
     const { data, jira } = await invoke<AddedTarget>('addTarget', addTargetInput());
     expect(data!.assignment).toMatchObject({
-      kpiId: 'KPI-2',
+      kpiId: '1001',
       target: 500,
       targetType: 'absolute',
       timing: { due: { mode: 'absolute', absolute: '2026-12-31' } },
@@ -100,15 +107,15 @@ describe('addTarget', () => {
     });
     expect(data!.source).toMatchObject({ key: 'APP-1', type: 'Epic', title: 'Epic 1' });
     expect(data!.source.iconUrl).toMatch(/^data:image\/svg\+xml/);
-    // Added alongside the epic's existing KPI-1 target, with the search index kept in sync.
-    expect(assignmentsOf(jira, EPIC).kpiIds).toEqual(['KPI-1', 'KPI-2']);
+    // Added alongside the epic's existing KPI-1 target, with both search indexes kept in sync.
+    expect(assignmentsOf(jira, EPIC)).toMatchObject({ kpiIssueIds: ['1000', '1001'], kpiIds: ['KPI-1', 'KPI-2'], refsVersion: 2 });
   });
 
   it('updates the existing target in place for the same (issue, KPI)', async () => {
-    const { jira } = await invoke<AddedTarget>('addTarget', addTargetInput({ kpiId: 'KPI-1', value: 999 }));
+    const { jira } = await invoke<AddedTarget>('addTarget', addTargetInput({ kpiId: '1000', value: 999 }));
     const { assignments } = assignmentsOf(jira, EPIC);
     expect(assignments).toHaveLength(1);
-    expect(assignments[0]).toMatchObject({ kpiId: 'KPI-1', target: 999 });
+    expect(assignments[0]).toMatchObject({ kpiIssueId: '1000', kpiId: 'KPI-1', target: 999 });
   });
 
   it('fails (instead of returning an unsaved target) when Jira rejects the write', async () => {
@@ -127,7 +134,7 @@ describe('addTarget', () => {
 
 describe('recordValue', () => {
   it('writes the reading and returns nothing', async () => {
-    const { data, error, jira } = await invoke('recordValue', { kpiId: 'KPI-1', date: '2026-06-01', value: 42 });
+    const { data, error, jira } = await invoke('recordValue', { kpiId: '1000', date: '2026-06-01', value: 42 });
     expect(error).toBeUndefined();
     expect(data).toBeNull();
     // Spec 10 Path A: the standard issue edit, as the user (not the app-only field API).
@@ -135,8 +142,8 @@ describe('recordValue', () => {
   });
 
   it.each([
-    ['a non-ISO date', { kpiId: 'KPI-1', date: '06/01/2026', value: 42 }],
-    ['a non-numeric value', { kpiId: 'KPI-1', date: '2026-06-01', value: '42' }],
+    ['a non-ISO date', { kpiId: '1000', date: '06/01/2026', value: 42 }],
+    ['a non-numeric value', { kpiId: '1000', date: '2026-06-01', value: '42' }],
     ['no KPI', { date: '2026-06-01', value: 42 }],
   ])('rejects %s without writing', async (_label, payload) => {
     const { error, jira } = await invoke('recordValue', payload);
@@ -148,19 +155,21 @@ describe('recordValue', () => {
 describe('createKpi', () => {
   it('returns just the new KPI, nested under its parent', async () => {
     const { data, jira } = await invoke<CreatedKpi>('createKpi', {
+      projectId: '10000',
       name: 'Churn',
       unit: '%',
       direction: 'decrease',
-      parentKpiId: 'KPI-1',
+      parentKpiId: '1000',
     });
     expect(data).toEqual({
-      id: expect.any(String),
-      kpiId: 'KPI-11',
+      id: expect.stringMatching(/^\d+$/),
+      kpiId: data!.id,
       issueKey: 'KPI-11',
       name: 'Churn',
       unit: '%',
       direction: 'decrease',
-      parentKpiId: 'KPI-1',
+      parentKpiId: '1000',
+      space: { id: '10000', key: 'KPI', name: 'KPIs (KPI)' },
     });
     expect(jira.writes).toEqual(['POST /rest/api/3/issue', 'POST /rest/api/3/issueLink']);
     expect(jira.fixture.issues.get(data!.id)!.kpiParentId).toBe('1000');
@@ -169,13 +178,13 @@ describe('createKpi', () => {
   it('rolls the new issue back when the hierarchy link fails, so a retry cannot duplicate it', async () => {
     const { data, error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: 'KPI-1' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       (j) => {
         j.intercept = (method, path) => (method === 'POST' && path === '/rest/api/3/issueLink' ? { status: 500 } : undefined);
       },
     );
     expect(data).toBeUndefined();
-    expect(error?.message).toMatch(/^Jira 500 while trying to link KPI "KPI-11" under "KPI-1"/);
+    expect(error?.message).toMatch(/^Jira 500 while trying to link KPI "KPI-11" under "1000"/);
     expect(jira.writes).toEqual(['POST /rest/api/3/issue', 'POST /rest/api/3/issueLink', 'DELETE /rest/api/3/issue/KPI-11']);
     expect([...jira.fixture.issues.values()].some((i) => i.key === 'KPI-11')).toBe(false);
   });
@@ -183,7 +192,7 @@ describe('createKpi', () => {
 
 describe('updateKpi', () => {
   // KPI-1 (1000) ─ KPI-2…KPI-5; KPI-6 (1005) ─ KPI-7…KPI-10. KPI-2 is "count", decrease.
-  const kpi2 = (over: Partial<UpdateKpiInput> = {}): UpdateKpiInput => ({ kpiId: 'KPI-2', ...over });
+  const kpi2 = (over: Partial<UpdateKpiInput> = {}): UpdateKpiInput => ({ kpiId: '1001', ...over });
   const issue = (jira: MockJira, id: string) => jira.fixture.issues.get(id)!;
   const LINK_KPI2 = `DELETE /rest/api/3/issueLink/${kpiLinkId('1001')}`;
   const failSearch = (j: MockJira) => {
@@ -191,13 +200,13 @@ describe('updateKpi', () => {
   };
   /** A KPI created moments ago: readable by key/id, but not in the KPI-space search yet. */
   const unindexedKpi = (j: MockJira, id: string, key: string, kpiParentId: string | null) => {
-    j.fixture.issues.set(id, { ...issue(j, '1001'), id, key, summary: key, kpiParentId, properties: {} });
+    j.fixture.issues.set(id, { ...issue(j, '1001'), id, key, summary: key, kpiParentId, properties: {}, unindexed: true });
   };
 
   it('renames and changes unit/direction in one issue edit, returning the KPI as saved', async () => {
     const { data, jira } = await invoke<UpdateKpiResult>('updateKpi', kpi2({ name: ' Orders ', unit: '$', direction: 'increase' }));
     expect(data).toEqual({
-      kpi: { id: '1001', kpiId: 'KPI-2', issueKey: 'KPI-2', name: 'Orders', unit: '$', direction: 'increase' },
+      kpi: { id: '1001', kpiId: '1001', issueKey: 'KPI-2', name: 'Orders', unit: '$', direction: 'increase' },
       error: null,
     });
     expect(jira.writes).toEqual(['PUT /rest/api/3/issue/1001']);
@@ -215,7 +224,7 @@ describe('updateKpi', () => {
     });
     expect(data!.kpi).toEqual({
       id: '1001',
-      kpiId: 'KPI-2',
+      kpiId: '1001',
       issueKey: 'KPI-2',
       name: 'Renamed elsewhere',
       unit: '$',
@@ -238,8 +247,8 @@ describe('updateKpi', () => {
   });
 
   it('moves the KPI under another parent: removes the old link, then adds the new one', async () => {
-    const { data, jira } = await invoke<UpdateKpiResult>('updateKpi', kpi2({ parentKpiId: 'KPI-6' }));
-    expect(data).toEqual({ kpi: expect.objectContaining({ parentKpiId: 'KPI-6' }), error: null });
+    const { data, jira } = await invoke<UpdateKpiResult>('updateKpi', kpi2({ parentKpiId: '1005' }));
+    expect(data).toEqual({ kpi: expect.objectContaining({ parentKpiId: '1005' }), error: null });
     expect(jira.writes).toEqual([LINK_KPI2, 'POST /rest/api/3/issueLink']);
     expect(issue(jira, '1001').kpiParentId).toBe('1005');
   });
@@ -252,13 +261,13 @@ describe('updateKpi', () => {
   });
 
   it('nests a root KPI without removing anything', async () => {
-    const { jira } = await invoke('updateKpi', { kpiId: 'KPI-6', parentKpiId: 'KPI-1' });
+    const { jira } = await invoke('updateKpi', { kpiId: '1005', parentKpiId: '1000' });
     expect(jira.writes).toEqual(['POST /rest/api/3/issueLink']);
     expect(issue(jira, '1005').kpiParentId).toBe('1000');
   });
 
   it('removes a current parent the search has not listed yet (no second parent)', async () => {
-    const { data, jira } = await invoke<UpdateKpiResult>('updateKpi', { kpiId: 'KPI-51', parentKpiId: 'KPI-6' }, (j) => {
+    const { data, jira } = await invoke<UpdateKpiResult>('updateKpi', { kpiId: '5051', parentKpiId: '1005' }, (j) => {
       unindexedKpi(j, '5050', 'KPI-50', '1000');
       unindexedKpi(j, '5051', 'KPI-51', '5050');
     });
@@ -275,22 +284,22 @@ describe('updateKpi', () => {
     const toRoot = await invoke<UpdateKpiResult>('updateKpi', kpi2({ parentKpiId: null }), twoParents);
     expect(toRoot.jira.writes).toEqual([LINK_KPI2, `DELETE /rest/api/3/issueLink/${extraKpiLinkId('1001', '1005')}`]);
     expect(issue(toRoot.jira, '1001')).toMatchObject({ kpiParentId: null, extraKpiParentIds: [] });
-    const toSix = await invoke<UpdateKpiResult>('updateKpi', kpi2({ parentKpiId: 'KPI-6' }), twoParents);
+    const toSix = await invoke<UpdateKpiResult>('updateKpi', kpi2({ parentKpiId: '1005' }), twoParents);
     expect(toSix.jira.writes).toEqual([LINK_KPI2]);
     expect(issue(toSix.jira, '1001')).toMatchObject({ kpiParentId: null, extraKpiParentIds: ['1005'] });
   });
 
   it('refuses (writing nothing) to nest a KPI under itself or one of its descendants', async () => {
-    const self = await invoke('updateKpi', kpi2({ parentKpiId: 'KPI-2' }));
+    const self = await invoke('updateKpi', kpi2({ parentKpiId: '1001' }));
     expect(self.error?.message).toBe("KPI-2 can't be nested under itself.");
     expect(self.jira.writes).toEqual([]);
-    const descendant = await invoke('updateKpi', { kpiId: 'KPI-1', name: 'Renamed', parentKpiId: 'KPI-3' });
+    const descendant = await invoke('updateKpi', { kpiId: '1000', name: 'Renamed', parentKpiId: '1002' });
     expect(descendant.error?.message).toBe("KPI-1 can't be nested under KPI-3: KPI-3 is nested under KPI-1.");
     expect(descendant.jira.writes).toEqual([]);
   });
 
   it('catches a loop through a just-created KPI the search index has not listed yet', async () => {
-    const { error, jira } = await invoke('updateKpi', { kpiId: 'KPI-1', parentKpiId: 'KPI-50' }, (j) => {
+    const { error, jira } = await invoke('updateKpi', { kpiId: '1000', parentKpiId: '5050' }, (j) => {
       unindexedKpi(j, '5050', 'KPI-50', '1000');
     });
     expect(error?.message).toBe("KPI-1 can't be nested under KPI-50: KPI-50 is nested under KPI-1.");
@@ -298,7 +307,7 @@ describe('updateKpi', () => {
   });
 
   it('checks for loops with current reads, not the search (which may still show an old tree)', async () => {
-    const { error, jira } = await invoke('updateKpi', kpi2({ parentKpiId: 'KPI-6' }), (j) => {
+    const { error, jira } = await invoke('updateKpi', kpi2({ parentKpiId: '1005' }), (j) => {
       issue(j, '1005').kpiParentId = '1001'; // KPI-6 was just moved under KPI-2
       failSearch(j);
     });
@@ -307,7 +316,7 @@ describe('updateKpi', () => {
   });
 
   it("follows every parent when checking for loops, not just the first", async () => {
-    const { error, jira } = await invoke('updateKpi', kpi2({ parentKpiId: 'KPI-7' }), (j) => {
+    const { error, jira } = await invoke('updateKpi', kpi2({ parentKpiId: '1006' }), (j) => {
       issue(j, '1005').extraKpiParentIds = ['1001']; // KPI-6 is a root that's also linked under KPI-2
     });
     expect(error?.message).toBe("KPI-2 can't be nested under KPI-7: KPI-7 is nested under KPI-2.");
@@ -315,7 +324,7 @@ describe('updateKpi', () => {
   });
 
   it('puts the old link back when the new one fails', async () => {
-    const { data, error, jira } = await invoke('updateKpi', kpi2({ parentKpiId: 'KPI-6' }), (j) => {
+    const { data, error, jira } = await invoke('updateKpi', kpi2({ parentKpiId: '1005' }), (j) => {
       j.intercept = (method, path, body) =>
         method === 'POST' && path === '/rest/api/3/issueLink' && String(body).includes('"KPI-6"')
           ? { status: 500 }
@@ -341,7 +350,7 @@ describe('updateKpi', () => {
   });
 
   it("when an old link can't be put back, reports where the KPI now is", async () => {
-    const { data, jira } = await invoke<UpdateKpiResult>('updateKpi', kpi2({ name: 'Orders', parentKpiId: 'KPI-6' }), (j) => {
+    const { data, jira } = await invoke<UpdateKpiResult>('updateKpi', kpi2({ name: 'Orders', parentKpiId: '1005' }), (j) => {
       j.intercept = (method, path) => (method === 'POST' && path === '/rest/api/3/issueLink' ? { status: 500 } : undefined);
     });
     expect(data!.kpi).toMatchObject({ name: 'KPI 2', parentKpiId: null });
@@ -352,11 +361,11 @@ describe('updateKpi', () => {
   });
 
   it('when the name/unit save fails after a move, returns the moved KPI with the error', async () => {
-    const { data, error, jira } = await invoke<UpdateKpiResult>('updateKpi', kpi2({ unit: '$', parentKpiId: 'KPI-6' }), (j) => {
+    const { data, error, jira } = await invoke<UpdateKpiResult>('updateKpi', kpi2({ unit: '$', parentKpiId: '1005' }), (j) => {
       j.intercept = (method, path) => (method === 'PUT' && path === '/rest/api/3/issue/1001' ? { status: 500 } : undefined);
     });
     expect(error).toBeUndefined();
-    expect(data!.kpi).toMatchObject({ unit: 'count', direction: 'decrease', parentKpiId: 'KPI-6' });
+    expect(data!.kpi).toMatchObject({ unit: 'count', direction: 'decrease', parentKpiId: '1005' });
     expect(data!.error).toMatch(/^KPI-2 was moved, but its name, unit and direction weren't saved: Jira 500/);
     expect(jira.writes).toEqual([LINK_KPI2, 'POST /rest/api/3/issueLink', 'PUT /rest/api/3/issue/1001']);
     expect(issue(jira, '1001').kpiParentId).toBe('1005');
@@ -372,18 +381,18 @@ describe('updateKpi', () => {
 
   it('refuses to nest before a hierarchy link type is configured, but still edits a root', async () => {
     const unset = (j: MockJira) => j.fixture.kvs.delete('kpi:hierarchy');
-    const nest = await invoke('updateKpi', { kpiId: 'KPI-6', parentKpiId: 'KPI-1' }, unset);
+    const nest = await invoke('updateKpi', { kpiId: '1005', parentKpiId: '1000' }, unset);
     expect(nest.error?.message).toMatch(/^KPI hierarchy is not set up/);
     expect(nest.jira.writes).toEqual([]);
-    const rename = await invoke<UpdateKpiResult>('updateKpi', { kpiId: 'KPI-6', name: 'Six', parentKpiId: null }, unset);
+    const rename = await invoke<UpdateKpiResult>('updateKpi', { kpiId: '1005', name: 'Six', parentKpiId: null }, unset);
     expect(rename.data!.kpi).toMatchObject({ name: 'Six', parentKpiId: null });
   });
 
   it.each([
     ['an empty name', kpi2({ name: '  ' }), 'A KPI needs a name.'],
     ['a name longer than Jira allows', kpi2({ name: 'x'.repeat(256) }), 'A KPI name can be at most 255 characters.'],
-    ['an unknown direction', { kpiId: 'KPI-2', direction: 'sideways' }, /./],
-    ['an empty parent', { kpiId: 'KPI-2', parentKpiId: '' }, /./],
+    ['an unknown direction', { kpiId: '1001', direction: 'sideways' }, /./],
+    ['an empty parent', { kpiId: '1001', parentKpiId: '' }, /./],
     ['no KPI', { name: 'Orders' }, /./],
   ])('refuses %s without writing', async (_label, payload, message) => {
     const { error, jira } = await invoke('updateKpi', payload);
@@ -391,55 +400,64 @@ describe('updateKpi', () => {
     expect(jira.writes).toEqual([]);
   });
 
-  it('refuses issues outside the KPI space', async () => {
+  it('refuses issues that are not KPIs (not of the KPI work type)', async () => {
     const notKpi = await invoke('updateKpi', kpi2({ kpiId: 'APP-1', name: 'X' }));
-    expect(notKpi.error?.message).toBe("APP-1 isn't a KPI: only KPIs in the KPI space can be edited.");
+    expect(notKpi.error?.message).toBe("APP-1 isn't a KPI, so it can't be edited here.");
     const underWork = await invoke('updateKpi', kpi2({ parentKpiId: 'APP-1' }));
-    expect(underWork.error?.message).toBe("APP-1 isn't a KPI: KPIs can only be nested under KPIs in the KPI space.");
+    expect(underWork.error?.message).toBe("APP-1 isn't a KPI: KPIs can only be nested under KPIs.");
     expect(notKpi.jira.writes).toEqual([]);
     expect(underWork.jira.writes).toEqual([]);
   });
 });
 
-describe('getPanelList: targets on KPIs missing from the catalog', () => {
-  const targetsOn = (jira: MockJira, ...kpiIds: string[]) => {
+describe('getPanelList: targets on KPIs the KPI search doesn’t return', () => {
+  /** Targets on STORY, each `[id, key]` (migrated) or a bare key (a key-only reference). */
+  const targetsOn = (jira: MockJira, ...refs: Array<[string, string] | string>) => {
     const base = assignmentsOf(jira, EPIC).assignments[0];
-    jira.fixture.issues.get(STORY)!.properties['kpi-assignments'] = {
-      assignments: kpiIds.map((kpiId) => ({ ...base, kpiId })),
-      kpiIds,
-    };
+    jira.fixture.issues.get(STORY)!.properties['kpi-assignments'] = storedTargets(
+      refs.map((ref) => {
+        const { kpiIssueId, ...rest } = base;
+        void kpiIssueId;
+        return typeof ref === 'string' ? { ...rest, kpiId: ref } : { ...rest, kpiIssueId: ref[0], kpiId: ref[1] };
+      }) as StoredAssignment[],
+      true,
+    );
   };
 
   it('flags only KPIs Jira confirms are gone — not ones the search index has yet to list', async () => {
-    const { data } = await invoke<PanelListData>('getPanelList', { issueId: STORY }, (jira) => {
-      // KPI-50 exists but isn't in the KPI-space search yet (index lag); KPI-99 is deleted.
+    const { data, jira } = await invoke<PanelListData>('getPanelList', { issueId: STORY }, (jira) => {
+      // KPI-50 exists but isn't in the KPI-space search yet (index lag); KPI-99 (9999) is deleted.
       jira.fixture.issues.set('5050', {
         ...jira.fixture.issues.get('1000')!,
         id: '5050',
         key: 'KPI-50',
         kpiParentId: null,
+        unindexed: true,
       });
-      targetsOn(jira, 'KPI-1', 'KPI-50', 'KPI-99');
+      targetsOn(jira, ['1000', 'KPI-1'], ['5050', 'KPI-50'], ['9999', 'KPI-99'], 'KPI-404');
     });
-    expect(data!.basis!.deletedKpiIds).toEqual(['KPI-99']);
+    // A key-only reference is deleted without asking Jira.
+    expect(data!.basis!.deletedKpiIds).toEqual(['9999', 'KPI-404']);
+    expect(data!.basis!.kpiKeys).toEqual({ '5050': 'KPI-50' });
+    expect(jira.unhandled).toEqual([]);
   });
 
   it('checks nothing when every targeted KPI is listed', async () => {
-    const { data, jira } = await invoke<PanelListData>('getPanelList', { issueId: STORY }, (j) => targetsOn(j, 'KPI-2'));
+    const { data, jira } = await invoke<PanelListData>('getPanelList', { issueId: STORY }, (j) => targetsOn(j, ['1001', 'KPI-2']));
     expect(data!.basis!.deletedKpiIds).toBeUndefined();
     expect(jira.writes).toEqual([]);
   });
 
   it('fails rather than treat every KPI as deleted when the KPI-space search fails', async () => {
     const { data, error } = await invoke<PanelListData>('getPanelList', { issueId: STORY }, (jira) => {
-      targetsOn(jira, 'KPI-1');
+      targetsOn(jira, ['1000', 'KPI-1']);
       jira.intercept = (method, path, _body, raw) =>
-        method === 'GET' && path === '/rest/api/3/search/jql' && decodeURIComponent(raw).includes('jql=project=')
+        method === 'GET' && path === '/rest/api/3/search/jql' && decodeURIComponent(raw).includes('jql=issuetype')
           ? { status: 503, body: { errorMessages: ['Service unavailable'] } }
           : undefined;
     });
     expect(data).toBeUndefined();
-    expect(error?.message).toMatch(/^Jira 503 while trying to list the KPIs in project KPI/);
+    expect(error?.message).toMatch(/^Jira 503 while trying to list the KPIs/);
   });
 });
 
@@ -449,7 +467,7 @@ describe('KPI hierarchy link', () => {
   it('refuses to nest a new KPI (writing nothing) when no hierarchy link type is configured', async () => {
     const { error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: 'KPI-1' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       unsetHierarchy,
     );
     expect(error?.message).toMatch(/^KPI hierarchy is not set up/);
@@ -459,7 +477,7 @@ describe('KPI hierarchy link', () => {
   it('still creates root KPIs without a hierarchy link type', async () => {
     const { error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: null },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: null },
       unsetHierarchy,
     );
     expect(error).toBeUndefined();
@@ -586,7 +604,7 @@ describe('KPI hierarchy link: reused types, deleted types, loops', () => {
   it('refuses to nest (writing nothing) when the configured link type was deleted', async () => {
     const { error, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: 'KPI-1' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       (j) => {
         j.fixture.linkTypes = j.fixture.linkTypes.filter((t) => t.id !== KPI_HIERARCHY_LINK_TYPE.id);
       },
@@ -599,7 +617,7 @@ describe('KPI hierarchy link: reused types, deleted types, loops', () => {
     let body: unknown;
     const { data, jira } = await invoke<CreatedKpi>(
       'createKpi',
-      { name: 'Churn', unit: '%', direction: null, parentKpiId: 'KPI-1' },
+      { projectId: '10000', name: 'Churn', unit: '%', direction: null, parentKpiId: '1000' },
       (j) => {
         useBlocksChildBlocksParent(j);
         j.intercept = (method, path, b) => {
@@ -608,7 +626,7 @@ describe('KPI hierarchy link: reused types, deleted types, loops', () => {
         };
       },
     );
-    expect(body).toEqual({ type: { id: '10000' }, inwardIssue: { key: 'KPI-11' }, outwardIssue: { key: 'KPI-1' } });
+    expect(body).toEqual({ type: { id: '10000' }, inwardIssue: { key: 'KPI-11' }, outwardIssue: { id: '1000' } });
     expect(jira.fixture.issues.get(data!.id)!.kpiParentId).toBe('1000');
   });
 

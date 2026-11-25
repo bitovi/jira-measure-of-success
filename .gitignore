@@ -26,3 +26,7 @@ manifest-*.local.yml
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+!.vscode/mcp.json
+
+# Playwright MCP snapshots and logs
+.playwright-mcp/

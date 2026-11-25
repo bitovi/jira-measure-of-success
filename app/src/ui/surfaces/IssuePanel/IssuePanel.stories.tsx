@@ -1,13 +1,20 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn, within, userEvent, expect, waitFor, screen } from '@storybook/test';
-import type {
-  CatalogEntryDto,
-  PanelData,
-  PanelRowDto,
-  TimelineNodeDto,
+import {
+  NO_KPIS_MESSAGE,
+  type CatalogEntryDto,
+  type KpiOptionDto,
+  type KpiSpaceAccess,
+  type KpiSpaceRef,
+  type KpiSuggestionsDto,
+  type PanelData,
+  type PanelRowDto,
+  type TimelineNodeDto,
 } from '@domain/index.js';
+import { TYPE_ICONS } from '@harness/fixtures/typeIcons.js';
 import { IssuePanel } from './IssuePanel.js';
 import type { PanelController, UsePanel } from '@ui/data/usePanelData/index.js';
+import type { KpiPickerApi } from '@ui/data/useKpiPicker/index.js';
 
 /**
  * Scenario stories for the Issue panel. Each story injects a STUB loader hook
@@ -15,17 +22,66 @@ import type { PanelController, UsePanel } from '@ui/data/usePanelData/index.js';
  * / pending date / all groups — renders deterministically with no bridge.
  * The `*.test.tsx` sibling replays these same stories as assertions.
  */
-// Ordered + depth-first to mirror the KPI tree (revenue > orders > stores;
-// costs is a separate root) so the associate-form picker can indent options
-// to show the parent/child relationship.
+// The targeted KPIs' definitions (revenue > orders > stores in the KPI tree; costs is a root).
 const CATALOG: CatalogEntryDto[] = [
-  { id: 'revenue', name: 'Revenue', unit: 'USD', direction: 'increase', depth: 0 },
-  { id: 'orders', name: '# of Orders', unit: 'count', direction: 'increase', depth: 1 },
-  { id: 'stores', name: 'Number of Stores', unit: 'count', direction: 'increase', depth: 2 },
-  { id: 'costs', name: 'Costs', unit: 'USD', direction: 'decrease', depth: 0 },
+  { id: '20001', key: 'KPI-1', name: 'Revenue', unit: 'USD', direction: 'increase' },
+  { id: '20002', key: 'KPI-2', name: '# of Orders', unit: 'count', direction: 'increase' },
+  { id: '20003', key: 'KPI-3', name: 'Number of Stores', unit: 'count', direction: 'increase' },
+  { id: '20009', key: 'KPI-9', name: 'Costs', unit: 'USD', direction: 'decrease' },
 ];
 
+const KPI_SPACE = { key: 'KPI', name: 'KPIs' };
+const option = (c: CatalogEntryDto, parentId: string | null, hasChildren: boolean): KpiOptionDto => ({
+  id: c.id,
+  key: c.key,
+  name: c.name,
+  typeIconUrl: TYPE_ICONS.KPI,
+  unit: c.unit,
+  direction: c.direction,
+  space: KPI_SPACE,
+  parentId,
+  hasChildren,
+});
+const [REVENUE, ORDERS, STORES, COSTS] = CATALOG;
+const due = { mode: 'absolute' as const, absolute: '2026-12-31', anchor: 'issueDueDate' as const, offsetMonths: 0 };
+
+/**
+ * The KPI browser's opening views (spec 11 · 07) for these stories: the parent
+ * OUT-12 targets Revenue (with its sub-KPIs) and Costs; Global KPIs is the central space.
+ */
+const PICKER: KpiSuggestionsDto = {
+  thisSpace: { key: 'INIT', name: 'Initiatives' },
+  hasParents: true,
+  trackedByParents: [
+    {
+      item: { id: '10012', key: 'OUT-12', summary: 'Grow POS revenue', typeName: 'Outcome', typeIconUrl: TYPE_ICONS.Initiative },
+      targets: [
+        {
+          option: option(REVENUE, null, true),
+          target: { target: 1_500_000, targetType: 'absolute', due },
+          subKpis: [option(ORDERS, REVENUE.id, true), option(STORES, ORDERS.id, false)],
+        },
+        { option: option(COSTS, null, false), target: { target: 800_000, targetType: 'absolute', due }, subKpis: [] },
+      ],
+    },
+  ],
+  inThisSpace: [],
+  parentSpaces: [{ key: 'OUT', name: 'Outcomes' }],
+  globalSpace: KPI_SPACE,
+};
+
+/** The picker's lazy loads: only the picked KPI's current value matters here. */
+const CURRENT: Record<string, number> = { '20002': 1200, '20003': 250 };
+const PICKER_API: KpiPickerApi = {
+  listKpisInSpaces: async () => [option(REVENUE, null, true), option(ORDERS, REVENUE.id, true), option(STORES, ORDERS.id, false), option(COSTS, null, false)],
+  searchKpis: async () => ({ kpis: [], truncated: false }),
+  listKpiSpaces: async () => ({ spaces: [KPI_SPACE], nextStartAt: null }),
+  lookupKpiRef: async () => ({ kind: 'hidden' }),
+  getKpiCurrentValue: async (kpiId) => ({ kpiId, value: CURRENT[kpiId] ?? null }),
+};
+
 const row = (over: Partial<PanelRowDto> & { kpiId: string }): PanelRowDto => ({
+  kpiKey: CATALOG.find((k) => k.id === over.kpiId)?.key ?? over.kpiId,
   name: over.kpiId,
   unit: 'USD',
   direction: 'increase',
@@ -47,12 +103,13 @@ const row = (over: Partial<PanelRowDto> & { kpiId: string }): PanelRowDto => ({
 
 const ALL_GROUPS: PanelData = {
   issueKey: 'INIT-48',
-  catalog: CATALOG,
+  kpis: CATALOG,
+  picker: PICKER,
   issueDueDate: '2026-09-30',
   issueDueRolledUp: false,
   rows: [
     row({
-      kpiId: 'revenue',
+      kpiId: '20001',
       name: 'Revenue',
       target: 100_000,
       relationship: 'shared',
@@ -60,19 +117,19 @@ const ALL_GROUPS: PanelData = {
       targetDate: { date: '2026-10-31', pending: false, source: '+1 mo after INIT-48 due, own date' },
       dueDate: '2026-09-30',
     }),
-    row({ kpiId: 'stores', name: 'Number of Stores', unit: 'count', target: 250, relationship: 'onlyHere', targetDate: { date: '2026-09-30', pending: false, source: 'absolute date' } }),
-    row({ kpiId: 'costs', name: 'Costs', unit: 'USD', direction: 'decrease', target: null, targetType: null, targetDate: null, dueTiming: null, relationship: 'onParentNotTracked', resolvedValue: null, displayState: null, dueDate: null }),
+    row({ kpiId: '20003', name: 'Number of Stores', unit: 'count', target: 250, relationship: 'onlyHere', targetDate: { date: '2026-09-30', pending: false, source: 'absolute date' } }),
   ],
 };
 
 const PENDING_DATE: PanelData = {
   issueKey: 'OUT-12',
-  catalog: CATALOG,
+  kpis: CATALOG,
+  picker: PICKER,
   issueDueDate: null,
   issueDueRolledUp: false,
   rows: [
     row({
-      kpiId: 'revenue',
+      kpiId: '20001',
       name: 'Revenue',
       target: 1_500_000,
       relationship: 'onlyHere',
@@ -84,9 +141,10 @@ const PENDING_DATE: PanelData = {
   ],
 };
 
-const EMPTY: PanelData = { issueKey: 'STORY-1', catalog: CATALOG, issueDueDate: '2026-09-30', issueDueRolledUp: false, rows: [] };
+const EMPTY: PanelData = { issueKey: 'STORY-1', kpis: [], picker: PICKER, issueDueDate: '2026-09-30', issueDueRolledUp: false, rows: [] };
 
-const NO_CATALOG: PanelData = { issueKey: 'STORY-1', catalog: [], issueDueDate: null, issueDueRolledUp: false, rows: [] };
+/** No KPI work type configured: no KPI browser (spec 11 · 06 Q4 message). */
+const NO_KPIS: PanelData = { issueKey: 'STORY-1', kpis: [], issueDueDate: null, issueDueRolledUp: false, rows: [] };
 
 /** A saved PERCENT-change target row (Number of Stores, +10%) in a given state. */
 const percentRow = (over: Partial<PanelRowDto> & { kpiId: string; displayState: PanelRowDto['displayState'] }): PanelRowDto =>
@@ -108,7 +166,8 @@ const baselinedRV = { baseline: 258, value: 284, baselineDate: '2026-06-01', bas
 
 const SAVED_STATES: PanelData = {
   issueKey: 'INIT-48',
-  catalog: CATALOG,
+  kpis: CATALOG,
+  picker: PICKER,
   issueDueDate: '2027-01-15',
   issueDueRolledUp: true,
   rows: [
@@ -127,11 +186,11 @@ const SAVED_STATES: PanelData = {
 const estimateLine = (re: RegExp) => (_: string, el: Element | null) => el?.tagName === 'P' && re.test(el.textContent ?? '');
 
 /** Build a stub loader hook returning a fixed controller. */
-// This issue IS a KPI (lives in the KPI space): the panel renders the single-KPI
+// This issue IS a KPI (of the KPI work type): the panel renders the single-KPI
 // chart (KpiView) instead of the associate/target-editor form (Feature 04).
 const KPI_NODE: TimelineNodeDto = {
   id: 'n1',
-  kpiId: 'revenue',
+  kpiId: '20001',
   issueKey: 'KPI-1',
   name: 'Revenue',
   unit: 'USD',
@@ -158,7 +217,7 @@ const KPI_NODE: TimelineNodeDto = {
 
 const KPI_VIEW: PanelData = {
   issueKey: 'KPI-1',
-  catalog: CATALOG,
+  kpis: [],
   issueDueDate: null,
   issueDueRolledUp: false,
   rows: [],
@@ -179,6 +238,8 @@ function stub(over: Partial<PanelController> & { data: PanelData | null }): UseP
     save: over.save ?? (() => {}),
     remove: over.remove ?? (() => {}),
     record: over.record ?? (async () => {}),
+    ...(over.getKpiAccess ? { getKpiAccess: over.getKpiAccess } : {}),
+    pickerApi: over.pickerApi ?? PICKER_API,
   });
 }
 
@@ -188,23 +249,19 @@ const VALUES_LOADING: PanelData = {
   resolving: true,
   issueDueDate: null,
   issueDueRolledUp: false,
-  catalog: ALL_GROUPS.catalog.map((c) => ({ ...c, currentValue: null })),
-  rows: ALL_GROUPS.rows.map((r) =>
-    r.relationship === 'onParentNotTracked'
-      ? r
-      : {
-          ...r,
-          targetDate: null,
-          resolvedValue: null,
-          displayState: null,
-          warning: null,
-          frozen: false,
-          dueDate: null,
-          dueDateRolledUp: false,
-          actual: null,
-          resolving: true,
-        },
-  ),
+  kpis: ALL_GROUPS.kpis.map((c) => ({ ...c, currentValue: null })),
+  rows: ALL_GROUPS.rows.map((r) => ({
+    ...r,
+    targetDate: null,
+    resolvedValue: null,
+    displayState: null,
+    warning: null,
+    frozen: false,
+    dueDate: null,
+    dueDateRolledUp: false,
+    actual: null,
+    resolving: true,
+  })),
 };
 
 const meta: Meta<typeof IssuePanel> = {
@@ -221,18 +278,16 @@ export const AllGroups: Story = {
     const c = within(canvasElement);
     await expect(c.getByText('Shared with parent')).toBeInTheDocument();
     await expect(c.getByText('Only on this issue')).toBeInTheDocument();
-    await expect(c.getByText('On parent, not tracked here')).toBeInTheDocument();
+    // KPIs on the parent but not here are offered only in the KPI browser below.
+    await expect(c.queryByText('On parent, not tracked here')).not.toBeInTheDocument();
     await expect(c.getByText('1 month after due date')).toBeInTheDocument();
-    // "Set a KPI target" picker indents options by KPI-tree depth (orders is
-    // nested under revenue in CATALOG; costs is a root alongside revenue).
+    // "Set a KPI target" opens the KPI browser on Tracked by parents: the
+    // parent's Costs target, with its unit and target; Revenue and Number of
+    // Stores are tracked here, so they're left out (spec 11 · 07).
     await userEvent.click(c.getByRole('combobox', { name: 'KPI' }));
-    const nested = await c.findByText('# of Orders');
-    const root = (await c.findAllByText('Costs')).find((el) => el.style.paddingLeft !== '');
-    await expect(nested.style.paddingLeft).toBe('12px');
-    await expect(root?.style.paddingLeft).toBe('0px');
-    // each option names its unit, so a total is typed in the right one
-    await expect(c.getByRole('option', { name: 'Costs (USD)' })).toBeInTheDocument();
-    await expect(c.getByRole('option', { name: '# of Orders (count)' })).toBeInTheDocument();
+    const list = within(c.getByRole('listbox', { name: 'KPIs' }));
+    await expect(list.getAllByRole('option').map((o) => o.textContent)).toEqual(['KPI-9CostsUSD$800K by Dec 31, 2026']);
+    await expect(list.getByText('OUT-12')).toBeInTheDocument();
   },
 };
 
@@ -248,31 +303,29 @@ export const OpenKpiIssue: Story = {
     openKpiSpy.mockClear();
     const c = within(canvasElement);
     const link = c.getByRole('link', { name: 'Number of Stores' });
-    await waitFor(() => expect(link).toHaveAttribute('href', 'https://example.atlassian.net/browse/stores'));
+    await waitFor(() => expect(link).toHaveAttribute('href', 'https://example.atlassian.net/browse/KPI-3'));
     await userEvent.click(link);
-    await expect(openKpiSpy).toHaveBeenCalledWith('stores');
-    // "On parent, not tracked here" rows aren't target cards — no link
-    await expect(c.queryByRole('link', { name: 'Costs' })).not.toBeInTheDocument();
+    await expect(openKpiSpy).toHaveBeenCalledWith('KPI-3');
   },
 };
 
-/** "+ Track this" pre-fills the form with that KPI and focuses the value — it does NOT save. */
+/** Tracking a parent's KPI here: pick it from Tracked by parents, set a value, save. */
 const trackSaveSpy = fn();
-export const TrackThisPrefillsForm: Story = {
+export const TrackParentKpi: Story = {
   args: { usePanel: stub({ data: ALL_GROUPS, save: trackSaveSpy }) },
   play: async ({ canvasElement }) => {
     trackSaveSpy.mockClear();
     const c = within(canvasElement);
-    await userEvent.click(c.getByRole('button', { name: 'Track this' }));
-    await expect(trackSaveSpy).not.toHaveBeenCalled();
     const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
-    // picked in the select, and previewed
-    await expect(form.getAllByText('Costs')).toHaveLength(2);
+    await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
+    await userEvent.click(within(c.getByRole('listbox', { name: 'KPIs' })).getByRole('option'));
+    await expect(trackSaveSpy).not.toHaveBeenCalled();
+    // picked in the KPI field, and previewed
+    await expect(form.getByRole('combobox', { name: 'KPI' })).toHaveValue('KPI-9 Costs (USD)');
     await expect(form.getByText('Preview')).toBeInTheDocument();
-    await waitFor(() => expect(form.getByLabelText('Target value')).toHaveFocus());
     await userEvent.type(form.getByLabelText('Target value'), '-5');
     await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
-    await expect(trackSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ kpiId: 'costs', target: -5, targetType: 'percent' }));
+    await expect(trackSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ kpiId: '20009', target: -5, targetType: 'percent' }));
   },
 };
 
@@ -334,54 +387,110 @@ export const Empty: Story = {
   },
 };
 
-export const NoCatalog: Story = {
-  args: { usePanel: stub({ data: NO_CATALOG }) },
+export const NoKpis: Story = {
+  args: { usePanel: stub({ data: NO_KPIS }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(c.getByText(/KPIs are not defined yet/i)).toBeInTheDocument();
-    await expect(c.queryByText('Associate a KPI')).not.toBeInTheDocument();
-    await expect(c.getByRole('button', { name: /define a KPI/i })).toBeInTheDocument();
+    // Spec 11 · 06 (Q4): no KPIs found — none yet, or none the user may see.
+    await expect(c.getByText(NO_KPIS_MESSAGE)).toBeInTheDocument();
+    await expect(c.queryByText(/KPI space/)).toBeNull();
+    await expect(c.queryByText('Set a KPI target')).not.toBeInTheDocument();
+    await expect(c.getByRole('button', { name: /Add KPI/i })).toBeInTheDocument();
   },
 };
 
-// ── Spec 10: the KPI space follows the user's Jira permissions ──────────────
+export const NoKpisDark: Story = { ...NoKpis, globals: { theme: 'dark' } };
 
-/** No Browse on the KPI project: explain that instead of "define a KPI", and offer no form. */
-export const NoAccess: Story = {
-  args: {
-    usePanel: stub({ data: { ...NO_CATALOG, access: { browse: false, create: false, edit: false, link: false } } }),
-  },
+// ── Spec 11 · 06: access per KPI space, looked up when "Record a value" is used ──
+
+const PORT: KpiSpaceRef = { id: '10400', key: 'PORT', name: 'Portfolio' };
+const READ_ONLY: KpiSpaceAccess = { browse: true, create: false, edit: false, link: false };
+/** SAVED_STATES with its KPIs in the Portfolio space. */
+const IN_PORTFOLIO: PanelData = {
+  ...SAVED_STATES,
+  rows: SAVED_STATES.rows.map((r, i) => ({ ...r, kpiKey: `PORT-${i + 1}` })),
+  kpis: SAVED_STATES.rows.map((r, i) => ({
+    id: r.kpiId,
+    key: `PORT-${i + 1}`,
+    name: r.name,
+    unit: r.unit,
+    direction: r.direction,
+    space: PORT,
+  })),
+};
+
+const refusedLookup = fn(async () => READ_ONLY);
+/**
+ * No Edit Issues in the KPI's space: the first "Record a value" looks the
+ * space up, then explains instead of opening the dialog, naming the space; the
+ * space's other targets then show disabled with the reason, and the space is
+ * asked once.
+ */
+export const RecordRefusedInKpiSpace: Story = {
+  args: { usePanel: stub({ data: IN_PORTFOLIO, getKpiAccess: refusedLookup }) },
   play: async ({ canvasElement }) => {
+    refusedLookup.mockClear();
     const c = within(canvasElement);
-    await expect(c.getByText(/You don't have permission to view the KPI space/)).toBeInTheDocument();
-    await expect(c.queryByText(/KPIs are not defined yet/i)).not.toBeInTheDocument();
-    await expect(c.queryByRole('button', { name: /define a KPI/i })).not.toBeInTheDocument();
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]!);
+    const alert = await c.findByRole('alert');
+    await expect(alert).toHaveTextContent(
+      'Recording a value on PORT-4 needs Edit Issues permission on the Portfolio space. Ask a Jira admin.',
+    );
+    await expect(screen.queryByRole('dialog')).toBeNull();
+    for (const b of c.getAllByRole('button', { name: 'Record a value' })) await expect(b).toBeDisabled();
+    await expect(refusedLookup).toHaveBeenCalledTimes(1);
+    await userEvent.click(within(alert).getByRole('button', { name: 'Dismiss' }));
+    await expect(c.queryByRole('alert')).toBeNull();
   },
 };
 
-/** Browse only: targets still show, but the nudge's Record a value is disabled with the reason. */
-export const ReadOnly: Story = {
-  args: {
-    usePanel: stub({ data: { ...SAVED_STATES, access: { browse: true, create: false, edit: false, link: false } } }),
-  },
+export const RecordRefusedInKpiSpaceDark: Story = { ...RecordRefusedInKpiSpace, globals: { theme: 'dark' } };
+
+/** Jira couldn't answer the lookup: the record dialog opens anyway (Jira's refusal would explain a denied save). */
+export const RecordAccessLookupFails: Story = {
+  args: { usePanel: stub({ data: IN_PORTFOLIO, getKpiAccess: async () => null }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    const buttons = c.getAllByRole('button', { name: 'Record a value' });
-    await expect(buttons.length).toBeGreaterThan(0);
-    for (const b of buttons) await expect(b).toBeDisabled();
+    await userEvent.click(c.getAllByRole('button', { name: 'Record a value' })[0]!);
+    await expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    await expect(c.queryByRole('alert')).toBeNull();
   },
 };
 
-/** The issue IS a KPI, but the user can't edit it: the chart shows, Record a value is disabled. */
+export const RecordAccessLookupFailsDark: Story = { ...RecordAccessLookupFails, globals: { theme: 'dark' } };
+
+/** The issue IS a KPI, but the user can't edit in its space: the chart shows, Record a value is disabled naming the space. */
 export const KpiViewReadOnly: Story = {
   args: {
-    usePanel: stub({ data: { ...KPI_VIEW, access: { browse: true, create: false, edit: false, link: false } } }),
+    usePanel: stub({ data: { ...KPI_VIEW, kpiView: { ...KPI_VIEW.kpiView!, node: { ...KPI_NODE, space: PORT } }, access: READ_ONLY } }),
   },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    await expect(await c.findByRole('button', { name: 'Record a value' })).toBeDisabled();
+    const btn = await c.findByRole('button', { name: 'Record a value' });
+    await expect(btn).toBeDisabled();
+    await expect(btn.closest('[data-disabled-reason]')).toHaveAttribute(
+      'data-disabled-reason',
+      'Recording a value on KPI-1 needs Edit Issues permission on the Portfolio space. Ask a Jira admin.',
+    );
   },
 };
+
+export const KpiViewReadOnlyDark: Story = { ...KpiViewReadOnly, globals: { theme: 'dark' } };
+
+/** One parent rule (spec 11 · 06): a KPI linked under two parent KPIs in Jira is flagged on its own panel. */
+export const KpiViewTwoParents: Story = {
+  args: {
+    usePanel: stub({ data: { ...KPI_VIEW, kpiView: { ...KPI_VIEW.kpiView!, parentLinks: { count: 2, shownKey: 'PORT-12' } } } }),
+  },
+  play: async ({ canvasElement }) => {
+    const c = within(canvasElement);
+    await expect(await c.findByRole('note')).toHaveTextContent(
+      'Linked under 2 KPIs in Jira; showing PORT-12. Remove the other link in Jira.',
+    );
+  },
+};
+
+export const KpiViewTwoParentsDark: Story = { ...KpiViewTwoParents, globals: { theme: 'dark' } };
 
 export const PendingTargetDate: Story = {
   args: { usePanel: stub({ data: PENDING_DATE }) },
@@ -404,7 +513,7 @@ export const ValuesLoading: Story = {
   args: { usePanel: stub({ data: VALUES_LOADING, valuesPending: true }) },
   play: async ({ canvasElement }) => {
     const c = within(canvasElement);
-    const tracked = VALUES_LOADING.rows.filter((r) => r.relationship !== 'onParentNotTracked');
+    const tracked = VALUES_LOADING.rows;
     await expect(c.getByText('Shared with parent')).toBeInTheDocument();
     await expect(c.getByText('1 month after due date')).toBeInTheDocument();
     await expect(c.getAllByTestId('estimate-shimmer')).toHaveLength(tracked.length);
@@ -494,7 +603,7 @@ export const EditRoundTrip: Story = {
     await userEvent.click(card.getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(editSaveSpy).toHaveBeenCalledTimes(1));
     await expect(editSaveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kpiId: 'revenue', target: 123456, targetType: 'absolute' }),
+      expect.objectContaining({ kpiId: '20001', target: 123456, targetType: 'absolute' }),
     );
   },
 };
@@ -554,7 +663,7 @@ export const CardMenu: Story = {
     await expect(dialog.getByText('Remove this KPI target?')).toBeInTheDocument();
     await expect(menuRemoveSpy).not.toHaveBeenCalled();
     await userEvent.click(dialog.getByRole('button', { name: 'Remove' }));
-    await waitFor(() => expect(menuRemoveSpy).toHaveBeenCalledWith('revenue'));
+    await waitFor(() => expect(menuRemoveSpy).toHaveBeenCalledWith('20001'));
   },
 };
 
@@ -591,7 +700,7 @@ export const EditTargetDate: Story = {
     await waitFor(() => expect(dateSaveSpy).toHaveBeenCalledTimes(1));
     await expect(dateSaveSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        kpiId: 'revenue',
+        kpiId: '20001',
         timing: expect.objectContaining({ due: expect.objectContaining({ mode: 'relative', offsetMonths: 4 }) }),
       }),
     );
@@ -643,16 +752,18 @@ export const EditDateTypeRoundTrip: Story = {
 /** The form previews the exact card it will create, and flags a bet against the KPI's direction. */
 const formSaveSpy = fn();
 export const FormPreview: Story = {
-  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === 'stores' ? { ...k, currentValue: 250 } : k)) }, save: formSaveSpy }) },
+  args: { usePanel: stub({ data: EMPTY, save: formSaveSpy }) },
   play: async ({ canvasElement }) => {
     formSaveSpy.mockClear();
     const c = within(canvasElement);
     const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
     await expect(form.queryByText('Preview')).not.toBeInTheDocument();
-    await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
-    await userEvent.click(await form.findByText('Number of Stores'));
-    // the picked KPI keeps showing its unit next to the name
-    await expect(form.getByText(/^\s*\(count\)$/)).toBeInTheDocument();
+    // Searching the view opens the path to Number of Stores (under Revenue > # of Orders).
+    await userEvent.type(form.getByRole('combobox', { name: 'KPI' }), 'stores');
+    await userEvent.click(form.getByRole('option', { name: /KPI-3/ }));
+    // the picked KPI keeps showing its unit next to the name; its current value is fetched for it alone
+    await expect(form.getByRole('combobox', { name: 'KPI' })).toHaveValue('KPI-3 Number of Stores (count)');
+    await waitFor(() => expect(form.getByTestId('picked-kpi')).toHaveTextContent('Current: 250 count'));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '+2');
     const preview = within(form.getByRole('group', { name: 'Number of Stores' }));
     await expect(preview.getByText('+2%')).toBeInTheDocument();
@@ -666,7 +777,7 @@ export const FormPreview: Story = {
     await expect(form.getByText(/Double-check the sign/)).toBeInTheDocument();
     await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
     await expect(formSaveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kpiId: 'stores', target: -2, targetType: 'percent' }),
+      expect.objectContaining({ kpiId: '20003', target: -2, targetType: 'percent' }),
     );
   },
 };
@@ -674,13 +785,15 @@ export const FormPreview: Story = {
 /** An additive ("more") target: `+100` on # of Orders previews latest + 100 and saves as `relative`. */
 const amountSaveSpy = fn();
 export const FormAmountChange: Story = {
-  args: { usePanel: stub({ data: { ...EMPTY, catalog: CATALOG.map((k) => (k.id === 'orders' ? { ...k, currentValue: 1200 } : k)) }, save: amountSaveSpy }) },
+  args: { usePanel: stub({ data: EMPTY, save: amountSaveSpy }) },
   play: async ({ canvasElement }) => {
     amountSaveSpy.mockClear();
     const c = within(canvasElement);
     const form = within(c.getByRole('region', { name: 'Set a KPI target' }));
     await userEvent.click(form.getByRole('combobox', { name: 'KPI' }));
-    await userEvent.click(await form.findByText('# of Orders'));
+    await userEvent.click(form.getByRole('button', { name: 'Expand Revenue' }));
+    await userEvent.click(form.getByRole('option', { name: /KPI-2/ }));
+    await waitFor(() => expect(form.getByTestId('picked-kpi')).toHaveTextContent('Current: 1,200 count'));
     await userEvent.click(form.getByRole('combobox', { name: 'Value type' }));
     await userEvent.click(await form.findByText('more'));
     await userEvent.type(form.getByRole('textbox', { name: 'Target value' }), '+100');
@@ -693,7 +806,7 @@ export const FormAmountChange: Story = {
     await expect(form.getByText(/Double-check the sign/)).toBeInTheDocument();
     await userEvent.click(form.getByRole('button', { name: 'Set KPI target' }));
     await expect(amountSaveSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ kpiId: 'orders', target: -100, targetType: 'relative' }),
+      expect.objectContaining({ kpiId: '20002', target: -100, targetType: 'relative' }),
     );
   },
 };
@@ -719,6 +832,6 @@ export const KpiIssue: Story = {
     const dialog = within(await screen.findByRole('dialog'));
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
-    await waitFor(() => expect(kpiRecordSpy).toHaveBeenCalledWith('revenue', '2026-07-10', 1_300_000));
+    await waitFor(() => expect(kpiRecordSpy).toHaveBeenCalledWith('20001', '2026-07-10', 1_300_000));
   },
 };

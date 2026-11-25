@@ -8,7 +8,8 @@ import { TargetCard } from './TargetCard.js';
  * a wide width — the card's layout follows its own width (container query).
  */
 const base: PanelRowDto = {
-  kpiId: 'stores',
+  kpiId: '10003',
+  kpiKey: 'KPI-3',
   name: 'Number of Stores',
   unit: 'stores',
   direction: 'increase',
@@ -44,10 +45,11 @@ const STATES: Array<[string, PanelRowDto]> = [
   ['Total by a fixed date', { ...base, targetType: 'absolute', target: 300, dueTiming: { mode: 'absolute', absolute: '2026-12-31', anchor: 'issueDueDate', offsetMonths: 0 }, targetDate: { date: '2026-12-31', pending: false, source: '' }, resolvedValue: { value: 300, baseline: null, baselineDate: null, baselineFrom: null, state: 'baselined', provisional: false } }],
 ];
 
-/** A target whose KPI issue was deleted: the panel only has the stored bet and the raw key. */
+/** A target whose KPI issue was deleted: the panel only has the stored bet and the raw key (a key-only reference). */
 const deletedKpi: PanelRowDto = {
   ...base,
   kpiId: 'KPI-404',
+  kpiKey: 'KPI-404',
   name: 'KPI-404',
   unit: '',
   direction: null,
@@ -124,7 +126,7 @@ export const KpiDeleted: Story = {
     const c = within(canvasElement);
     const card = c.getByRole('group', { name: 'KPI-404' });
     await expect(within(card).getByText('KPI deleted')).toBeInTheDocument();
-    await expect(within(card).getByText(/deleted or moved out of the KPI space/)).toBeInTheDocument();
+    await expect(within(card).getByText('This KPI was deleted, so this target can’t be tracked.')).toBeInTheDocument();
     await expect(within(card).getByText('50')).toBeInTheDocument();
     await expect(within(card).queryByRole('button', { name: /^Edit target/ })).not.toBeInTheDocument();
     await expect(within(card).queryByRole('button', { name: 'Record a value' })).not.toBeInTheDocument();
@@ -143,7 +145,7 @@ export const KpiDeleted: Story = {
 };
 
 /** A target whose KPI the user may not see (spec 10): only the stored bet and the raw key. */
-const hiddenKpi: PanelRowDto = { ...deletedKpi, kpiId: 'KPI-7', name: 'KPI-7', kpiMissing: undefined, kpiNoAccess: true };
+const hiddenKpi: PanelRowDto = { ...deletedKpi, kpiId: '10007', kpiKey: 'PORT-7', name: 'PORT-7', kpiMissing: undefined, kpiNoAccess: true };
 const onRemoveHidden = fn();
 
 /** No permission to view the KPI: read-only bet, a permission notice with a tooltip, Edit disabled, Remove works. */
@@ -157,7 +159,7 @@ export const KpiNoAccess: Story = {
   play: async ({ canvasElement }) => {
     onRemoveHidden.mockClear();
     const c = within(canvasElement);
-    const card = c.getByRole('group', { name: 'KPI-7' });
+    const card = c.getByRole('group', { name: 'PORT-7' });
     const notice = within(card).getByText("You don't have permission to view this KPI");
     await expect(within(card).queryByText('KPI deleted')).not.toBeInTheDocument();
     await expect(within(card).queryByRole('button', { name: /^Edit target/ })).not.toBeInTheDocument();
@@ -166,11 +168,11 @@ export const KpiNoAccess: Story = {
 
     await userEvent.hover(notice);
     await expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      'Viewing KPI-7 needs Browse Projects permission on the KPI space project. Ask a Jira admin.',
+      'Viewing PORT-7 needs Browse Projects permission on the PORT space. Ask a Jira admin.',
     );
     await userEvent.unhover(notice);
 
-    await userEvent.click(within(card).getByRole('button', { name: 'Actions for KPI-7' }));
+    await userEvent.click(within(card).getByRole('button', { name: 'Actions for PORT-7' }));
     await waitFor(() => expect(c.getByRole('menuitem', { name: /Edit/ })).toBeInTheDocument());
     await expect(c.getByRole('menuitem', { name: /Edit/ })).toBeDisabled();
     await userEvent.keyboard('{Escape}');
@@ -182,7 +184,7 @@ export const KpiNoAccess: Story = {
   },
 };
 
-const RECORD_REASON = 'Recording a value needs Edit Issues permission on the KPI space project. Ask a Jira admin.';
+const RECORD_REASON = 'Recording a value on PORT-3 needs Edit Issues permission on the Portfolio space. Ask a Jira admin.';
 
 const onOpenKpi = fn();
 
@@ -194,7 +196,7 @@ export const KpiNameLink: Story = {
       <TargetCard row={base} currentValue={262} onRecord={fn()} kpiHref="/browse/KPI-3" onOpenKpi={onOpenKpi} />
       <TargetCard row={base} currentValue={262} preview kpiHref="/browse/KPI-3" onOpenKpi={onOpenKpi} />
       <TargetCard row={deletedKpi} currentValue={null} kpiHref="/browse/KPI-404" onOpenKpi={onOpenKpi} />
-      <TargetCard row={hiddenKpi} currentValue={null} kpiHref="/browse/KPI-7" onOpenKpi={onOpenKpi} />
+      <TargetCard row={hiddenKpi} currentValue={null} kpiHref="/browse/PORT-7" onOpenKpi={onOpenKpi} />
     </div>
   ),
   play: async ({ canvasElement }) => {
@@ -237,3 +239,29 @@ export const RecordBlocked: Story = {
     await expect(await screen.findByRole('tooltip')).toHaveTextContent(RECORD_REASON);
   },
 };
+
+export const RecordBlockedDark: Story = { ...RecordBlocked, globals: { theme: 'dark' } };
+
+const busyRecord = fn();
+/** While the KPI's space access is looked up (spec 11 · 06), Record a value shows a busy state. */
+export const RecordCheckingAccess: Story = {
+  args: { width: 360 },
+  render: ({ width }) => (
+    <div style={{ width }}>
+      <TargetCard row={STATES[3][1]} currentValue={262} onRecord={busyRecord} recordBusy />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    busyRecord.mockClear();
+    const c = within(canvasElement);
+    const btn = c.getByRole('button', { name: /Record a value/ });
+    await expect(btn.closest('[aria-busy="true"]')).not.toBeNull();
+    await userEvent.click(btn);
+    await expect(busyRecord).not.toHaveBeenCalled();
+  },
+};
+
+export const RecordCheckingAccessDark: Story = { ...RecordCheckingAccess, globals: { theme: 'dark' } };
+
+export const KpiDeletedDark: Story = { ...KpiDeleted, globals: { theme: 'dark' } };
+export const KpiNoAccessDark: Story = { ...KpiNoAccess, globals: { theme: 'dark' } };

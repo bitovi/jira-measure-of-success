@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec 11·08 — KPI space pages (prototype)</title>
+  <style>
+    :root {
+      --text: #292a2e;
+      --text-subtle: #626f86;
+      --text-subtlest: #8590a2;
+      --border: #091e4224;
+      --border-bold: #8590a2;
+      --surface: #ffffff;
+      --surface-sunken: #f7f8f9;
+      --brand: #1868db;
+      --focus: #388bff;
+      --selected-bg: #e9f2ff;
+      --hover-bg: #091e420f;
+      --band-bg: #f1f2f4;
+      --bg-neutral: #091e420f;
+      --bg-warning: #fff7d6;
+      --warning: #a54800;
+      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/20px "Atlassian Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif;
+      color: var(--text); background: var(--surface-sunken); }
+    button { font: inherit; color: inherit; }
+
+    /* ── Prototype controls (not part of the Jira page) ───────── */
+    .proto { padding: 16px 24px 12px; border-bottom: 1px dashed var(--border-bold); }
+    .proto h1 { margin: 0; font-size: 20px; line-height: 24px; }
+    .proto p { margin: 4px 0 0; color: var(--text-subtle); max-width: 1100px; }
+    .proto details { margin-top: 8px; max-width: 1100px; }
+    .proto summary { cursor: pointer; color: var(--text-subtle); font-weight: 600; }
+    .proto ol { margin: 6px 0 0; padding-left: 22px; color: var(--text-subtle); }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 12px; align-items: flex-start; }
+    .ctl { display: flex; flex-direction: column; gap: 4px; }
+    .ctl > span { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-subtlest); }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--surface); }
+    .seg button { border: 0; border-right: 1px solid var(--border); background: transparent; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+    .seg button:last-child { border-right: 0; }
+    .seg button[aria-pressed="true"] { background: var(--selected-bg); color: var(--brand); font-weight: 600; }
+    .seg button:disabled { color: var(--text-subtlest); cursor: not-allowed; }
+    .variant-note { margin-top: 10px; padding: 8px 12px; border-left: 3px solid var(--brand); background: var(--surface); max-width: 1100px; color: var(--text-subtle); }
+
+    /* ── Simulated Jira (new navigation) ──────────────────────── */
+    .jira { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 720px; margin: 16px 24px 48px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+      box-shadow: 0 1px 1px #091e4240, 0 0 1px #091e424f; }
+    .side { border-right: 1px solid var(--border); padding: 12px 8px; background: var(--surface); }
+    .side h4 { margin: 8px 8px 4px; font-size: 11px; font-weight: 600; color: var(--text-subtlest); text-transform: uppercase; letter-spacing: .04em; }
+    .side h4 .proto-tag { text-transform: none; letter-spacing: 0; font-weight: 400; display: inline-block; margin-top: 2px; }
+    .side button { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; background: none; padding: 5px 8px; border-radius: 4px; cursor: pointer; text-align: left; }
+    .side button:hover { background: var(--hover-bg); }
+    .side button[aria-current="true"] { background: var(--selected-bg); color: var(--brand); font-weight: 600; }
+    .side .lvl { margin-left: auto; font-size: 11px; color: var(--text-subtlest); font-weight: 400; }
+    .avatar { width: 20px; height: 20px; border-radius: 4px; display: inline-grid; place-items: center; color: #fff; font: 700 9px/1 var(--mono); flex: none; }
+    .avatar.lg { width: 32px; height: 32px; font-size: 11px; border-radius: 6px; }
+
+    .space { min-width: 0; display: flex; flex-direction: column; }
+    .space-h { padding: 16px 24px 0; }
+    .crumbs { font-size: 12px; color: var(--text-subtle); }
+    .space-title { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
+    .space-title h2 { margin: 0; font-size: 20px; line-height: 24px; }
+    .proto-tag { font-size: 11px; border: 1px dashed var(--border-bold); color: var(--text-subtle); border-radius: 3px; padding: 0 6px; }
+    .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); }
+    .tabs span { padding: 6px 10px; color: var(--text-subtle); font-weight: 500; margin-bottom: -2px; }
+    .tabs span.on { color: var(--brand); border-bottom: 2px solid var(--brand); }
+
+    /* ── The app (inside the project page iframe) ─────────────── */
+    .app { padding: 16px 24px 24px; min-width: 0; }
+    .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+    .toolbar h3 { margin: 0; font-size: 16px; }
+    .toolbar .sub { color: var(--text-subtle); font-size: 12px; }
+    .toolbar .grow { flex: 1; }
+    .search { border: 2px solid var(--border); border-radius: 4px; padding: 3px 8px; font: inherit; width: 200px; }
+    .search:focus { outline: none; border-color: var(--focus); }
+    .btn { border: 0; border-radius: 3px; padding: 5px 12px; cursor: pointer; font-weight: 500; background: var(--bg-neutral); }
+    .btn:hover { background: #091e4224; }
+    .btn.primary { background: var(--brand); color: #fff; }
+    .btn.primary:hover { background: #1558bc; }
+    .btn.link { background: none; color: var(--brand); padding: 2px 4px; }
+
+    .table { border: 1px solid var(--border); border-radius: 4px; overflow: auto; max-height: 620px; }
+    .row { display: grid; grid-template-columns: minmax(380px, 1fr) 56px 80px var(--tgt-w, 260px) 36px; align-items: center;
+      min-height: 36px; border-bottom: 1px solid var(--border); }
+    .row:hover { background: var(--hover-bg); }
+    .row.head { position: sticky; top: 0; z-index: 3; background: var(--surface); font-size: 12px; font-weight: 600; color: var(--text-subtle); min-height: 30px; }
+    .row.head:hover { background: var(--surface); }
+    .row > div { padding: 0 8px; min-width: 0; }
+    .cell-kpi { display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; }
+    .chev { width: 24px; height: 24px; flex: none; border: 0; background: none; padding: 4px; cursor: pointer; color: var(--text-subtle); border-radius: 3px; }
+    .chev:hover { background: var(--hover-bg); }
+    .chev-sp { width: 24px; flex: none; }
+    .ti { width: 16px; height: 16px; flex: none; }
+    .key { color: var(--brand); text-decoration: none; }
+    .key:hover { text-decoration: underline; }
+    .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+    .loz { font: 600 11px/16px var(--mono); padding: 0 4px; border-radius: 3px; background: var(--bg-neutral); color: var(--text-subtle); flex: none; }
+    .note { font-size: 12px; color: var(--text-subtlest); flex: none; }
+    .note.warn { color: var(--warning); }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .muted { color: var(--text-subtle); }
+
+    /* context rows: ancestors from other spaces (A, C) */
+    .row.context .cell-kpi .name, .row.context .num, .row.context .unit { color: var(--text-subtlest); }
+    .row.context .ti, .row.context .key { opacity: .6; }
+    .row.context { cursor: default; }
+    /* child-space rows (C) */
+    .row.childspace { background: #fafbfc; }
+    .row.group .cell-kpi { color: var(--text-subtle); font-size: 13px; }
+    .row.group button.g { border: 0; background: none; cursor: pointer; color: var(--brand); padding: 0; }
+    /* bands (B) */
+    .band { position: sticky; top: 30px; z-index: 2; display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      padding: 5px 8px; background: var(--band-bg); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 13px; }
+    .band .sep { color: var(--text-subtlest); }
+    .band .pathname { color: var(--text-subtle); }
+    .band .pathname.last { color: var(--text); font-weight: 600; }
+    .band .grow { flex: 1; }
+    .section-h { padding: 14px 0 6px; font-weight: 600; }
+
+    .act { opacity: 0; border: 0; background: none; cursor: pointer; width: 24px; height: 24px; border-radius: 3px; color: var(--text-subtle); font-size: 16px; line-height: 1; }
+    .row:hover .act, .band:hover .act, .act:focus { opacity: 1; }
+    .act:hover { background: #091e4224; }
+
+    /* targets column */
+    .tgt-text { font-size: 12px; color: var(--text-subtle); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 4px; align-items: center; }
+    .tl { position: relative; height: 36px; }
+    .tl .q { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--border); }
+    .tl .today { position: absolute; top: 0; bottom: 0; border-left: 2px solid #e2483d; }
+    .tl .dia { position: absolute; top: 12px; width: 11px; height: 11px; transform: translateX(-50%) rotate(45deg); background: var(--brand); border-radius: 1px; cursor: help; }
+    .row.context .tl .dia { background: var(--border-bold); }
+    .head .tl { height: 30px; }
+    .head .tl .ql { position: absolute; top: 6px; font-size: 11px; color: var(--text-subtle); transform: translateX(4px); }
+
+    /* empty / info states */
+    .empty { border: 1px dashed var(--border-bold); border-radius: 6px; padding: 18px 20px; margin-bottom: 14px; background: var(--surface); }
+    .empty h4 { margin: 0 0 4px; font-size: 15px; }
+    .empty p { margin: 0 0 10px; color: var(--text-subtle); max-width: 760px; }
+    .starter { margin: 8px 0 12px; padding: 0; list-style: none; }
+    .starter li { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+    .starter li.l1 { padding-left: 28px; }
+    .loads { margin-top: 14px; font-size: 13px; }
+    .loads summary { cursor: pointer; color: var(--text-subtle); font-weight: 600; }
+    .loads ol { margin: 6px 0 0; padding-left: 22px; color: var(--text-subtle); }
+    .loads code { font: 12px var(--mono); background: var(--bg-neutral); padding: 0 4px; border-radius: 3px; color: var(--text); }
+
+    /* modal */
+    .scrim { position: fixed; inset: 0; background: #091e427a; display: grid; place-items: center; z-index: 20; }
+    .modal { width: 520px; max-width: calc(100vw - 32px); background: var(--surface); border-radius: 6px; padding: 20px 24px; box-shadow: 0 8px 24px #091e4240; }
+    .modal h3 { margin: 0 0 14px; font-size: 18px; }
+    .field { margin-bottom: 12px; }
+    .field label { display: block; font-size: 12px; font-weight: 600; color: var(--text-subtle); margin-bottom: 4px; }
+    .field input, .field select { width: 100%; border: 2px solid var(--border); border-radius: 4px; padding: 5px 8px; font: inherit; background: var(--surface); }
+    .field .fixed { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+    .field .help { font-size: 12px; color: var(--text-subtlest); margin-top: 3px; }
+    .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    [data-tip] { cursor: default; }
+  </style>
+</head>
+<body>
+  <section class="proto">
+    <h1>Spec 11·08 — KPI space pages (prototype)</h1>
+    <p>
+      Each Jira space gets a <b>KPIs</b> page (<code>jira:projectPage</code>). It lists <b>this space's KPIs</b> and loads their
+      <b>ancestors</b> from other spaces, so a product sees how its KPIs ladder up through its portfolio to the global KPIs.
+      Every KPI has <b>one</b> parent KPI. Nothing here talks to Jira. Click a space in the Jira sidebar, hover a row for <b>+</b>.
+    </p>
+    <details open>
+      <summary>Questions for review (08 Q6–Q9)</summary>
+      <ol>
+        <li><b>Parent-space KPIs:</b> A (context rows), B (path bands) or C (A plus child spaces' KPIs beneath)?</li>
+        <li><b>Portfolio pages:</b> show the products' KPIs beneath the portfolio's KPIs (C) by default?</li>
+        <li><b>Delivery teams:</b> a full KPIs page, or "KPIs your work targets" when the team owns none (see Payments)?</li>
+        <li><b>A space's parent space:</b> derived from its KPIs' ancestors, or from its work items' parents (Initiative → Theme)?</li>
+        <li><b>Context rows' values:</b> show ancestors' current values and targets (costs their readings) or only names?</li>
+      </ol>
+    </details>
+    <div class="controls">
+      <div class="ctl"><span>Parent-space KPIs</span><div class="seg" id="ctlVariant"></div></div>
+      <div class="ctl"><span>Right column</span><div class="seg" id="ctlCol"></div></div>
+      <div class="ctl"><span>Site data</span><div class="seg" id="ctlData"></div></div>
+      <div class="ctl"><span>Viewer</span><div class="seg" id="ctlPerm"></div></div>
+    </div>
+    <div class="variant-note" id="variantNote"></div>
+  </section>
+
+  <div class="jira">
+    <nav class="side" id="side"></nav>
+    <div class="space">
+      <div class="space-h" id="spaceHead"></div>
+      <div class="app" id="app"></div>
+    </div>
+  </div>
+  <div id="modalRoot"></div>
+
+  <script>
+    const ICONS = {
+      Story: 'data:image/svg+xml;base64,PHN2ZyBmaWxsPSJub25lIiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICAgICAgIGQ9Im00Ljk4MjkxIDIuNWMtLjI3NjE0IDAtLjUuMjIzODYtLjUuNXY5LjgwNTlsMy41MTcyNC0yLjQ3MjcgMy41MTc3NSAyLjQ3Mjh2LTkuODA2YzAtLjI3NjE0LS4yMjM5LS41LS41LS41em0tMiAuNWMwLTEuMTA0NTcuODk1NDMtMiAyLTJoNi4wMzQ5OWMxLjEwNDYgMCAyIC44OTU0MyAyIDJ2MTEuMjVjMCAuMjc5OS0uMTU1OS41MzY2LS40MDQzLjY2NTZzLS41NDguMTA5LS43NzctLjA1MmwtMy44MzY0LTIuNjk2OC0zLjgzNTk1IDIuNjk2OGMtLjIyOS4xNjA5LS41Mjg2LjE4MS0uNzc3MDIuMDUyLS4yNDg0My0uMTI5LS40MDQzMi0uMzg1Ny0uNDA0MzItLjY2NTZ6IgogICAgICAgICAgZmlsbD0iIzZhOWEyMyIgZmlsbC1ydWxlPSJldmVub2RkIi8+Cjwvc3ZnPgo=',
+      Epic: 'data:image/svg+xml;base64,PHN2ZyBmaWxsPSJub25lIiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICAgICAgIGQ9Im0xMC4yNzEuMDUwNjU2Yy4yODg3LjExMTg3MS40NzkuMzg5NjkuNDc5LjY5OTM0NHY0LjYzNTE1bDMuMTQ3MS42Mjk0MWMuMjY1Mi4wNTMwMy40ODEyLjI0NDY5LjU2NTUuNTAxNjFzLjAyMzguNTM5MzMtLjE1ODQuNzM5MTRsLTcuNzQ5OTcgOC40OTk5OWMtLjIwODYzLjIyODgtLjUzNjQ0LjMwNTktLjgyNTE3LjE5NC0uMjg4NzQtLjExMTgtLjQ3OTA1LS4zODk2LS40NzkwNS0uNjk5M3YtNC42MzUxbC0zLjE0NzA4LS42Mjk0N2MtLjI2NTE1LS4wNTMwMy0uNDgxMjMtLjI0NDY4LS41NjU1My0uNTAxNi0uMDg0MzEtLjI1NjkyLS4wMjM3OS0uNTM5MzMuMTU4NC0uNzM5MTVsNy43NS04LjQ5OTk5NmMuMjA4NjMtLjIyODgyMDEuNTM2NDMtLjMwNTg5OS44MjUyLS4xOTQwMjh6bS02LjU3Mjc2IDguNzI0MTM0IDMuMDUxNzcuNjEwMzZ2My45MjkxNWw1LjU1MTc5LTYuMDg5MDktMy4wNTE3OS0uNjEwMzZ2LTMuOTI5MXoiCiAgICAgICAgICBmaWxsPSIjYmY2M2YzIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiLz4KPC9zdmc+Cg==',
+      Initiative: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIgogICAgICAgICAgZD0iTTggMS41QzUuNTE0NzIgMS41IDMuNSAzLjUxNDcyIDMuNSA2QzMuNSA3LjU1MjU1IDQuMjg1NTkgOC45MjE4NyA1LjQ4NDQxIDkuNzMxODNDNi4wMjg5OSAxMC4wOTk4IDYuNDg2MzMgMTAuNzI2IDYuNDk5NyAxMS41SDkuNTAwM0M5LjUxMzY3IDEwLjcyNiA5Ljk3MTAxIDEwLjA5OTggMTAuNTE1NiA5LjczMTgzQzExLjcxNDQgOC45MjE4NyAxMi41IDcuNTUyNTUgMTIuNSA2QzEyLjUgMy41MTQ3MiAxMC40ODUzIDEuNSA4IDEuNVpNOS41IDEzSDYuNVYxNEM2LjUgMTQuMjc2MSA2LjcyMzg2IDE0LjUgNyAxNC41SDlDOS4yNzYxNCAxNC41IDkuNSAxNC4yNzYxIDkuNSAxNFYxM1pNMiA2QzIgMi42ODYyOSA0LjY4NjI5IDAgOCAwQzExLjMxMzcgMCAxNCAyLjY4NjI5IDE0IDZDMTQgOC4wNzE3IDEyLjk0OTQgOS44OTc3NSAxMS4zNTUzIDEwLjk3NDdDMTEuMTA4NCAxMS4xNDE2IDExIDExLjM1OTcgMTEgMTEuNTM0OFYxNEMxMSAxNS4xMDQ2IDEwLjEwNDYgMTYgOSAxNkg3QzUuODk1NDMgMTYgNSAxNS4xMDQ2IDUgMTRWMTEuNTM0OEM1IDExLjM1OTcgNC44OTE2MyAxMS4xNDE2IDQuNjQ0NjYgMTAuOTc0N0MzLjA1MDYyIDkuODk3NzUgMiA4LjA3MTcgMiA2WiIKICAgICAgICAgIGZpbGw9IiNCMzg2MDAiLz4KPC9zdmc+Cg==',
+      KPI: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8Y2lyY2xlIGN4PSI4IiBjeT0iOCIgcj0iNi43NSIgc3Ryb2tlPSIjQzkzNzJDIiBzdHJva2Utd2lkdGg9IjEuNSIvPgogIDxjaXJjbGUgY3g9IjgiIGN5PSI4IiByPSIzLjc1IiBzdHJva2U9IiNDOTM3MkMiIHN0cm9rZS13aWR0aD0iMS41Ii8+CiAgPGNpcmNsZSBjeD0iOCIgY3k9IjgiIHI9IjEuMjUiIGZpbGw9IiNDOTM3MkMiLz4KPC9zdmc+Cg==',
+      Outcome: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#bf63f3"/><path d="M5 3.5v9" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><path d="M5.5 4h5.5l-1.5 2.25L11 8.5H5.5z" fill="#fff"/></svg>'),
+      Theme: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#2898bd"/><path d="M8 3.5 12.5 6 8 8.5 3.5 6z" fill="#fff"/><path d="M3.5 8.5 8 11l4.5-2.5" stroke="#fff" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>'),
+    };
+    const CHEV_RIGHT = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="m6.03 1.47 6 6a.75.75 0 0 1 .052 1.004l-.052.056-6 6-1.06-1.06L10.44 8 4.97 2.53z"/></svg>';
+    const CHEV_DOWN = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="m14.53 6.03-6 6a.75.75 0 0 1-1.004.052l-.056-.052-6-6 1.06-1.06L8 10.44l5.47-5.47z"/></svg>';
+
+    // ── Spaces ─────────────────────────────────────────────────
+    const SPACES = {
+      KPI:  { name: 'Global KPIs',        level: 'Global',    color: '#1868db', types: 'KPIs only' },
+      DCOM: { name: 'Digital Commerce',   level: 'Portfolio', color: '#6e5dc6', types: 'Outcome → Theme' },
+      PLAT: { name: 'Enterprise Platform', level: 'Portfolio', color: '#8f4ab8', types: 'Outcome → Theme' },
+      CHK:  { name: 'Checkout',           level: 'Product',   color: '#1f845a', types: 'Initiative' },
+      MOB:  { name: 'Mobile App',         level: 'Product',   color: '#22a06b', types: 'Initiative' },
+      DEVP: { name: 'Developer Platform', level: 'Product',   color: '#216e4e', types: 'Initiative' },
+      PAY:  { name: 'Payments',           level: 'Team',      color: '#c25100', types: 'Epic → Story' },
+    };
+    const SPACE_ORDER = ['KPI', 'DCOM', 'PLAT', 'CHK', 'MOB', 'DEVP', 'PAY'];
+
+    // ── KPIs (one parent each; array order = rank) ────────────
+    const SEED = [
+      ['KPI-1', 'Profit', '$M', 'up', '41.2', null],
+      ['KPI-2', 'Revenue', '$M', 'up', '212', 'KPI-1'],
+      ['KPI-3', 'Expenses', '$M', 'down', '171', 'KPI-1'],
+      ['KPI-4', 'Opportunity Enablement', 'idx', 'up', '62', 'KPI-1'],
+      ['KPI-5', 'Customer NPS', 'pts', 'up', '38', null],
+      ['DCOM-101', 'Online revenue', '$M', 'up', '88.4', 'KPI-2'],
+      ['DCOM-102', 'Average order value', '$', 'up', '64.10', 'DCOM-101'],
+      ['DCOM-103', 'Cost to serve per order', '$', 'down', '7.85', 'KPI-3'],
+      ['DCOM-104', 'Analytics adoption', '%', 'up', '41%', 'KPI-4'],
+      ['DCOM-105', 'Decisions backed by data', '%', 'up', '55%', 'DCOM-104'],
+      ['PLAT-201', 'Platform licensing revenue', '$M', 'up', '19.7', 'KPI-2'],
+      ['PLAT-202', 'Cloud infrastructure cost', '$M', 'down', '23.1', 'KPI-3'],
+      ['PLAT-203', 'DORA: lead time for changes', 'days', 'down', '4.2', 'KPI-4'],
+      ['PLAT-204', 'DORA: deployment frequency', '/wk', 'up', '11', 'KPI-4'],
+      ['PLAT-205', 'DORA: change failure rate', '%', 'down', '12%', 'KPI-4'],
+      ['CHK-301', 'Checkout conversion', '%', 'up', '3.1%', 'DCOM-101'],
+      ['CHK-302', 'Payment success rate', '%', 'up', '96.2%', 'CHK-301'],
+      ['CHK-303', 'Cart abandonment', '%', 'down', '68%', 'CHK-301'],
+      ['CHK-304', 'Checkout page load (p75)', 's', 'down', '2.4', 'CHK-301'],
+      ['CHK-305', 'Refund processing cost', '$', 'down', '3.20', 'DCOM-103'],
+      ['MOB-401', 'App order share', '%', 'up', '27%', 'DCOM-101'],
+      ['MOB-402', 'Crash-free sessions', '%', 'up', '99.1%', 'MOB-401'],
+      ['MOB-403', 'App store rating', '★', 'up', '4.3', 'MOB-401'],
+      ['MOB-404', 'Push campaign revenue', '$K', 'up', '310', 'DCOM-102'],
+      ['MOB-405', 'In-app analytics events coverage', '%', 'up', '72%', 'DCOM-104'],
+      ['DEVP-501', 'Build time (p50)', 'min', 'down', '14', 'PLAT-203'],
+      ['DEVP-502', 'Pipeline success rate', '%', 'up', '88%', 'PLAT-204'],
+      ['DEVP-503', 'Self-serve environments', '%', 'up', '35%', 'PLAT-204'],
+      ['DEVP-504', 'Cost per build', '$', 'down', '0.42', 'PLAT-202'],
+      ['DEVP-505', 'Rollback time', 'min', 'down', '22', 'PLAT-205'],
+    ];
+    const TARGETS = [
+      ['DCOM-7', 'Outcome', 'Grow online share of revenue', 'DCOM-101', '+12%', '2027-12-31'],
+      ['DCOM-9', 'Theme', 'Mobile-first shopping', 'MOB-401', '+5 pts', '2027-09-30'],
+      ['DCOM-11', 'Theme', 'Lean fulfilment', 'DCOM-103', '−8%', '2027-06-30'],
+      ['PLAT-3', 'Outcome', 'Elite DORA performance', 'PLAT-203', '−30%', '2027-12-31'],
+      ['PLAT-4', 'Theme', 'FinOps', 'PLAT-202', '−10%', '2027-09-30'],
+      ['CHK-12', 'Initiative', 'One-page checkout', 'CHK-301', '+2 pts', '2027-03-31'],
+      ['CHK-14', 'Initiative', 'Faster checkout pages', 'CHK-304', '−0.8 s', '2027-06-30'],
+      ['MOB-22', 'Initiative', 'Stability sprint', 'MOB-402', '+0.5 pts', '2027-02-28'],
+      ['DEVP-14', 'Initiative', 'Remote build cache', 'DEVP-501', '−40%', '2027-06-30'],
+      ['PAY-88', 'Epic', 'Retry declined cards', 'CHK-302', '+1.5 pts', '2027-02-28'],
+      ['PAY-91', 'Story', 'Apple Pay token refresh', 'CHK-302', '+0.5 pts', '2027-01-31'],
+      ['PAY-95', 'Epic', 'Automated refunds', 'CHK-305', '−15%', '2027-06-30'],
+      ['PAY-97', 'Story', '3-D Secure fallback', 'CHK-301', '+0.3 pts', '2027-04-30'],
+    ];
+    const spaceOf = (key) => key.split('-')[0];
+    const seedKpis = () => SEED.map(([key, name, unit, dir, value, parent]) => ({ key, name, unit, dir, value, parent, space: spaceOf(key) }));
+
+    // ── State ──────────────────────────────────────────────────
+    const state = {
+      space: 'CHK',
+      variant: 'A',
+      col: 'targets',
+      data: 'populated',
+      hideDcom: false,
+      kpis: seedKpis(),
+      expanded: new Map(), // key -> bool (per variant+space)
+      filter: '',
+      modal: null,
+      nextId: 900,
+    };
+
+    const byKey = () => new Map(state.kpis.map((k) => [k.key, k]));
+    const canSee = (k) => !(state.hideDcom && k.space === 'DCOM');
+    const targetsOf = (key) => TARGETS.filter((t) => t[3] === key && state.kpis.some((k) => k.key === key));
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const typeIcon = (type) => `<img class="ti" src="${ICONS[type]}" alt="${type}" title="${type}" data-tip="${type}" width="16" height="16" />`;
+    const fmtDate = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+    // ── Building the tree for a space ──────────────────────────
+    /**
+     * focus: the KPIs this page is about (own KPIs, or for a team with none, the KPIs its work targets).
+     * Returns roles: 'own' | 'context' (ancestor from another space) | 'child' (C: another space, under an own KPI).
+     */
+    function buildModel(space) {
+      const map = byKey();
+      let own = state.kpis.filter((k) => k.space === space && canSee(k));
+      let mode = 'own';
+      if (own.length === 0 && space === 'PAY') {
+        const targeted = new Set(TARGETS.filter((t) => spaceOf(t[0]) === 'PAY').map((t) => t[3]));
+        own = state.kpis.filter((k) => targeted.has(k.key) && canSee(k));
+        mode = own.length ? 'targets' : 'own';
+      }
+      const role = new Map(own.map((k) => [k.key, 'own']));
+      if (own.length === 0 && space !== 'KPI') {
+        // Nothing of its own yet: offer the global KPIs to ladder the first one under.
+        mode = 'ladder';
+        for (const k of state.kpis) if (k.space === 'KPI' && canSee(k)) role.set(k.key, 'context');
+      }
+      const hiddenParent = new Set();
+      const ancestorLevels = []; // for "How this page loads"
+      for (const k of own) {
+        let cur = k;
+        let level = 0;
+        while (cur.parent) {
+          const p = map.get(cur.parent);
+          if (!p) break;
+          if (!canSee(p)) { hiddenParent.add(cur.key); break; }
+          if (!role.has(p.key)) {
+            role.set(p.key, 'context');
+            (ancestorLevels[level] ??= new Set()).add(p.key);
+          }
+          cur = p;
+          level += 1;
+        }
+      }
+      const childLevels = [];
+      if (state.variant === 'C' && mode === 'own') {
+        let frontier = own.map((k) => k.key);
+        let level = 0;
+        while (frontier.length) {
+          const next = [];
+          for (const k of state.kpis) {
+            if (frontier.includes(k.parent) && canSee(k) && !role.has(k.key)) {
+              role.set(k.key, 'child');
+              next.push(k.key);
+              (childLevels[level] ??= new Set()).add(k.key);
+            }
+          }
+          frontier = next;
+          level += 1;
+        }
+      }
+      const parentOf = (k) => (k.parent && role.has(k.parent) && !hiddenParent.has(k.key) ? k.parent : null);
+      const included = state.kpis.filter((k) => role.has(k.key));
+      const kids = new Map();
+      for (const k of included) {
+        const p = parentOf(k);
+        if (!kids.has(p)) kids.set(p, []);
+        kids.get(p).push(k);
+      }
+      return { own, mode, role, hiddenParent, kids, parentOf, ancestorLevels, childLevels };
+    }
+
+    const expKey = (key) => `${state.space}|${state.variant}|${key}`;
+    function isExpanded(key, def) {
+      const v = state.expanded.get(expKey(key));
+      return v === undefined ? def : v;
+    }
+
+    // ── Rows ───────────────────────────────────────────────────
+    const TL_START = new Date('2026-10-01').getTime();
+    const TL_END = new Date('2028-01-01').getTime();
+    const TODAY = new Date('2026-11-21').getTime();
+    const pos = (t) => ((t - TL_START) / (TL_END - TL_START)) * 100;
+    const QUARTERS = [['Q4 ’26', '2026-10-01'], ['Q1 ’27', '2027-01-01'], ['Q2 ’27', '2027-04-01'], ['Q3 ’27', '2027-07-01'], ['Q4 ’27', '2027-10-01']];
+
+    function targetCell(k, model) {
+      let ts = targetsOf(k.key);
+      if (model.mode === 'targets') ts = ts.filter((t) => spaceOf(t[0]) === state.space);
+      if (state.col === 'timeline') {
+        const qs = QUARTERS.map(([, d]) => `<span class="q" style="left:${pos(new Date(d).getTime())}%"></span>`).join('');
+        const ds = ts.map((t) => `<span class="dia" style="left:${pos(new Date(t[5]).getTime())}%" title="${esc(`${t[0]} ${t[2]}: ${t[4]} by ${fmtDate(t[5])}`)}"></span>`).join('');
+        return `<div class="tl">${qs}<span class="today" style="left:${pos(TODAY)}%"></span>${ds}</div>`;
+      }
+      if (!ts.length) return '';
+      const [first] = ts;
+      const more = ts.length > 1 ? ` <span class="note">+${ts.length - 1} more</span>` : '';
+      return `<div class="tgt-text">${typeIcon(first[1])}<span class="key">${first[0]}</span> ${esc(first[4])} by ${fmtDate(first[5]).replace(/, \d{4}$/, '')}${more}</div>`;
+    }
+
+    function kpiRow(k, depth, model, opts = {}) {
+      const role = model.role.get(k.key);
+      const children = model.kids.get(k.key) ?? [];
+      const ownKids = children.filter((c) => model.role.get(c.key) !== 'child');
+      const hasToggle = opts.forceLeaf ? false : (role === 'child' ? children.length > 0 : ownKids.length > 0);
+      const open = isExpanded(k.key, role !== 'child');
+      const chev = hasToggle
+        ? `<button class="chev" data-toggle="${k.key}" aria-expanded="${open}" title="${open ? 'Collapse' : 'Expand'}">${open ? CHEV_DOWN : CHEV_RIGHT}</button>`
+        : '<span class="chev-sp"></span>';
+      const badge = k.space !== state.space ? `<span class="loz" title="${esc(SPACES[k.space].name)}">${k.space}</span>` : '';
+      const hidden = model.hiddenParent.has(k.key) ? '<span class="note warn" title="Its parent KPI is in a space you can\'t browse">· parent hidden</span>' : '';
+      const cls = role === 'context' ? 'context' : role === 'child' ? 'childspace' : '';
+      const canAdd = role !== 'child' && state.data !== 'empty-locked';
+      const addTitle = role === 'context'
+        ? `Add a ${state.space} KPI under ${k.name}`
+        : `Add a child KPI under ${k.name}`;
+      return `<div class="row ${cls}" role="row">
+        <div class="cell-kpi" style="padding-left:${8 + depth * 24}px">${chev}${typeIcon('KPI')}<a class="key" href="#" onclick="return false">${k.key}</a><span class="name" title="${esc(k.name)}">${esc(k.name)}</span>${badge}${hidden}</div>
+        <div class="unit muted">${esc(k.unit)}</div>
+        <div class="num">${esc(k.value)}</div>
+        <div>${targetCell(k, model)}</div>
+        <div>${canAdd ? `<button class="act" data-add="${k.key}" title="${esc(addTitle)}">+</button>` : ''}</div>
+      </div>`;
+    }
+
+    function renderSubtree(k, depth, model, out) {
+      out.push(kpiRow(k, depth, model));
+      const role = model.role.get(k.key);
+      const children = model.kids.get(k.key) ?? [];
+      const direct = children.filter((c) => model.role.get(c.key) !== 'child' || role === 'child');
+      const foreign = role === 'child' ? [] : children.filter((c) => model.role.get(c.key) === 'child');
+      if (isExpanded(k.key, role !== 'child')) for (const c of direct) renderSubtree(c, depth + 1, model, out);
+      if (foreign.length) {
+        const gk = `grp:${k.key}`;
+        const open = isExpanded(gk, false);
+        const spaces = [...new Set(foreign.map((c) => c.space))];
+        out.push(`<div class="row group"><div class="cell-kpi" style="padding-left:${8 + (depth + 1) * 24}px">
+          <button class="chev" data-toggle="${gk}" aria-expanded="${open}">${open ? CHEV_DOWN : CHEV_RIGHT}</button>
+          <button class="g" data-toggle="${gk}">${foreign.length} KPI${foreign.length > 1 ? 's' : ''} in ${spaces.map((s) => `<span class="loz">${s}</span>`).join(' ')}</button>
+          <span class="note">· loaded when opened</span></div><div></div><div></div><div></div><div></div></div>`);
+        if (open) for (const c of foreign) renderSubtree(c, depth + 2, model, out);
+      }
+    }
+
+    function headRow() {
+      const right = state.col === 'timeline'
+        ? `<div class="tl">${QUARTERS.map(([l, d]) => `<span class="q" style="left:${pos(new Date(d).getTime())}%"></span><span class="ql" style="left:${pos(new Date(d).getTime())}%">${l}</span>`).join('')}</div>`
+        : 'Targets';
+      return `<div class="row head" role="row"><div style="padding-left:40px">KPI</div><div>Unit</div><div class="num">Current</div><div>${right}</div><div></div></div>`;
+    }
+
+    function matchesFilter(model) {
+      const f = state.filter.trim().toLowerCase();
+      if (!f) return null;
+      // Keep matches and their ancestors (as the Timeline's filters do).
+      const keep = new Set();
+      const map = byKey();
+      for (const [key] of model.role) {
+        const k = map.get(key);
+        if (k.name.toLowerCase().includes(f) || k.key.toLowerCase().includes(f)) {
+          let cur = k;
+          while (cur) { keep.add(cur.key); cur = model.parentOf(cur) ? map.get(cur.parent) : null; }
+        }
+      }
+      return keep;
+    }
+
+    function treeVariant(model) {
+      const out = [headRow()];
+      const keep = matchesFilter(model);
+      const roots = model.kids.get(null) ?? [];
+      const before = out.length;
+      const filtered = keep ? { ...model, kids: new Map([...model.kids].map(([p, cs]) => [p, cs.filter((c) => keep.has(c.key))])) } : model;
+      for (const r of roots) if (!keep || keep.has(r.key)) renderSubtree(r, 0, filtered, out);
+      if (out.length === before) out.push('<div class="row"><div class="muted" style="padding:8px 16px">No KPIs match.</div></div>');
+      return `<div class="table" role="treegrid" style="--tgt-w:${state.col === 'timeline' ? '360px' : '260px'}">${out.join('')}</div>`;
+    }
+
+    function bandsVariant(model) {
+      const map = byKey();
+      const out = [headRow()];
+      const tops = model.own.filter((k) => !(k.parent && model.role.get(k.parent) === 'own' && !model.hiddenParent.has(k.key)));
+      const groups = new Map();
+      for (const k of tops) {
+        const g = model.hiddenParent.has(k.key) ? '__hidden' : (k.parent ?? '__top');
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g).push(k);
+      }
+      const ownOnly = { ...model, role: new Map([...model.role].filter(([, r]) => r === 'own')) };
+      ownOnly.kids = new Map();
+      for (const k of model.own) {
+        const p = k.parent && ownOnly.role.has(k.parent) && !model.hiddenParent.has(k.key) ? k.parent : null;
+        if (!ownOnly.kids.has(p)) ownOnly.kids.set(p, []);
+        ownOnly.kids.get(p).push(k);
+      }
+      for (const [g, ks] of groups) {
+        let label;
+        if (g === '__top') label = '<span class="pathname last">Top-level KPIs</span>';
+        else if (g === '__hidden') label = '<span class="pathname last">Parent in a space you can\'t browse</span>';
+        else {
+          const path = [];
+          let cur = map.get(g);
+          while (cur) { path.unshift(cur); cur = cur.parent ? map.get(cur.parent) : null; if (cur && !canSee(cur)) break; }
+          label = path.map((p, i) => `${p.space !== state.space ? `<span class="loz">${p.space}</span>` : ''}<span class="pathname ${i === path.length - 1 ? 'last' : ''}">${esc(p.name)}</span>`).join('<span class="sep">›</span>');
+        }
+        const add = g.startsWith('__') ? '' : `<button class="act" data-add="${g}" title="Add a ${state.space} KPI under ${esc(map.get(g).name)}">+</button>`;
+        out.push(`<div class="band">${label}<span class="grow"></span>${add}</div>`);
+        for (const k of ks) renderSubtree(k, 0, ownOnly, out);
+      }
+      return `<div class="table" style="--tgt-w:${state.col === 'timeline' ? '360px' : '260px'}">${out.join('')}</div>`;
+    }
+
+    function loadsNote(model) {
+      const sp = state.space;
+      const items = [];
+      if (model.mode === 'targets') {
+        items.push(`<code>project = ${sp} AND kpiIssueIds IS NOT EMPTY</code> → ${sp}'s work items with targets (their <code>kpi-assignments</code>)`);
+        items.push(`<code>id in (…${model.own.length} targeted KPIs)</code>, with <code>issuelinks</code>, unit, direction`);
+      } else {
+        items.push(`<code>issuetype = KPI AND project = ${sp}</code> → ${model.own.length} KPI${model.own.length === 1 ? '' : 's'}, with <code>issuelinks</code>, unit, direction`);
+      }
+      model.ancestorLevels.forEach((lvl, i) => {
+        if (state.variant === 'B' || state.variant === 'A' || state.variant === 'C') items.push(`Ancestors, level ${i + 1}: <code>id in (${[...lvl].join(', ')})</code>`);
+      });
+      if (state.variant === 'C' && model.childLevels.length) {
+        items.push(`Child spaces' KPIs: their ids are already in the own KPIs' <code>issuelinks</code> (links are on both ends). <code>id in (…)</code> per level, <b>only when a group is opened</b> (${model.childLevels.reduce((n, l) => n + l.size, 0)} KPIs here)`);
+      }
+      const ctx = [...model.role.values()].filter((r) => r === 'context').length;
+      items.push(`Targets: <code>kpiIssueIds in (…)</code> for the ${model.own.length} KPIs (R3: never <code>IS NOT EMPTY</code> site-wide)`);
+      items.push(`Readings: one bulk changelog for ${model.own.length} KPIs${ctx ? ` + ${ctx} context KPIs (Q5: drop if context rows don't show values)` : ''}`);
+      return `<details class="loads"><summary>How this page loads (${items.length} steps)</summary><ol>${items.map((i) => `<li>${i}</li>`).join('')}</ol>
+        <p class="muted" style="margin:6px 0 0">Ancestors cost one request per level (usually 1–3), however many KPIs the space has. Nothing depends on the space's boards (spike 01 F1).</p></details>`;
+    }
+
+    // ── Page ───────────────────────────────────────────────────
+    function renderApp() {
+      const sp = state.space;
+      const S = SPACES[sp];
+      const app = document.getElementById('app');
+      if (state.hideDcom && sp === 'DCOM') {
+        app.innerHTML = '<div class="empty"><h4>You don\'t have access to this space</h4><p>Jira wouldn\'t show this tab. (Prototype: the viewer can\'t browse DCOM.)</p></div>';
+        return;
+      }
+      const model = buildModel(sp);
+      const toolbar = `<div class="toolbar">
+        <h3>KPIs</h3><span class="sub">${S.level} space · ${esc(S.types)}</span><span class="grow"></span>
+        <input class="search" id="filter" placeholder="Filter KPIs" value="${esc(state.filter)}" />
+        <button class="btn primary" data-add="">Add KPI</button>
+      </div>`;
+      let body = '';
+      if (state.kpis.length === 0 || (sp === 'KPI' && model.own.length === 0)) {
+        body = sp === 'KPI' ? starterEmpty() : `<div class="empty"><h4>No KPIs yet</h4><p>Start on <b>Global KPIs</b>: KPIs in ${esc(S.name)} ladder up to the organisation's top KPIs.</p><button class="btn" data-goto="KPI">Open Global KPIs</button></div>`;
+      } else if (model.mode === 'ladder') {
+        body = `<div class="empty"><h4>${esc(S.name)} has no KPIs yet</h4><p>Add one under a global KPI so it ladders up: hover a KPI below and click <b>+</b>.</p><button class="btn" data-add="">Add KPI</button></div>`;
+        body += `<div class="section-h">Global KPIs</div>` + treeVariant(model);
+      } else if (model.own.length === 0) {
+        body = `<div class="empty"><h4>${esc(S.name)} has no KPIs of its own</h4><p>${S.level === 'Team' ? 'Most delivery teams don\'t: their work targets product KPIs.' : 'Add one, under a KPI from a parent space, so it ladders up.'}</p><button class="btn" data-add="">Add KPI</button></div>`;
+      } else {
+        if (model.mode === 'targets') {
+          body += `<div class="empty"><h4>${esc(S.name)} has no KPIs of its own</h4><p>Most delivery teams don't: their work targets product KPIs. Below are the KPIs that ${esc(S.name)} epics and stories target, and how they ladder up.</p><button class="btn" data-add="">Add a ${sp} KPI</button></div>`;
+          body += `<div class="section-h">KPIs your work targets</div>`;
+        }
+        body += state.variant === 'B' ? bandsVariant(model) : treeVariant(model);
+        body += loadsNote(model);
+      }
+      app.innerHTML = toolbar + body;
+      const f = document.getElementById('filter');
+      f.addEventListener('input', () => { state.filter = f.value; renderApp(); const g = document.getElementById('filter'); g.focus(); g.setSelectionRange(g.value.length, g.value.length); });
+    }
+
+    function starterEmpty() {
+      return `<div class="empty">
+        <h4>Define your organisation's top KPIs</h4>
+        <p>Global KPIs are the top of every tree. Portfolios add KPIs under these, products under the portfolios', so every team can see what its work moves. Start with a common shape, or add your own.</p>
+        <ul class="starter">
+          <li>${typeIcon('KPI')}<b>Profit</b> <span class="muted">$M · higher is better</span></li>
+          <li class="l1">${typeIcon('KPI')}Revenue <span class="muted">$M · higher</span></li>
+          <li class="l1">${typeIcon('KPI')}Expenses <span class="muted">$M · lower</span></li>
+          <li class="l1">${typeIcon('KPI')}Opportunity Enablement <span class="muted">index · higher (analytics, DORA, decision-making capability)</span></li>
+        </ul>
+        <button class="btn primary" id="useStarter">Create these 4 KPIs</button> <button class="btn" data-add="">Add KPI</button>
+      </div>`;
+    }
+
+    function renderChrome() {
+      const side = document.getElementById('side');
+      const groups = [['Global', ['KPI']], ['Portfolios', ['DCOM', 'PLAT']], ['Products', ['CHK', 'MOB', 'DEVP']], ['Delivery teams', ['PAY']]];
+      side.innerHTML = '<h4>Spaces <span class="proto-tag">grouped for the prototype</span></h4>' + groups.map(([g, keys]) =>
+        `<h4>${g}</h4>` + keys.map((k) => `<button data-goto="${k}" aria-current="${k === state.space}"><span class="avatar" style="background:${SPACES[k].color}">${k.slice(0, 3)}</span>${esc(SPACES[k].name)}<span class="lvl">${k}</span></button>`).join('')).join('');
+      const S = SPACES[state.space];
+      document.getElementById('spaceHead').innerHTML = `
+        <div class="crumbs">Spaces</div>
+        <div class="space-title"><span class="avatar lg" style="background:${S.color}">${state.space.slice(0, 3)}</span><h2>${esc(S.name)}</h2>
+          <span class="proto-tag">${S.level} · work types: ${esc(S.types)}</span></div>
+        <div class="tabs"><span>Summary</span><span>Timeline</span><span>Board</span><span>List</span><span class="on">KPIs</span></div>`;
+    }
+
+    const NOTES = {
+      A: '<b>A · Context ancestors.</b> One tree. Ancestors from other spaces are faded, not selectable, with a space badge; only the path to this space\'s KPIs (no unrelated siblings). Hover an ancestor for <b>+</b> to add a KPI in this space under it.',
+      B: '<b>B · Path bands.</b> This space\'s top KPIs grouped under shaded, pinned bands that spell out their ancestor path (like 07\'s parent bands). Shorter tree; the path is a breadcrumb, not rows.',
+      C: '<b>C · Ancestors + child spaces.</b> Like A, plus, under each KPI of this space, a collapsed group of the KPIs other spaces have laddered under it (loaded when opened). Try Digital Commerce or Global KPIs.',
+    };
+
+    function seg(id, opts, cur, onPick) {
+      const el = document.getElementById(id);
+      el.innerHTML = opts.map(([v, l]) => `<button aria-pressed="${v === cur}" data-v="${v}">${l}</button>`).join('');
+      el.onclick = (e) => { const b = e.target.closest('button'); if (b) onPick(b.dataset.v); };
+    }
+
+    function renderControls() {
+      seg('ctlVariant', [['A', 'A · Context rows'], ['B', 'B · Path bands'], ['C', 'C · + Child spaces']], state.variant, (v) => { state.variant = v; render(); });
+      seg('ctlCol', [['targets', 'Targets'], ['timeline', 'Timeline']], state.col, (v) => { state.col = v; render(); });
+      seg('ctlData', [['populated', 'Populated'], ['empty', 'New org (no KPIs)']], state.data, (v) => {
+        state.data = v;
+        state.kpis = v === 'empty' ? [] : seedKpis();
+        if (v === 'empty') state.space = 'KPI';
+        render();
+      });
+      seg('ctlPerm', [['all', 'Can browse every space'], ['nodcom', 'Can’t browse DCOM']], state.hideDcom ? 'nodcom' : 'all', (v) => { state.hideDcom = v === 'nodcom'; render(); });
+      document.getElementById('variantNote').innerHTML = NOTES[state.variant];
+    }
+
+    function render() { renderControls(); renderChrome(); renderApp(); renderModal(); }
+
+    // ── Add KPI dialog ─────────────────────────────────────────
+    function renderModal() {
+      const root = document.getElementById('modalRoot');
+      if (!state.modal) { root.innerHTML = ''; return; }
+      const sp = state.space;
+      const map = byKey();
+      const options = SPACE_ORDER.map((s) => {
+        const ks = state.kpis.filter((k) => k.space === s && canSee(k));
+        if (!ks.length) return '';
+        return `<optgroup label="${esc(SPACES[s].name)} (${s})">${ks.map((k) => `<option value="${k.key}" ${k.key === state.modal.parent ? 'selected' : ''}>${k.key} ${esc(k.name)}</option>`).join('')}</optgroup>`;
+      }).join('');
+      const parent = state.modal.parent ? map.get(state.modal.parent) : null;
+      root.innerHTML = `<div class="scrim" id="scrim"><div class="modal" role="dialog" aria-label="Add KPI">
+        <h3>${parent ? `Add KPI under ${esc(parent.name)}` : 'Add KPI'}</h3>
+        <div class="field"><label>Name</label><input id="mName" placeholder="e.g. Checkout conversion" /></div>
+        <div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><label>Unit</label><input id="mUnit" placeholder="%" /></div>
+          <div><label>Direction</label><select id="mDir"><option value="up">Higher is better</option><option value="down">Lower is better</option></select></div>
+        </div>
+        <div class="field"><label>Space</label><div class="fixed"><span class="avatar" style="background:${SPACES[sp].color}">${sp.slice(0, 3)}</span>${esc(SPACES[sp].name)} <span class="muted">(${sp})</span></div>
+          <div class="help">A space page creates KPIs in its own space. To add one elsewhere, open that space's KPIs page.</div></div>
+        <div class="field"><label>Parent KPI</label><select id="mParent"><option value="">None: a top-level KPI</option>${options}</select>
+          <div class="help">${sp === 'KPI' ? 'Global KPIs are usually top-level or under another global KPI.' : 'Pick a KPI from a parent space so this one ladders up. (In the app: 07\'s KPI picker.)'}</div></div>
+        <div class="actions"><button class="btn" id="mCancel">Cancel</button><button class="btn primary" id="mSave">Create</button></div>
+      </div></div>`;
+      document.getElementById('mName').focus();
+      document.getElementById('mCancel').onclick = () => { state.modal = null; renderModal(); };
+      document.getElementById('scrim').onclick = (e) => { if (e.target.id === 'scrim') { state.modal = null; renderModal(); } };
+      document.getElementById('mSave').onclick = () => {
+        const name = document.getElementById('mName').value.trim() || 'New KPI';
+        const unit = document.getElementById('mUnit').value.trim() || '%';
+        const dir = document.getElementById('mDir').value;
+        const parentKey = document.getElementById('mParent').value || null;
+        const key = `${sp}-${state.nextId++}`;
+        state.kpis.push({ key, name, unit, dir, value: '—', parent: parentKey, space: sp });
+        if (parentKey) { state.expanded.set(expKey(parentKey), true); }
+        state.modal = null;
+        render();
+      };
+    }
+
+    // ── Events ─────────────────────────────────────────────────
+    document.addEventListener('click', (e) => {
+      const t = e.target.closest('[data-toggle],[data-add],[data-goto],#useStarter');
+      if (!t) return;
+      if (t.id === 'useStarter') {
+        state.kpis.push(
+          { key: 'KPI-1', name: 'Profit', unit: '$M', dir: 'up', value: '—', parent: null, space: 'KPI' },
+          { key: 'KPI-2', name: 'Revenue', unit: '$M', dir: 'up', value: '—', parent: 'KPI-1', space: 'KPI' },
+          { key: 'KPI-3', name: 'Expenses', unit: '$M', dir: 'down', value: '—', parent: 'KPI-1', space: 'KPI' },
+          { key: 'KPI-4', name: 'Opportunity Enablement', unit: 'idx', dir: 'up', value: '—', parent: 'KPI-1', space: 'KPI' },
+        );
+        render();
+      } else if (t.dataset.toggle) {
+        const key = t.dataset.toggle;
+        const k = expKey(key);
+        const role = buildModel(state.space).role.get(key);
+        const cur = state.expanded.has(k) ? state.expanded.get(k) : !key.startsWith('grp:') && role !== 'child';
+        state.expanded.set(k, !cur);
+        renderApp();
+      } else if (t.dataset.goto) {
+        state.space = t.dataset.goto;
+        state.filter = '';
+        render();
+      } else if (t.dataset.add !== undefined) {
+        state.modal = { parent: t.dataset.add || null };
+        renderModal();
+      }
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.modal) { state.modal = null; renderModal(); } });
+
+    render();
+  </script>
+</body>
+</html>

@@ -21,14 +21,13 @@ function def(id: string): KpiDefinition {
 const catalog = [def('revenue'), def('stores'), def('costs')];
 
 describe('groupByRelationship', () => {
-  it('splits shared / only-here / on-parent-not-tracked', () => {
+  it('splits shared / only-here, leaving out KPIs only on the parent', () => {
     const own = [assignment('revenue'), assignment('stores')];
     const parent = [assignment('revenue'), assignment('costs')];
     const g = groupByRelationship(own, parent, catalog);
 
     expect(g.sharedWithParent.map((r) => r.kpiId)).toEqual(['revenue']);
     expect(g.onlyHere.map((r) => r.kpiId)).toEqual(['stores']);
-    expect(g.onParentNotTracked.map((r) => r.kpiId)).toEqual(['costs']);
   });
 
   it('attaches catalog definitions and the own assignment', () => {
@@ -41,12 +40,6 @@ describe('groupByRelationship', () => {
     expect(groupByRelationship([], [], catalog)).toEqual({
       sharedWithParent: [],
       onlyHere: [],
-      onParentNotTracked: [],
     });
-  });
-
-  it('de-dupes repeated parent KPIs in onParentNotTracked', () => {
-    const g = groupByRelationship([], [assignment('costs'), assignment('costs')], catalog);
-    expect(g.onParentNotTracked.map((r) => r.kpiId)).toEqual(['costs']);
   });
 });

@@ -12,17 +12,25 @@ import {
   fetchIsJiraAdmin,
   fetchIssueMeta,
   fetchKpiMeta,
-  fetchKpiSpaceAccess,
-  fetchKpiSpaceIssues,
+  fetchKpiAccess,
+  fetchKpis,
   fetchReadingChangelog,
   fetchSubtreeTimingNodes,
   fetchTargetContributions,
   findProjectByKey,
+  updateKpiDefinition,
   writeAssignments,
   writeReading,
   KPI_ISSUE_TYPE,
 } from '../src/backend/jira';
-import { DEFAULT_KPI_LINK_TYPE, type Assignment, type KpiHierarchyLink } from '../src/domain/index';
+import { ensureKpiWorkType } from '../src/backend/kpiSetup';
+import {
+  DEFAULT_KPI_LINK_TYPE,
+  kpiMetaWrite,
+  type Assignment,
+  type KpiFieldsConfig,
+  type KpiHierarchyLink,
+} from '../src/domain/index';
 
 /**
  * API E2E — drives every Jira REST capability in `src/backend/jira.ts` against a
@@ -45,6 +53,12 @@ import { DEFAULT_KPI_LINK_TYPE, type Assignment, type KpiHierarchyLink } from '.
  * Requires in `.env`: FORGE_EMAIL, FORGE_API_TOKEN, JIRA_BASE_URL (optional),
  * E2E_PROJECT_KEY (optional, default MOSE2E). The API token needs Jira admin
  * rights (project create/delete + issue-type scheme management).
+ *
+ * Spec 11 · 05 (optional): E2E_KPI_UNIT_FIELD and E2E_KPI_DIRECTION_FIELD (the
+ * fields chosen in Settings, e.g. customfield_10910 / customfield_10911) and,
+ * for a select direction, E2E_KPI_DIRECTION_OPTIONS="{increaseId},{decreaseId}"
+ * (e.g. 10652,10653). The fields must be in the E2E space's field scheme for
+ * the KPI work type (on dev: the Default Field Scheme).
  */
 
 const BASE_URL = process.env.JIRA_BASE_URL || 'https://bitovi-training.atlassian.net';
@@ -56,6 +70,19 @@ if (!HAS_CREDS) {
     '\n[test:e2e] SKIPPED — set FORGE_EMAIL and FORGE_API_TOKEN in .env to run the live API E2E test.\n',
   );
 }
+
+/** The unit/direction fields to check, from the environment (null = skip those steps). */
+function kpiFieldsFromEnv(): KpiFieldsConfig | null {
+  const unit = process.env.E2E_KPI_UNIT_FIELD;
+  const direction = process.env.E2E_KPI_DIRECTION_FIELD;
+  if (!unit || !direction) return null;
+  const [increase, decrease] = (process.env.E2E_KPI_DIRECTION_OPTIONS ?? '').split(',').map((s) => s.trim());
+  return {
+    unit: { fieldId: unit },
+    direction: increase && decrease ? { fieldId: direction, kind: 'select', optionIds: { increase, decrease } } : { fieldId: direction, kind: 'text' },
+  };
+}
+const KPI_FIELDS = kpiFieldsFromEnv();
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -98,6 +125,7 @@ const ctx: {
   rootId?: string;
   childKey?: string;
   hierarchy?: KpiHierarchyLink;
+  workType?: { id: string; name: string };
 } = {};
 
 const suite = HAS_CREDS ? describe : describe.skip;
@@ -138,14 +166,16 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
 
   it('ensureKpiIssueTypeOnProject → associates the KPI issue type', async () => {
     expect(ctx.projectId, 'requires createKpiProject to have succeeded').toBeTruthy();
-    await ensureKpiIssueTypeOnProject(ctx.projectId!);
+    ctx.workType = await ensureKpiWorkType({ mode: 'create' });
+    await ensureKpiIssueTypeOnProject(ctx.projectId!, ctx.workType);
     const project = await findProjectByKey(PROJECT_KEY);
     expect(project?.issueTypeNames).toContain(KPI_ISSUE_TYPE);
   });
 
-  it('fetchKpiSpaceAccess → the token user (project lead) has full access to the space it created', async () => {
+  it('fetchKpiAccess → the token user (project lead) has full access to the space it created', async () => {
     expect(ctx.projectId, 'requires createKpiProject to have succeeded').toBeTruthy();
-    expect(await fetchKpiSpaceAccess(PROJECT_KEY)).toEqual({ browse: true, create: true, edit: true, link: true });
+    expect(await fetchKpiAccess(PROJECT_KEY)).toEqual({ browse: true, create: true, edit: true, link: true });
+    expect(await fetchKpiAccess(ctx.projectId!)).toEqual({ browse: true, create: true, edit: true, link: true });
   });
 
   it('fetchIsJiraAdmin → true for the token user (who just provisioned a project)', async () => {
@@ -158,10 +188,11 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
       name: 'E2E Revenue',
       unit: '$',
       direction: 'increase',
-    }, null);
+    }, null, ctx.workType!);
     ctx.rootKey = created.issueKey;
     expect(ctx.rootKey).toBeTruthy();
-    expect(created).toMatchObject({ kpiId: ctx.rootKey, name: 'E2E Revenue', unit: '$', parentKpiId: null });
+    // Spec 11 · 03: a KPI's id is its issue id; the key is display-only.
+    expect(created).toMatchObject({ kpiId: created.id, name: 'E2E Revenue', unit: '$', parentKpiId: null });
   });
 
   it('fetchKpiMeta → round-trips unit/direction', async () => {
@@ -169,6 +200,36 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     const meta = await fetchKpiMeta(ctx.rootKey!);
     expect(meta).toEqual({ unit: '$', direction: 'increase' });
   });
+
+  (KPI_FIELDS ? it : it.skip)(
+    'unit/direction fields (spec 11 · 05) → create and edit write the fields + a marked kpi-meta, as the user (History)',
+    async () => {
+      expect(ctx.projectId, 'requires createKpiProject to have succeeded').toBeTruthy();
+      const fields = KPI_FIELDS!;
+      const created = await createKpiIssue(ctx.projectId!, { name: 'E2E Fields', unit: '%', direction: 'decrease' }, null, ctx.workType!, fields);
+      expect(await fetchKpiMeta(created.id, fields)).toEqual({ unit: '%', direction: 'decrease' });
+
+      const readProperty = async () => {
+        const res = await forgeApi.asApp().requestJira(route`/rest/api/3/issue/${created.id}/properties/kpi-meta`);
+        return ((await res.json()) as { value?: unknown }).value;
+      };
+      const stored = await readProperty();
+      expect(stored).toEqual({ unit: '%', direction: 'decrease', fields: true });
+
+      // A unit-only edit: the unit field and the whole kpi-meta, in one issue edit.
+      await updateKpiDefinition(created.id, kpiMetaWrite(fields, stored, { unit: '%', direction: 'decrease' }, { unit: 'users' }));
+      expect(await fetchKpiMeta(created.id, fields)).toEqual({ unit: 'users', direction: 'decrease' });
+      expect(await readProperty()).toEqual({ unit: 'users', direction: 'decrease', fields: true });
+
+      // History names the person for the field change.
+      const res = await forgeApi.asApp().requestJira(route`/rest/api/3/issue/${created.id}/changelog`);
+      const { values } = (await res.json()) as {
+        values: Array<{ author?: { accountId?: string }; items: Array<{ fieldId?: string; toString?: string | null }> }>;
+      };
+      const unitChange = values.find((v) => v.items.some((i) => i.fieldId === fields.unit.fieldId && i.toString === 'users'));
+      expect(unitChange?.author?.accountId).toBe(ctx.leadAccountId);
+    },
+  );
 
   it('ensureKpiHierarchyLinkType → finds or creates the global KPI Hierarchy link type', async () => {
     // Link types are site-global, so this is left in place (idempotent by name;
@@ -188,19 +249,20 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
         unit: '$',
         direction: 'increase',
         parentKpiId: ctx.rootKey,
-      }, ctx.hierarchy!)
+      }, ctx.hierarchy!, ctx.workType!)
     ).issueKey;
     expect(ctx.childKey).toBeTruthy();
   });
 
-  it('fetchKpiSpaceIssues → enumerates + nests the space (links + JQL)', async () => {
+  it('fetchKpis → finds the space’s KPIs by work type and nests them (links + JQL)', async () => {
     // JQL search reads a search index that trails issue creation (and link
     // indexing) by a few seconds — poll until the child is present AND its
     // parent has resolved from the hierarchy link.
-    const rootPresent = (list: Awaited<ReturnType<typeof fetchKpiSpaceIssues>>) =>
+    const rootPresent = (list: Awaited<ReturnType<typeof fetchKpis>>) =>
       list.find((i) => i.key === ctx.rootKey);
     const issues = await pollFor(
-      () => fetchKpiSpaceIssues(PROJECT_KEY, ctx.hierarchy ?? null),
+      () =>
+        fetchKpis({ projects: [PROJECT_KEY] }, { workTypeId: ctx.workType!.id, hierarchy: ctx.hierarchy ?? null, kpiFields: null }),
       (list) => {
         const root = rootPresent(list);
         return Boolean(root && list.some((i) => i.key === ctx.childKey && i.parentId === root!.id));
@@ -208,6 +270,7 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
     );
     const root = issues.find((i) => i.key === ctx.rootKey);
     expect(root, `root KPI ${ctx.rootKey} not found in space enumeration`).toBeTruthy();
+    expect(root!.space?.key).toBe(PROJECT_KEY);
     ctx.rootId = root!.id;
     const child = issues.find((i) => i.key === ctx.childKey);
     expect(child, `child KPI ${ctx.childKey} not found`).toBeTruthy();
@@ -215,20 +278,20 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
   });
 
   it('fetchIssueMeta → reads issue key/type/dates', async () => {
-    expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
+    expect(ctx.rootId, 'requires fetchKpis to have resolved the root id').toBeTruthy();
     const meta = await fetchIssueMeta(ctx.rootId!);
     expect(meta.issueKey).toBe(ctx.rootKey);
     expect(meta.issueTypeName).toBe(KPI_ISSUE_TYPE);
   });
 
   it('fetchChildren → lists children via JQL parent=', async () => {
-    expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
+    expect(ctx.rootId, 'requires fetchKpis to have resolved the root id').toBeTruthy();
     const children = await fetchChildren(ctx.rootId!);
     expect(Array.isArray(children)).toBe(true);
   });
 
   it('fetchSubtreeTimingNodes → builds the timing-node map', async () => {
-    expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
+    expect(ctx.rootId, 'requires fetchKpis to have resolved the root id').toBeTruthy();
     const nodes = await fetchSubtreeTimingNodes(ctx.rootId!);
     expect(nodes.has(ctx.rootId!)).toBe(true);
   });
@@ -239,9 +302,9 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
   });
 
   it('writeAssignments + fetchAssignments → entity-property round-trip', async () => {
-    expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
+    expect(ctx.rootId, 'requires fetchKpis to have resolved the root id').toBeTruthy();
     const assignment: Assignment = {
-      kpiId: ctx.rootKey!,
+      kpiId: ctx.rootId!,
       inheritFromParent: false,
       target: 100,
       targetType: 'absolute',
@@ -252,16 +315,17 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
       updatedBy: ctx.leadAccountId!,
       updatedAt: Date.now(),
     };
-    await writeAssignments(ctx.rootId!, [assignment]);
+    // Looks the KPI's key up as the app (an `id in (…)` search) for the customer's `kpiId`.
+    await writeAssignments(ctx.rootId!, [assignment], null);
     const read = await fetchAssignments(ctx.rootId!);
     expect(read).toHaveLength(1);
-    expect(read[0].kpiId).toBe(ctx.rootKey);
+    expect(read[0].kpiId).toBe(ctx.rootId);
     expect(read[0].target).toBe(100);
   });
 
-  it('fetchTargetContributions → discovers the targeted issue via the kpiIds index', async () => {
+  it('fetchTargetContributions → discovers the targeted issue via the kpiIssueIds index', async () => {
     expect(ctx.rootKey, 'requires the writeAssignments round-trip to have run').toBeTruthy();
-    // The denormalized `kpiIds` search index (written by writeAssignments) trails
+    // The denormalized `kpiIssueIds` search index (written by writeAssignments) trails
     // the property write by a few seconds, so poll the `IS NOT EMPTY` query until
     // the issue we just targeted shows up.
     const contributions = await pollFor(
@@ -269,9 +333,9 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
       (c) => c.issues.some((i) => i.issueKey === ctx.rootKey),
     );
     const mine = contributions.issues.find((i) => i.issueKey === ctx.rootKey);
-    expect(mine, `issue ${ctx.rootKey} not surfaced by the kpiIds IS NOT EMPTY search`).toBeTruthy();
+    expect(mine, `issue ${ctx.rootKey} not surfaced by the kpiIssueIds IS NOT EMPTY search`).toBeTruthy();
     expect(
-      mine!.assignments.some((a) => a.kpiId === ctx.rootKey && a.target === 100),
+      mine!.assignments.some((a) => a.kpiId === ctx.rootId && a.target === 100),
       'the discovered issue should carry the target we wrote',
     ).toBe(true);
   });
@@ -297,7 +361,7 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
   });
 
   it('fetchReadingChangelog → reaches the bulk changelog endpoint', async () => {
-    expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
+    expect(ctx.rootId, 'requires fetchKpis to have resolved the root id').toBeTruthy();
     // Exercises getReadingFieldId() (GET /field → find `kpi-reading`) + the bulk
     // changelog POST. Empty series is expected (nothing written yet); the point
     // is the call resolves without throwing.
@@ -309,7 +373,7 @@ suite(`API E2E against ${BASE_URL} (project ${PROJECT_KEY})`, () => {
   // edit, so a personal API token exercises the real write path. Needs the
   // deployed `kpi-reading` field to be editable (`readOnly: false`).
   it('writeReading → records as the user; the changelog names them as the author', async () => {
-    expect(ctx.rootId, 'requires fetchKpiSpaceIssues to have resolved the root id').toBeTruthy();
+    expect(ctx.rootId, 'requires fetchKpis to have resolved the root id').toBeTruthy();
     await writeReading(ctx.rootId!, '2026-01-15', 123);
     const changes = await pollFor(
       () => fetchReadingChangelog([ctx.rootId!]).then((m) => m.get(ctx.rootId!) ?? []),

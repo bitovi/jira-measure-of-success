@@ -73,13 +73,31 @@ import { dateFieldSelection } from '../domain/index.js';
 
 describe('createKpiIssue', () => {
   const HIER = { linkTypeId: '10500', parentEnd: 'inward' as const };
+  const KPI_TYPE = { id: '10300' };
   beforeEach(() => {
     requestJira.mockClear();
   });
 
+  it('refuses without a space or a work type (spec 11 · 06), before any request', async () => {
+    await expect(createKpiIssue('', { name: 'Revenue', unit: '$', direction: null }, HIER, KPI_TYPE)).rejects.toThrow(
+      /^Choose a space for the new KPI/,
+    );
+    await expect(createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null }, HIER, null)).rejects.toThrow(
+      /^No KPI work type is configured yet/,
+    );
+    expect(requestJira).not.toHaveBeenCalled();
+  });
+
+  it('creates the KPI work type by id in the given space', async () => {
+    postResult = { ok: true, status: 201, json: async () => ({ id: '10051', key: 'PORT-3' }) };
+    await createKpiIssue('10400', { name: 'Margin', unit: '%', direction: null }, HIER, KPI_TYPE);
+    const body = JSON.parse((requestJira.mock.calls[0][1] as { body: string }).body) as { fields: Record<string, unknown> };
+    expect(body.fields).toMatchObject({ project: { id: '10400' }, issuetype: { id: '10300' } });
+  });
+
   it('refuses to nest (before creating anything) when no hierarchy link type is configured', async () => {
     await expect(
-      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, null),
+      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, null, KPI_TYPE),
     ).rejects.toThrow(/^KPI hierarchy is not set up/);
     expect(requestJira).not.toHaveBeenCalled();
   });
@@ -89,7 +107,7 @@ describe('createKpiIssue', () => {
     // return a KPI with an undefined key.
     postResult = { ok: false, status: 400, json: async () => ({ errorMessages: ['boom'] }) };
     await expect(
-      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: 'increase', parentKpiId: 'KPI-1' }, HIER),
+      createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: 'increase', parentKpiId: 'KPI-1' }, HIER, KPI_TYPE),
     ).rejects.toThrow('Jira 400 while trying to create KPI issue "Revenue": boom');
 
     // No property write should have been attempted after the failed create.
@@ -106,11 +124,11 @@ describe('createKpiIssue', () => {
       unit: ' $ ',
       direction: 'increase',
       parentKpiId: 'KPI-1',
-    }, HIER);
+    }, HIER, KPI_TYPE);
 
     expect(created).toEqual({
       id: '10050',
-      kpiId: 'KPI-7',
+      kpiId: '10050',
       issueKey: 'KPI-7',
       name: 'Revenue',
       unit: '$',
@@ -149,7 +167,7 @@ describe('createKpiIssue', () => {
     it('deletes the just-created issue (no orphan root KPI, no duplicate on retry) and rethrows', async () => {
       linkFails({ ok: true, status: 204 });
       await expect(
-        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER),
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER, KPI_TYPE),
       ).rejects.toThrow('Jira 404 while trying to link KPI "KPI-7" under "KPI-1": No issue KPI-1');
       const del = requestJira.mock.calls.find(([, o]) => o?.method === 'DELETE');
       expect(String(del?.[0])).toBe('/rest/api/3/issue/KPI-7');
@@ -158,7 +176,7 @@ describe('createKpiIssue', () => {
     it('says the KPI was left behind when the rollback fails too', async () => {
       linkFails({ ok: false, status: 403 });
       await expect(
-        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER),
+        createKpiIssue('10000', { name: 'Revenue', unit: '$', direction: null, parentKpiId: 'KPI-1' }, HIER, KPI_TYPE),
       ).rejects.toThrow('KPI-7 was created without its parent; delete it in Jira.');
     });
   });
@@ -247,9 +265,9 @@ describe('writeAssignments', () => {
     requestJira.mockClear();
   });
 
-  it('writes a denormalized kpiIds index so the property is JQL-searchable', async () => {
-    // The manifest indexes kpi-assignments -> kpiIds; without writing kpiIds the
-    // index stays empty and the timeline can never discover targeted KPIs.
+  it('writes both index arrays (kpiIssueIds for discovery, kpiIds keys for the customer app) so the property is JQL-searchable', async () => {
+    // The manifest indexes kpi-assignments -> kpiIssueIds / kpiIds; without
+    // writing them the index stays empty and the timeline can't discover targets.
     putResult = { ok: true, status: 200 };
     const base = {
       inheritFromParent: false,
@@ -262,19 +280,40 @@ describe('writeAssignments', () => {
       updatedBy: 'acc-jm',
       updatedAt: 0,
     };
-    await writeAssignments('10001', [
-      { kpiId: 'revenue', ...base },
-      { kpiId: 'costs', ...base },
-    ]);
+    await writeAssignments(
+      '10001',
+      [
+        { kpiId: '20001', ...base },
+        { kpiId: '20002', ...base },
+      ],
+      null,
+      new Map([
+        ['20001', 'KPI-1'],
+        ['20002', 'KPI-2'],
+      ]),
+    );
 
     const putCall = requestJira.mock.calls.find(
       ([, opts]) => (opts as { method?: string } | undefined)?.method === 'PUT',
     );
     expect(putCall).toBeDefined();
     const [, putOpts] = putCall as [unknown, { body: string }];
-    const body = JSON.parse(putOpts.body) as { assignments: unknown[]; kpiIds: string[] };
-    expect(body.kpiIds).toEqual(['revenue', 'costs']);
-    expect(body.assignments).toHaveLength(2);
+    const body = JSON.parse(putOpts.body) as {
+      assignments: Array<{ kpiId: string; kpiIssueId: string }>;
+      kpiIds: string[];
+      kpiIssueIds: string[];
+      refsVersion: number;
+    };
+    expect(body.kpiIssueIds).toEqual(['20001', '20002']);
+    expect(body.kpiIds).toEqual(['KPI-1', 'KPI-2']);
+    expect(body.assignments.map((a) => [a.kpiIssueId, a.kpiId])).toEqual([
+      ['20001', 'KPI-1'],
+      ['20002', 'KPI-2'],
+    ]);
+    // A first write on an issue with no targets yet is stamped as migrated.
+    expect(body.refsVersion).toBe(2);
+    // Every key was already known: no lookup.
+    expect(requestJira.mock.calls.filter(([r]) => String(r).includes('/search/jql'))).toEqual([]);
   });
 
   it('throws when Jira rejects the write (e.g. no Edit Issues permission)', async () => {
@@ -283,7 +322,7 @@ describe('writeAssignments', () => {
       status: 403,
       json: async () => ({ errorMessages: ['You do not have permission to edit issues.'] }),
     };
-    await expect(writeAssignments('10001', [])).rejects.toThrow(
+    await expect(writeAssignments('10001', [], null)).rejects.toThrow(
       'Jira 403 while trying to save targets on issue 10001: You do not have permission to edit issues.',
     );
   });

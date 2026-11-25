@@ -29,7 +29,7 @@ const node = (over: Partial<TimelineNodeDto> & { id: string; kpiId: string; name
 
 const REVENUE = node({
   id: 'n1',
-  kpiId: 'revenue',
+  kpiId: '20001',
   issueKey: 'KPI-1',
   name: 'Revenue',
   unit: 'USD',
@@ -71,7 +71,7 @@ export const WithReadingsAndTargets: Story = {
 
 export const Empty: Story = {
   args: {
-    node: node({ id: 'n1', kpiId: 'opportunity', name: 'Opportunity Enablement', unit: 'future value', direction: null }),
+    node: node({ id: 'n1', kpiId: '20010', name: 'Opportunity Enablement', unit: 'future value', direction: null }),
   },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByText(/No values recorded yet/i)).toBeInTheDocument();
@@ -102,7 +102,7 @@ export const Undated: Story = {
   args: {
     node: node({
       id: 'n1',
-      kpiId: 'revenue',
+      kpiId: '20001',
       name: 'Revenue',
       unit: 'USD',
       readings: [{ date: '2026-06-01', value: 1_326_000 }],
@@ -122,7 +122,7 @@ export const Undated: Story = {
 
 /** Interaction: the Record a value button opens the modal and Record calls back. */
 const recordSpy = fn();
-const RECORD_REASON = 'Recording a value needs Edit Issues permission on the KPI space project. Ask a Jira admin.';
+const RECORD_REASON = 'Recording a value on KPI-1 needs Edit Issues permission on the Portfolio space. Ask a Jira admin.';
 const blockedRecordSpy = fn();
 
 /** Spec 10: no Edit Issues on this KPI — the chart reads fine, recording is disabled with the reason. */
@@ -159,7 +159,7 @@ export const RecordValue: Story = {
     const dialog = within(await screen.findByRole('dialog'));
     await userEvent.type(dialog.getByPlaceholderText(/1,300,000/), '1300000');
     await userEvent.click(dialog.getByRole('button', { name: 'Record' }));
-    await waitFor(() => expect(recordSpy).toHaveBeenCalledWith('revenue', '2026-07-10', 1_300_000));
+    await waitFor(() => expect(recordSpy).toHaveBeenCalledWith('20001', '2026-07-10', 1_300_000));
   },
 };
 
@@ -176,7 +176,7 @@ export const EditValue: Story = {
     await userEvent.clear(input);
     await userEvent.type(input, '1250000');
     await userEvent.click(dialog.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(editSpy).toHaveBeenCalledWith('revenue', '2026-07-06', 1_250_000));
+    await waitFor(() => expect(editSpy).toHaveBeenCalledWith('20001', '2026-07-06', 1_250_000));
   },
 };
 
@@ -195,3 +195,17 @@ export const OpenKpiIssue: Story = {
     await waitFor(() => expect(openIssueSpy).toHaveBeenCalledWith('KPI-1'));
   },
 };
+
+export const RecordBlockedDark: Story = { ...RecordBlocked, globals: { theme: 'dark' } };
+
+/** One parent rule (spec 11 · 06): linked under three parent KPIs in Jira — flagged, naming the one shown. */
+export const LinkedUnderSeveralParents: Story = {
+  args: { node: REVENUE, parentLinks: { count: 3, shownKey: 'KPI-2' } },
+  play: async ({ canvasElement }) => {
+    await expect(within(canvasElement).getByRole('note')).toHaveTextContent(
+      'Linked under 3 KPIs in Jira; showing KPI-2. Remove the other links in Jira.',
+    );
+  },
+};
+
+export const LinkedUnderSeveralParentsDark: Story = { ...LinkedUnderSeveralParents, globals: { theme: 'dark' } };

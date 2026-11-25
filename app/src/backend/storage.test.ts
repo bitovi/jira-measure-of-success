@@ -11,7 +11,14 @@ vi.mock('@forge/kvs', () => ({
 }));
 
 import { kvs } from '@forge/kvs';
-import { readKpiHierarchyConfig, readRollupConfig, writeKpiHierarchyConfig } from './storage.js';
+import {
+  readKpiHierarchyConfig,
+  readMigrationRecord,
+  readRollupConfig,
+  writeKpiHierarchyConfig,
+  writeMigrationRecord,
+} from './storage.js';
+import { newMigrationRecord } from '../domain/index';
 
 const ROLLUP_KEY = 'kpi:config:rollup';
 const HIERARCHY_KEY = 'kpi:hierarchy';
@@ -56,6 +63,29 @@ describe('readKpiHierarchyConfig / writeKpiHierarchyConfig', () => {
 
   it('refuses to write an invalid config', async () => {
     await expect(writeKpiHierarchyConfig({ linkTypeId: '', parentEnd: 'inward' })).rejects.toThrow();
+    expect(kvs.set).not.toHaveBeenCalled();
+  });
+});
+
+describe('readMigrationRecord / writeMigrationRecord', () => {
+  it('keeps one key per migration', async () => {
+    await writeMigrationRecord({ ...newMigrationRecord('a'), state: 'running', cursor: '25' });
+    await writeMigrationRecord(newMigrationRecord('b'));
+    expect(store.get('kpi:migration:a')).toMatchObject({ id: 'a', state: 'running', cursor: '25' });
+    expect(await readMigrationRecord('a')).toMatchObject({ id: 'a', state: 'running' });
+    expect(await readMigrationRecord('b')).toEqual(newMigrationRecord('b'));
+  });
+
+  it('reads unset, malformed or mismatched records as null', async () => {
+    expect(await readMigrationRecord('a')).toBeNull();
+    store.set('kpi:migration:a', { id: 'a', state: 'paused' });
+    expect(await readMigrationRecord('a')).toBeNull();
+    store.set('kpi:migration:a', newMigrationRecord('other'));
+    expect(await readMigrationRecord('a')).toBeNull();
+  });
+
+  it('refuses to write an invalid record', async () => {
+    await expect(writeMigrationRecord({ ...newMigrationRecord('a'), cursor: 5 as unknown as string })).rejects.toThrow();
     expect(kvs.set).not.toHaveBeenCalled();
   });
 });

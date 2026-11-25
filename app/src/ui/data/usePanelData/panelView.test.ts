@@ -7,7 +7,7 @@ const basis: PanelBasis = {
   closed: false,
   own: [
     {
-      kpiId: 'KPI-1',
+      kpiId: '10001',
       inheritFromParent: false,
       target: 200,
       targetType: 'absolute',
@@ -17,16 +17,16 @@ const basis: PanelBasis = {
     },
   ],
   parentKpiIds: [],
-  catalog: [{ id: 'KPI-1', name: 'Signups', unit: 'users', direction: 'increase', currentValue: null, depth: 0 }],
+  kpis: [{ id: '10001', key: 'KPI-1', name: 'Signups', unit: 'users', direction: 'increase', currentValue: null, depth: 0 }],
 };
 const list: PanelListData = { basis };
 const values: PanelValuesData = {
   today: '2026-06-15',
   issueDue: { date: '2026-09-30', source: 'own' },
   parent: null,
-  readings: { 'KPI-1': [{ date: '2026-05-01', value: 150 }] },
+  readings: { '10001': [{ date: '2026-05-01', value: 150 }] },
 };
-const full: PanelData = { issueKey: 'APP-1', rows: [], catalog: [], issueDueDate: null, issueDueRolledUp: false };
+const full: PanelData = { issueKey: 'APP-1', rows: [], kpis: [], issueDueDate: null, issueDueRolledUp: false };
 
 describe('derivePanelView', () => {
   it('nothing yet: no data', () => {
@@ -46,7 +46,7 @@ describe('derivePanelView', () => {
     expect(v.valuesPending).toBe(false);
     expect(v.data?.resolving).toBeUndefined();
     expect(v.data?.issueDueDate).toBe('2026-09-30');
-    expect(v.data?.catalog[0].currentValue).toBe(150);
+    expect(v.data?.kpis[0].currentValue).toBe(150);
   });
 
   it('Phase 2 failure keeps the list, stops the shimmer and reports the error', () => {
@@ -58,7 +58,7 @@ describe('derivePanelView', () => {
   });
 
   it('a save/remove result always wins over the initial load (pending, failed or late)', () => {
-    const later: PanelValuesData = { ...values, readings: { 'KPI-1': [{ date: '2026-06-01', value: 175 }] } };
+    const later: PanelValuesData = { ...values, readings: { '10001': [{ date: '2026-06-01', value: 175 }] } };
     for (const state of [
       { list, values: null, valuesError: null },
       { list, values: null, valuesError: 'boom' },
@@ -67,7 +67,7 @@ describe('derivePanelView', () => {
       const v = derivePanelView({ ...state, mutated: { list, values: later } });
       expect(v.valuesPending).toBe(false);
       expect(v.valuesError).toBeNull();
-      expect(v.data?.catalog[0].currentValue).toBe(175);
+      expect(v.data?.kpis[0].currentValue).toBe(175);
     }
   });
 
@@ -78,12 +78,12 @@ describe('derivePanelView', () => {
 
   describe('values recorded this session', () => {
     it('apply to the readings behind the target cards (no reload)', () => {
-      const edit = { kpiId: 'KPI-1', date: '2026-06-10', value: 190 };
+      const edit = { kpiId: '10001', date: '2026-06-10', value: 190 };
       const v = derivePanelView({ list, values, valuesError: null, readingEdits: [edit] });
-      expect(v.data?.catalog[0].currentValue).toBe(190);
+      expect(v.data?.kpis[0].currentValue).toBe(190);
       // ...and on top of a later save/remove result too
       const after = derivePanelView({ list, values, valuesError: null, mutated: { list, values }, readingEdits: [edit] });
-      expect(after.data?.catalog[0].currentValue).toBe(190);
+      expect(after.data?.kpis[0].currentValue).toBe(190);
     });
 
     it('a delete removes that date', () => {
@@ -91,9 +91,9 @@ describe('derivePanelView', () => {
         list,
         values,
         valuesError: null,
-        readingEdits: [{ kpiId: 'KPI-1', date: '2026-05-01', value: null }],
+        readingEdits: [{ kpiId: '10001', date: '2026-05-01', value: null }],
       });
-      expect(v.data?.catalog[0].currentValue).toBeNull();
+      expect(v.data?.kpis[0].currentValue).toBeNull();
     });
 
     it("rebuild a KPI issue's chart: new series and re-classified target markers", () => {
@@ -101,7 +101,7 @@ describe('derivePanelView', () => {
         today: '2026-07-10',
         node: {
           id: 'n1',
-          kpiId: 'KPI-1',
+          kpiId: '10001',
           issueKey: 'KPI-1',
           name: 'Signups',
           unit: 'users',
@@ -125,7 +125,7 @@ describe('derivePanelView', () => {
         list: { panel },
         values: null,
         valuesError: null,
-        readingEdits: [{ kpiId: 'KPI-1', date: '2026-06-30', value: 250 }],
+        readingEdits: [{ kpiId: '10001', date: '2026-06-30', value: 250 }],
       });
       expect(v.data?.kpiView?.node.readings.map((r) => r.value)).toEqual([100, 250]);
       expect(v.data?.kpiView?.node.targets.map((t) => t.status)).toEqual(['hit']);

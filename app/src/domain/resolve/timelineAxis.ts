@@ -31,6 +31,15 @@ function addQuarters(quarterStart: number, n: number): number {
   return utc(year, q * 3, 1);
 }
 
+/**
+ * The last day (`YYYY-MM-DD`) of the quarter after the one containing `todayISO`:
+ * the default due date of a target added from a KPI's … menu (spec 11 · 08).
+ */
+export function nextQuarterEndISO(todayISO: string): string {
+  const afterNext = addQuarters(quarterStartMs(Date.parse(`${todayISO}T00:00:00Z`)), 2);
+  return new Date(afterNext - 86_400_000).toISOString().slice(0, 10);
+}
+
 function quarterLabel(quarterStart: number): string {
   const d = new Date(quarterStart);
   return `Q${Math.floor(d.getUTCMonth() / 3) + 1} ${d.getUTCFullYear()}`;

@@ -1,5 +1,6 @@
 import {
   applyAddedTarget,
+  applyLoadedReadings,
   applyKpiEdit,
   applyReadingEditsToTree,
   applyTargetContributions,
@@ -11,6 +12,7 @@ import {
   type RecordValueInput,
   type TargetContributionsByKpi,
   type TimelineData,
+  type TimelineReadingDto,
   type UpdatedKpi,
 } from '@domain/index.js';
 
@@ -38,6 +40,8 @@ export interface TimelineLoadState {
   edited?: readonly UpdatedKpi[];
   readingEdits?: readonly RecordValueInput[];
   addedTargets?: readonly AddedTarget[];
+  /** readings loaded after the skeleton for KPIs that came into scope (spec 11 · 08) */
+  loadedReadings?: Readonly<Record<string, TimelineReadingDto[]>>;
 }
 
 export interface TimelineView {
@@ -52,7 +56,7 @@ export function deriveTimelineView(state: TimelineLoadState): TimelineView {
   const { skeleton, contributions, targetsError } = state;
   if (!skeleton) return { data: null, targetsPending: false, targetsError: null };
 
-  let tree = skeleton;
+  let tree = applyLoadedReadings(skeleton, state.loadedReadings ?? {});
   for (const kpi of state.created ?? []) tree = insertCreatedKpi(tree, kpi);
   // Before the targets are built: a target's hit/missed status depends on the KPI's direction.
   for (const kpi of state.edited ?? []) tree = applyKpiEdit(tree, kpi);

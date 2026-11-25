@@ -381,6 +381,7 @@ export function previewRow(
 ): PanelRowDto {
   const base: PanelRowDto = {
     kpiId: kpi.id,
+    kpiKey: kpi.key,
     name: kpi.name,
     unit: kpi.unit,
     direction: kpi.direction,

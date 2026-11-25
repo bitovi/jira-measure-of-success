@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spec 11·08 — KPI Timeline with a scope (prototype)</title>
+  <style>
+    :root {
+      --text: #292a2e;
+      --text-subtle: #505258;
+      --text-subtlest: #8590a2;
+      --border: #0b120e24;
+      --border-bold: #8c8f97;
+      --surface: #ffffff;
+      --surface-sunken: #f7f8f9;
+      --brand: #1868db;
+      --focus: #388bff;
+      --selected-bg: #e9f2ff;
+      --hover-bg: #0515240f;
+      --success: #22a06b;
+      --danger: #c9372c;
+      --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/20px "Atlassian Sans", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif;
+      color: var(--text); background: var(--surface-sunken); }
+    button { font: inherit; color: inherit; }
+    .ti { width: 16px; height: 16px; flex: none; }
+    .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+    /* ── Prototype controls (not part of the page) ────────────── */
+    .proto { padding: 16px 24px 12px; border-bottom: 1px dashed var(--border-bold); }
+    .proto h1 { margin: 0; font-size: 20px; line-height: 24px; }
+    .proto p { margin: 4px 0 0; color: var(--text-subtle); max-width: 1100px; }
+    .proto details { margin-top: 8px; max-width: 1100px; }
+    .proto summary { cursor: pointer; color: var(--text-subtle); font-weight: 600; }
+    .proto ol { margin: 6px 0 0; padding-left: 22px; color: var(--text-subtle); }
+    .controls { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 12px; align-items: flex-start; }
+    .ctl { display: flex; flex-direction: column; gap: 4px; }
+    .ctl > span { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text-subtlest); }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; background: var(--surface); }
+    .seg button { border: 0; border-right: 1px solid var(--border); background: transparent; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+    .seg button:last-child { border-right: 0; }
+    .seg button[aria-pressed="true"] { background: var(--selected-bg); color: var(--brand); font-weight: 600; }
+
+    /* ── Simulated Jira page ──────────────────────────────────── */
+    .jira { margin: 16px 24px 48px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+      box-shadow: 0 1px 1px #091e4240, 0 0 1px #091e424f; }
+    .space-h { padding: 16px 24px 0; }
+    .space-h .crumbs { font-size: 12px; color: var(--text-subtle); }
+    .space-title { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
+    .space-title h2 { margin: 0; font-size: 20px; line-height: 24px; }
+    .tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border); }
+    .tabs span { padding: 6px 10px; color: var(--text-subtle); font-weight: 500; margin-bottom: -2px; }
+    .tabs span.on { color: var(--brand); border-bottom: 2px solid var(--brand); }
+    .avatar { width: 18px; height: 18px; border-radius: 4px; display: inline-grid; place-items: center; color: #fff; font: 700 8px/1 var(--mono); flex: none; }
+    .avatar.lg { width: 32px; height: 32px; font-size: 11px; border-radius: 6px; }
+
+    /* ── The Timeline (imitates today's surface) ──────────────── */
+    .app { padding: 16px 24px 24px; }
+    .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+    .toolbar h2 { margin: 0 auto 0 0; font-size: 20px; line-height: 24px; font-weight: 653; }
+    .sel { display: inline-flex; align-items: center; gap: 8px; min-width: 200px; height: 40px; padding: 0 10px 0 12px; border: 1px solid var(--border-bold);
+      border-radius: 6px; background: var(--surface); cursor: pointer; text-align: left; }
+    .sel .grow { flex: 1; }
+    .sel.on { border-color: var(--brand); background: var(--selected-bg); }
+    .btn-primary { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 14px; border: 0; border-radius: 6px; background: var(--brand);
+      color: #fff; font-weight: 500; cursor: pointer; }
+    .btn-primary:hover { background: #1558bc; }
+    .btn-primary:disabled { background: var(--hover-bg); color: var(--text-subtlest); cursor: not-allowed; }
+    .dd { position: relative; }
+    .dd-pop { position: absolute; top: calc(100% + 4px); right: 0; z-index: 10; width: 300px; background: var(--surface); border-radius: 6px;
+      box-shadow: 0 8px 12px #1e1f2126, 0 0 1px #1e1f214f; padding: 8px 0; }
+    .dd-pop input[type=text] { margin: 0 8px 6px; width: calc(100% - 16px); border: 1px solid var(--border-bold); border-radius: 6px; padding: 6px 8px; font: inherit; }
+    .dd-pop .opt { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; }
+    .dd-pop .opt:hover { background: var(--hover-bg); }
+    .dd-pop .opt .k { margin-left: auto; font: 12px var(--mono); color: var(--text-subtlest); }
+    .dd-pop .foot { border-top: 1px solid var(--border); margin-top: 6px; padding: 6px 12px 0; text-align: right; }
+    .dd-pop .foot button { border: 0; background: none; color: var(--brand); cursor: pointer; }
+
+    .tl { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text); }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .legend b { font-weight: 600; }
+    .legend .sep { width: 1px; height: 18px; background: var(--border); }
+    .grid { display: grid; }
+    .r { display: grid; grid-template-columns: 300px 1fr var(--und, 0px); border-bottom: 1px solid var(--border); }
+    .r:last-child { border-bottom: 0; }
+    .r.head { background: var(--surface-sunken); font-weight: 600; color: var(--text-subtle); font-size: 13px; letter-spacing: .04em; height: 34px; }
+    .r.head > div { display: flex; align-items: center; }
+    .lab { position: relative; display: flex; flex-direction: column; justify-content: center; padding: 0 8px 0 var(--pad, 16px); border-right: 1px solid var(--border); min-width: 0; }
+    .r.full { height: 60px; }
+    .r.ctx { height: 32px; background: #fafbfb; }
+    .l1 { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    .chev { width: 20px; height: 20px; flex: none; border: 0; background: none; padding: 2px; cursor: pointer; color: var(--text-subtle); border-radius: 3px; display: inline-grid; place-items: center; }
+    .chev:hover { background: var(--hover-bg); }
+    .chev-sp { width: 20px; flex: none; }
+    .name { color: var(--brand); font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .name:hover { text-decoration: underline; }
+    .r.ctx .name { font-weight: 500; font-size: 13px; }
+    .r.outside .name { color: var(--text-subtlest); }
+    .loz { font: 600 11px/16px var(--mono); padding: 0 4px; border-radius: 3px; background: var(--hover-bg); color: var(--text-subtle); flex: none; }
+    .l2 { display: flex; align-items: center; gap: 8px; padding-left: 24px; color: var(--text); }
+    .up { color: #4c6b1f; } .down { color: var(--danger); }
+    .track { position: relative; min-width: 0; overflow: hidden; }
+    .track svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
+    .und { border-left: 1px solid var(--border); display: flex; align-items: center; justify-content: center; padding: 0 8px; }
+    .und .chip { border: 1px solid var(--border-bold); border-radius: 4px; padding: 1px 8px; font-size: 13px; white-space: nowrap; cursor: help; }
+    .tip { margin-top: 12px; font-size: 13px; color: var(--text-subtle); }
+    .tip b { color: var(--text); }
+    .empty { padding: 24px; color: var(--text-subtle); }
+
+    /* Plans' row actions: 32×32 subtle buttons, shown on hover */
+    .row-actions { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); display: flex; opacity: 0; background: inherit; }
+    .r:hover .row-actions, .row-actions:focus-within, .row-actions.menu-open { opacity: 1; }
+    .r.full:hover .lab, .r.ctx:hover .lab { background: #f7f8f9; }
+    .pbtn { width: 32px; height: 32px; border: 0; border-radius: 6px; background: transparent; color: #505258;
+      display: inline-grid; place-items: center; cursor: pointer; flex: none; padding: 0; }
+    .r.ctx .pbtn { width: 28px; height: 28px; }
+    .pbtn:hover { background: #0515240f; }
+    .pbtn[aria-expanded="true"] { background: var(--selected-bg); color: var(--brand); }
+    .menu-wrap { position: relative; }
+    .menu { position: absolute; right: 0; top: 34px; z-index: 6; min-width: 200px; background: var(--surface); border-radius: 6px; padding: 4px 0;
+      box-shadow: 0 8px 12px #1e1f2126, 0 0 1px #1e1f214f; }
+    .menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 12px; cursor: pointer; }
+    .menu button:hover { background: var(--hover-bg); }
+
+    /* modal: Jira's modernised "Create New Work Item" dialog (measured on bitovi-training, 2026-11-21) */
+    .scrim { position: fixed; inset: 0; background: #050c1f75; z-index: 20; overflow-y: auto; }
+    .modal { width: 800px; max-width: calc(100vw - 32px); margin: 60px auto 40px; background: var(--surface); border-radius: 12px;
+      box-shadow: 0 8px 12px #1e1f2126, 0 0 1px #1e1f214f; }
+    .m-head { display: flex; align-items: center; justify-content: space-between; padding: 24px 24px 16px; margin-bottom: -2px; }
+    .m-chips { display: flex; align-items: center; gap: 4px; }
+    .m-chip { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 24px; padding: 2px 12px; border: 0; border-radius: 4px;
+      background: transparent; color: #505258; font-weight: 500; cursor: pointer; white-space: nowrap; }
+    .m-chip:hover { background: #0515240f; }
+    .m-chip.static { cursor: default; }
+    .m-chip.static:hover { background: transparent; }
+    .m-chip.missing { color: var(--danger); }
+    .m-chip .avatar { width: 16px; height: 16px; font-size: 6px; }
+    .m-div { width: 0; height: 16px; border-left: 1px solid #7d818a; margin: 0 4px; }
+    .m-body { padding: 2px 24px 8px; }
+    .m-summary { display: block; width: 100%; border: 0; border-radius: 6px; padding: 6px; resize: none; font-family: inherit; font-size: 20px; line-height: 28px; font-weight: 653;
+      color: var(--text); min-height: 40px; }
+    .m-summary::placeholder { color: #6b6e76; }
+    .m-summary:hover { background: #0515240f; }
+    .m-summary:focus { outline: none; background: transparent; }
+    .m-desc { display: block; width: 100%; border: 0; border-radius: 6px; padding: 6px; resize: none; font: inherit; color: var(--text); min-height: 56px; margin-top: 8px; }
+    .m-desc::placeholder { color: #6b6e76; }
+    .m-desc:hover { background: #0515240f; }
+    .m-desc:focus { outline: none; background: transparent; }
+    .m-fields { display: grid; grid-template-columns: 1fr; gap: 4px; margin: 12px 6px 4px; }
+    .m-fields > label { color: #505258; margin-top: 8px; }
+    .m-fields input { min-height: 40px; border: 1px solid #8c8f97; border-radius: 6px; padding: 0 8px; font: inherit; background: var(--surface); }
+    .m-fields input:focus { outline: none; border: 2px solid #1868db; padding: 0 7px; }
+    .m-fields .seg { justify-self: start; }
+    .m-fields .seg button { padding: 4px 10px; }
+    /* Parent: Jira's create-dialog field (collapsed row → select with two-line options) */
+    .pf-row { display: flex; align-items: center; gap: 8px; min-height: 47px; padding: 0 6px; border-radius: 8px; color: #505258; cursor: pointer; }
+    .pf-row:hover { background: #0515240f; }
+    .pf { position: relative; margin: 8px 6px; }
+    .pf-label { display: block; color: #505258; margin-bottom: 4px; }
+    .pf-input { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 40px; padding: 0 8px; border: 1px solid #8c8f97; border-radius: 6px;
+      background: var(--surface); font: inherit; color: var(--text); text-align: left; cursor: text; }
+    .pf-input.focus { border: 2px solid #1868db; padding: 0 7px; }
+    .pf-input input { flex: 1; border: 0; outline: none; font: inherit; font-size: 16px; padding: 8px 0; background: transparent; min-width: 0; }
+    .pf-input .chv { margin-left: auto; color: #505258; display: inline-grid; }
+    .pf-input .k { color: #505258; }
+    .pf-input .pf-clear { border-radius: 4px; padding: 2px; cursor: pointer; }
+    .pf-input .pf-clear:hover { background: #0515240f; }
+    .pf-input .avatar { width: 16px; height: 16px; font-size: 6px; border-radius: 3px; }
+    .pf-menu { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 26; max-height: 300px; overflow: auto; background: var(--surface);
+      border-radius: 8px; padding: 6px 0; box-shadow: 0 8px 12px #1e1f2126, 0 0 1px #1e1f214f; }
+    .pf-opt { padding: 8px 16px; border-left: 2px solid transparent; cursor: pointer; }
+    .pf-opt[aria-selected="true"] { background: #0515240f; border-left-color: #1868db; }
+    .pf-opt .l1 { display: flex; align-items: center; gap: 8px; color: #505258; }
+    .pf-opt .l2 { margin-top: 2px; }
+    .pf-opt .avatar { width: 16px; height: 16px; font-size: 6px; border-radius: 3px; }
+    .pkey { color: #1868db; font-weight: 400; }
+    .pf-none { padding: 8px 16px; color: var(--text-subtlest); }
+    .m-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px; border-top: 1px solid #0b120e24; }
+    .m-foot .why { font-size: 12px; color: var(--text-subtle); }
+    .m-foot .why.err { color: var(--danger); }
+    .m-foot .right { display: flex; align-items: center; gap: 16px; }
+    .m-create { height: 32px; padding: 6px 12px; border: 0; border-radius: 6px; background: #1868db; color: #fff; font-weight: 500; cursor: pointer; }
+    .m-create:hover { background: #1558bc; }
+    .m-create:disabled { background: #0515240f; color: var(--text-subtlest); cursor: not-allowed; }
+    .space-pop { position: absolute; top: 28px; left: 0; z-index: 25; width: 320px; background: var(--surface); border-radius: 6px; padding: 8px 0;
+      box-shadow: 0 8px 12px #1e1f2126, 0 0 1px #1e1f214f; font-weight: 400; color: var(--text); cursor: default; }
+    .space-pop input { margin: 0 8px 6px; width: calc(100% - 16px); border: 2px solid var(--border); border-radius: 6px; padding: 3px 8px; font: inherit; }
+    .space-pop .opt { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; }
+    .space-pop .opt:hover, .space-pop .opt[aria-selected="true"] { background: var(--hover-bg); }
+    .space-pop .opt .k { margin-left: auto; font: 12px var(--mono); color: var(--text-subtlest); }
+    .space-pop .foot { border-top: 1px solid var(--border); margin-top: 6px; padding: 6px 12px 0; font-size: 12px; color: var(--text-subtlest); }
+    .flag { position: fixed; left: 24px; bottom: 24px; z-index: 30; width: 400px; background: var(--surface); border-radius: 6px; padding: 14px 16px;
+      box-shadow: 0 8px 12px #1e1f2126, 0 0 1px #1e1f214f; display: grid; grid-template-columns: 20px 1fr 24px; gap: 4px 12px; }
+    .flag .ok { color: var(--success); font-weight: 700; }
+    .flag .t { font-weight: 600; }
+    .flag .d { grid-column: 2; color: var(--text-subtle); }
+    .flag .links { grid-column: 2; display: flex; gap: 12px; margin-top: 4px; }
+    .flag .links button { border: 0; background: none; padding: 0; color: var(--brand); cursor: pointer; font-weight: 500; }
+    .space-pop .avatar { width: 18px; height: 18px; font-size: 8px; }
+  </style>
+</head>
+<body>
+  <section class="proto">
+    <h1>Spec 11·08 — KPI Timeline with a scope (prototype)</h1>
+    <p>
+      Today's Timeline rows (one time axis for every KPI), plus a <b>KPI space</b> filter, defaulting to all KPIs. Picking spaces
+      shows their KPIs, with their ancestors above them for context. Flip <b>Ancestor rows</b> to compare compact context rows
+      with full ones. The filters are remembered in this browser (reload to see). Hover a row for <b>+</b> and <b>…</b>.
+    </p>
+    <details>
+      <summary>Question for review</summary>
+      <ol><li>Ancestor rows outside the filter: compact (one short line, no track) or full (as today's project filter)?</li></ol>
+    </details>
+    <div class="controls">
+      <div class="ctl"><span>Ancestor rows</span><div class="seg" id="ctlAnc"></div></div>
+      <div class="ctl"><span>KPI data</span><div class="seg" id="ctlData"></div></div>
+      <div class="ctl"><span>Viewer can create KPIs in</span><div class="seg" id="ctlCreate"></div></div>
+    </div>
+  </section>
+
+  <div class="jira">
+    <div class="app" id="app"></div>
+  </div>
+  <div id="modalRoot"></div>
+  <div id="flagRoot"></div>
+
+  <script>
+    const ICONS = {
+      Story: 'data:image/svg+xml;base64,PHN2ZyBmaWxsPSJub25lIiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICAgICAgIGQ9Im00Ljk4MjkxIDIuNWMtLjI3NjE0IDAtLjUuMjIzODYtLjUuNXY5LjgwNTlsMy41MTcyNC0yLjQ3MjcgMy41MTc3NSAyLjQ3Mjh2LTkuODA2YzAtLjI3NjE0LS4yMjM5LS41LS41LS41em0tMiAuNWMwLTEuMTA0NTcuODk1NDMtMiAyLTJoNi4wMzQ5OWMxLjEwNDYgMCAyIC44OTU0MyAyIDJ2MTEuMjVjMCAuMjc5OS0uMTU1OS41MzY2LS40MDQzLjY2NTZzLS41NDguMTA5LS43NzctLjA1MmwtMy44MzY0LTIuNjk2OC0zLjgzNTk1IDIuNjk2OGMtLjIyOS4xNjA5LS41Mjg2LjE4MS0uNzc3MDIuMDUyLS4yNDg0My0uMTI5LS40MDQzMi0uMzg1Ny0uNDA0MzItLjY2NTZ6IgogICAgICAgICAgZmlsbD0iIzZhOWEyMyIgZmlsbC1ydWxlPSJldmVub2RkIi8+Cjwvc3ZnPgo=',
+      Epic: 'data:image/svg+xml;base64,PHN2ZyBmaWxsPSJub25lIiBoZWlnaHQ9IjE2IiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGNsaXAtcnVsZT0iZXZlbm9kZCIKICAgICAgICAgIGQ9Im0xMC4yNzEuMDUwNjU2Yy4yODg3LjExMTg3MS40NzkuMzg5NjkuNDc5LjY5OTM0NHY0LjYzNTE1bDMuMTQ3MS42Mjk0MWMuMjY1Mi4wNTMwMy40ODEyLjI0NDY5LjU2NTUuNTAxNjFzLjAyMzguNTM5MzMtLjE1ODQuNzM5MTRsLTcuNzQ5OTcgOC40OTk5OWMtLjIwODYzLjIyODgtLjUzNjQ0LjMwNTktLjgyNTE3LjE5NC0uMjg4NzQtLjExMTgtLjQ3OTA1LS4zODk2LS40NzkwNS0uNjk5M3YtNC42MzUxbC0zLjE0NzA4LS42Mjk0N2MtLjI2NTE1LS4wNTMwMy0uNDgxMjMtLjI0NDY4LS41NjU1My0uNTAxNi0uMDg0MzEtLjI1NjkyLS4wMjM3OS0uNTM5MzMuMTU4NC0uNzM5MTVsNy43NS04LjQ5OTk5NmMuMjA4NjMtLjIyODgyMDEuNTM2NDMtLjMwNTg5OS44MjUyLS4xOTQwMjh6bS02LjU3Mjc2IDguNzI0MTM0IDMuMDUxNzcuNjEwMzZ2My45MjkxNWw1LjU1MTc5LTYuMDg5MDktMy4wNTE3OS0uNjEwMzZ2LTMuOTI5MXoiCiAgICAgICAgICBmaWxsPSIjYmY2M2YzIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiLz4KPC9zdmc+Cg==',
+      Initiative: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICAgIDxwYXRoIGZpbGwtcnVsZT0iZXZlbm9kZCIgY2xpcC1ydWxlPSJldmVub2RkIgogICAgICAgICAgZD0iTTggMS41QzUuNTE0NzIgMS41IDMuNSAzLjUxNDcyIDMuNSA2QzMuNSA3LjU1MjU1IDQuMjg1NTkgOC45MjE4NyA1LjQ4NDQxIDkuNzMxODNDNi4wMjg5OSAxMC4wOTk4IDYuNDg2MzMgMTAuNzI2IDYuNDk5NyAxMS41SDkuNTAwM0M5LjUxMzY3IDEwLjcyNiA5Ljk3MTAxIDEwLjA5OTggMTAuNTE1NiA5LjczMTgzQzExLjcxNDQgOC45MjE4NyAxMi41IDcuNTUyNTUgMTIuNSA2QzEyLjUgMy41MTQ3MiAxMC40ODUzIDEuNSA4IDEuNVpNOS41IDEzSDYuNVYxNEM2LjUgMTQuMjc2MSA2LjcyMzg2IDE0LjUgNyAxNC41SDlDOS4yNzYxNCAxNC41IDkuNSAxNC4yNzYxIDkuNSAxNFYxM1pNMiA2QzIgMi42ODYyOSA0LjY4NjI5IDAgOCAwQzExLjMxMzcgMCAxNCAyLjY4NjI5IDE0IDZDMTQgOC4wNzE3IDEyLjk0OTQgOS44OTc3NSAxMS4zNTUzIDEwLjk3NDdDMTEuMTA4NCAxMS4xNDE2IDExIDExLjM1OTcgMTEgMTEuNTM0OFYxNEMxMSAxNS4xMDQ2IDEwLjEwNDYgMTYgOSAxNkg3QzUuODk1NDMgMTYgNSAxNS4xMDQ2IDUgMTRWMTEuNTM0OEM1IDExLjM1OTcgNC44OTE2MyAxMS4xNDE2IDQuNjQ0NjYgMTAuOTc0N0MzLjA1MDYyIDkuODk3NzUgMiA4LjA3MTcgMiA2WiIKICAgICAgICAgIGZpbGw9IiNCMzg2MDAiLz4KPC9zdmc+Cg==',
+      KPI: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAxNiAxNiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KICA8Y2lyY2xlIGN4PSI4IiBjeT0iOCIgcj0iNi43NSIgc3Ryb2tlPSIjQzkzNzJDIiBzdHJva2Utd2lkdGg9IjEuNSIvPgogIDxjaXJjbGUgY3g9IjgiIGN5PSI4IiByPSIzLjc1IiBzdHJva2U9IiNDOTM3MkMiIHN0cm9rZS13aWR0aD0iMS41Ii8+CiAgPGNpcmNsZSBjeD0iOCIgY3k9IjgiIHI9IjEuMjUiIGZpbGw9IiNDOTM3MkMiLz4KPC9zdmc+Cg==',
+      Outcome: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#bf63f3"/><path d="M5 3.5v9" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/><path d="M5.5 4h5.5l-1.5 2.25L11 8.5H5.5z" fill="#fff"/></svg>'),
+      Theme: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#2898bd"/><path d="M8 3.5 12.5 6 8 8.5 3.5 6z" fill="#fff"/><path d="M3.5 8.5 8 11l4.5-2.5" stroke="#fff" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>'),
+    };
+    const CHEV_RIGHT = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="m6.03 1.47 6 6a.75.75 0 0 1 .052 1.004l-.052.056-6 6-1.06-1.06L10.44 8 4.97 2.53z"/></svg>';
+    const CHEV_DOWN = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="m14.53 6.03-6 6a.75.75 0 0 1-1.004.052l-.056-.052-6-6 1.06-1.06L8 10.44l5.47-5.47z"/></svg>';
+    const PLUS_ICON = '<svg width="16" height="16" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentcolor" d="M8.75 1.5v5.75h5.75v1.5H8.75v5.75h-1.5V8.75H1.5v-1.5h5.75V1.5z"/></svg>';
+    const MORE_ICON = '<svg width="16" height="16" fill="none" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentcolor" fill-rule="evenodd" d="M0 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0m6.5 0a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0M13 8a1.5 1.5 0 1 1 3 0 1.5 1.5 0 0 1-3 0" clip-rule="evenodd"/></svg>';
+    const SEL_CHEV = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentcolor" d="m14.53 6.03-6 6a.75.75 0 0 1-1.06 0l-6-6 1.06-1.06L8 10.44l5.47-5.47z"/></svg>';
+
+    // ── Spaces and data ────────────────────────────────────────
+    const SPACES = {
+      KPI:  { name: 'Global KPIs',         color: '#1868db' },
+      DCOM: { name: 'Digital Commerce',    color: '#6e5dc6' },
+      PLAT: { name: 'Enterprise Platform', color: '#8f4ab8' },
+      CHK:  { name: 'Checkout',            color: '#1f845a' },
+      MOB:  { name: 'Mobile App',          color: '#22a06b' },
+      DEVP: { name: 'Developer Platform',  color: '#216e4e' },
+      PAY:  { name: 'Payments',            color: '#c25100' },
+      OPS:  { name: 'Store Operations',    color: '#626f86' },
+    };
+    const KPI_SPACES = ['KPI', 'DCOM', 'PLAT', 'CHK', 'MOB', 'DEVP', 'PAY', 'OPS'];
+    // key, name, unit, direction, current, parent
+    const SEED = [
+      ['KPI-1', 'Profit', '$M', 'up', 41.2, null],
+      ['KPI-2', 'Revenue', '$M', 'up', 212, 'KPI-1'],
+      ['KPI-3', 'Expenses', '$M', 'down', 171, 'KPI-1'],
+      ['KPI-4', 'Opportunity Enablement', 'idx', 'up', 62, 'KPI-1'],
+      ['DCOM-101', 'Online revenue', '$M', 'up', 88.4, 'KPI-2'],
+      ['DCOM-102', 'Average order value', '$', 'up', 64.1, 'DCOM-101'],
+      ['DCOM-103', 'Cost to serve per order', '$', 'down', 7.85, 'KPI-3'],
+      ['DCOM-104', 'Analytics adoption', '%', 'up', 41, 'KPI-4'],
+      ['PLAT-201', 'Platform licensing revenue', '$M', 'up', 19.7, 'KPI-2'],
+      ['PLAT-202', 'Cloud infrastructure cost', '$M', 'down', 23.1, 'KPI-3'],
+      ['PLAT-203', 'DORA: lead time for changes', 'days', 'down', 4.2, 'KPI-4'],
+      ['PLAT-204', 'DORA: deployment frequency', '/wk', 'up', 11, 'KPI-4'],
+      ['CHK-301', 'Checkout conversion', '%', 'up', 3.1, 'DCOM-101'],
+      ['CHK-302', 'Payment success rate', '%', 'up', 96.2, 'CHK-301'],
+      ['CHK-303', 'Cart abandonment', '%', 'down', 68, 'CHK-301'],
+      ['CHK-304', 'Checkout page load (p75)', 's', 'down', 2.4, 'CHK-301'],
+      ['CHK-305', 'Refund processing cost', '$', 'down', 3.2, 'DCOM-103'],
+      ['MOB-401', 'App order share', '%', 'up', 27, 'DCOM-101'],
+      ['MOB-402', 'Crash-free sessions', '%', 'up', 99.1, 'MOB-401'],
+      ['DEVP-501', 'Build time (p50)', 'min', 'down', 14, 'PLAT-203'],
+      ['DEVP-502', 'Pipeline success rate', '%', 'up', 88, 'PLAT-204'],
+      ['DEVP-503', 'Self-serve environments', '%', 'up', null, 'PLAT-204'],
+      ['PAY-601', 'Fraud review time', 'h', 'down', 6.5, 'CHK-302'],
+    ];
+    // work item, type, summary, KPI, change, date (null = undated), demo status, relative?
+    const TARGETS = [
+      ['DCOM-7', 'Outcome', 'Grow online share of revenue', 'DCOM-101', '+12%', '2027-12-31'],
+      ['DCOM-9', 'Theme', 'Mobile-first shopping', 'MOB-401', '+5 pts', '2027-09-30', null, true],
+      ['DCOM-11', 'Theme', 'Lean fulfilment', 'DCOM-103', '−8%', '2027-06-30'],
+      ['PLAT-3', 'Outcome', 'Elite DORA performance', 'PLAT-203', '−30%', '2027-12-31'],
+      ['PLAT-4', 'Theme', 'FinOps', 'PLAT-202', '−10%', null],
+      ['CHK-9', 'Initiative', 'Express pay', 'CHK-301', '+0.2 pts', '2026-09-30', 'hit'],
+      ['CHK-12', 'Initiative', 'One-page checkout', 'CHK-301', '+2 pts', '2027-03-31'],
+      ['CHK-14', 'Initiative', 'Faster checkout pages', 'CHK-304', '−0.8 s', '2027-06-30', null, true],
+      ['MOB-18', 'Initiative', 'Crash triage', 'MOB-402', '+0.6 pts', '2026-08-31', 'missed'],
+      ['MOB-22', 'Initiative', 'Stability sprint', 'MOB-402', '+0.5 pts', '2027-02-28'],
+      ['DEVP-14', 'Initiative', 'Remote build cache', 'DEVP-501', '−40%', '2027-06-30'],
+      ['PAY-88', 'Epic', 'Retry declined cards', 'CHK-302', '+1.5 pts', '2027-02-28'],
+      ['PAY-91', 'Story', 'Apple Pay token refresh', 'CHK-302', '+0.5 pts', '2027-01-31'],
+      ['PAY-95', 'Epic', 'Automated refunds', 'CHK-305', '−15%', '2027-06-30', null, true],
+      ['PAY-97', 'Story', '3-D Secure fallback', 'CHK-301', '+0.3 pts', null],
+    ];
+    const spaceOfKey = (key) => key.split('-')[0];
+    function seed(mode) {
+      let kpis = SEED.map(([key, name, unit, dir, value, parent]) => ({ key, name, unit, dir, value, parent, space: spaceOfKey(key) }));
+      if (mode === 'one') {
+        const rekey = new Map(kpis.map((k, i) => [k.key, `KPI-${i + 1}`]));
+        kpis = kpis.map((k) => ({ ...k, key: rekey.get(k.key), parent: k.parent ? rekey.get(k.parent) : null, space: 'KPI' }));
+        return { kpis, targets: TARGETS.map((t) => [t[0], t[1], t[2], rekey.get(t[3]), ...t.slice(4)]) };
+      }
+      return { kpis, targets: TARGETS.slice() };
+    }
+
+    // ── State ──────────────────────────────────────────────────
+    const state = {
+      ancestors: 'compact',  // how ancestors outside the KPI space filter are drawn
+      data: 'many',
+      create: 'all',
+      ...seed('many'),
+      spaceFilter: new Set(),
+      workFilter: new Set(),
+      collapsed: new Set(),
+      openDd: null, ddQuery: '',
+      menu: null,
+      modal: null, flag: null,
+      nextId: 900,
+    };
+
+    // The filters are remembered in this browser (localStorage), as decided for now.
+    const FILTERS_KEY = 'kpi-timeline:filters';
+    function saveFilters() {
+      try { localStorage.setItem(FILTERS_KEY, JSON.stringify({ data: state.data, space: [...state.spaceFilter], work: [...state.workFilter] })); } catch { /* storage unavailable */ }
+    }
+    function loadFilters() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(FILTERS_KEY) ?? 'null');
+        if (saved && saved.data === state.data) { state.spaceFilter = new Set(saved.space); state.workFilter = new Set(saved.work); }
+      } catch { /* storage unavailable: show all KPIs */ }
+    }
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const typeIcon = (type) => `<img class="ti" src="${ICONS[type]}" alt="${type}" title="${type}" width="16" height="16" />`;
+    const avatar = (s) => `<span class="avatar" style="background:${SPACES[s].color}">${s.slice(0, 3)}</span>`;
+    const canCreateIn = (s) => state.create === 'all' || state.create === s;
+    const kpiByKey = () => new Map(state.kpis.map((k) => [k.key, k]));
+    const DAY = 86400000;
+    const TODAY = Date.parse('2026-11-21');
+    const fmtShort = (iso) => new Date(iso + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const fmtVal = (v) => (v == null ? '—' : Math.abs(v) >= 1000 ? Math.round(v).toLocaleString('en-US') : `${+v.toFixed(2)}`);
+
+    // ── Readings (made up, deterministic), projection, targets ─
+    function hash(s) { let h = 2166136261; for (const c of s) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; }
+    function readingsOf(k) {
+      if (k.value == null) return [];
+      let r = hash(k.name);
+      const rnd = () => ((r = Math.imul(r ^ (r >>> 15), 2246822507) >>> 0) % 1000) / 1000 - 0.5;
+      const sign = k.dir === 'up' ? 1 : -1;
+      const pts = [];
+      let v = k.value;
+      for (let m = 10; m >= 0; m -= 1) { pts.unshift({ t: Date.UTC(2026, m, 15), v }); v = v * (1 - sign * 0.012) + rnd() * Math.abs(k.value) * 0.025; }
+      return pts;
+    }
+    function readingAt(pts, t) {
+      if (!pts.length) return null;
+      if (t <= pts[0].t) return pts[0].v;
+      for (let i = 1; i < pts.length; i += 1) if (t <= pts[i].t) { const a = pts[i - 1], b = pts[i]; return a.v + ((b.v - a.v) * (t - a.t)) / (b.t - a.t); }
+      return pts[pts.length - 1].v;
+    }
+    function projection(pts, halfLife = 60) {
+      if (pts.length < 2) return null;
+      const last = pts[pts.length - 1];
+      let sw = 0, swx = 0, swy = 0, swxx = 0, swxy = 0;
+      for (const p of pts) { const x = (p.t - last.t) / DAY, w = Math.pow(0.5, -x / halfLife); sw += w; swx += w * x; swy += w * p.v; swxx += w * x * x; swxy += w * x * p.v; }
+      const den = sw * swxx - swx * swx;
+      const slope = den === 0 ? 0 : (sw * swxy - swx * swy) / den;
+      return { at: (t) => last.v + slope * ((t - last.t) / DAY), from: last };
+    }
+    function targetValue(k, tg, pts) {
+      const m = /^([+−-])([\d.]+)\s*(%|pts|s)?/.exec(tg[4]);
+      const t = tg[5] ? Date.parse(tg[5]) : null;
+      if (!pts.length || !m) return null;
+      if (tg[6]) { const at = readingAt(pts, t), good = k.dir === 'up' ? 1 : -1; return tg[6] === 'hit' ? at - good * Math.abs(at) * 0.01 : at + good * Math.abs(at) * 0.03; }
+      const base = pts[pts.length - 1].v, sign = m[1] === '+' ? 1 : -1, n = parseFloat(m[2]);
+      return m[3] === '%' ? base * (1 + (sign * n) / 100) : base + sign * n;
+    }
+    function statusOf(k, tg, pts, to) {
+      if (!tg[5]) return 'undated';
+      const t = Date.parse(tg[5]);
+      if (t > TODAY || to == null) return tg[7] ? 'relative' : 'fixed';
+      const at = readingAt(pts, t);
+      return (k.dir === 'up' ? at >= to : at <= to) ? 'hit' : 'missed';
+    }
+
+    // ── Scope (KPI space + Work from) ──────────────────────────
+    const targetsOf = (key) => state.targets.filter((t) => t[3] === key && (!state.workFilter.size || state.workFilter.has(spaceOfKey(t[0]))));
+    function model() {
+      const map = kpiByKey();
+      const role = new Map();
+      for (const k of state.kpis) {
+        if ((!state.spaceFilter.size || state.spaceFilter.has(k.space)) && (!state.workFilter.size || targetsOf(k.key).length)) role.set(k.key, 'match');
+      }
+      for (const key of [...role.keys()]) {
+        let p = map.get(map.get(key).parent);
+        while (p) { if (!role.has(p.key)) role.set(p.key, 'context'); p = map.get(p.parent); }
+      }
+      const kids = new Map();
+      for (const k of state.kpis) {
+        if (!role.has(k.key)) continue;
+        const p = k.parent && role.has(k.parent) ? k.parent : null;
+        if (!kids.has(p)) kids.set(p, []);
+        kids.get(p).push(k);
+      }
+      return { role, kids, spaces: new Set(state.kpis.filter((k) => role.has(k.key)).map((k) => k.space)) };
+    }
+
+    // ── Rendering ──────────────────────────────────────────────
+    const X0 = Date.UTC(2026, 6, 1), X1 = Date.UTC(2028, 0, 1);
+    const QUARTERS = [[2026, 3], [2026, 4], [2027, 1], [2027, 2], [2027, 3], [2027, 4]];
+
+    function rowHtml(k, depth, m) {
+      const role = m.role.get(k.key);
+      const ctx = role === 'context';
+      const compact = ctx && state.ancestors === 'compact';
+      const kids = m.kids.get(k.key) ?? [];
+      const open = !state.collapsed.has(k.key);
+      const chev = kids.length ? `<button class="chev" data-tree="${k.key}" aria-expanded="${open}" aria-label="${open ? 'Collapse' : 'Expand'} ${esc(k.name)}">${open ? CHEV_DOWN : CHEV_RIGHT}</button>` : '<span class="chev-sp"></span>';
+      const badge = m.spaces.size > 1 ? `<span class="loz" title="${esc(SPACES[k.space].name)}">${k.space}</span>` : '';
+      const menuOpen = state.menu === k.key;
+      const menu = menuOpen ? `<div class="menu" role="menu"><button role="menuitem">Edit name, unit, direction</button><button role="menuitem">Move under another KPI…</button><button role="menuitem">Open in Jira</button></div>` : '';
+      const actions = `<span class="row-actions ${menuOpen ? 'menu-open' : ''}">
+          <button class="pbtn" data-add="${k.key}" aria-label="Create child KPI for ${esc(k.name)}" title="Create child KPI">${PLUS_ICON}</button>
+          <span class="menu-wrap"><button class="pbtn" data-menu="${k.key}" aria-haspopup="menu" aria-expanded="${menuOpen}" aria-label="More actions for ${esc(k.name)}" title="More actions">${MORE_ICON}</button>${menu}</span></span>`;
+      const und = state.hasUndated ? `<div class="und">${compact ? '' : targetsOf(k.key).filter((t) => !t[5]).map((t) => `<span class="chip" title="${esc(`${t[0]} ${t[2]}: ${t[4]}, no date`)}">≈ ${fmtVal(targetValue(k, t, readingsOf(k)))}</span>`).join(' ')}</div>` : '';
+      return `<div class="r ${compact ? 'ctx' : 'full'} ${ctx ? 'outside' : ''}" ${ctx ? 'title="Outside the KPI space filter: shown for context"' : ''}>
+        <div class="lab" style="--pad:${8 + depth * 20}px">
+          <div class="l1">${chev}<a class="name" href="/browse/${k.key}" onclick="return false" title="${esc(k.name)}">${esc(k.name)}</a>${badge}</div>
+          ${compact ? '' : `<div class="l2">${esc(k.unit)} <span class="${k.dir}">${k.dir === 'up' ? '↑' : '↓'}</span></div>`}
+          ${actions}
+        </div>
+        <div class="track" ${compact ? '' : `data-track="${k.key}"`}></div>${und}
+      </div>`;
+    }
+    function renderTree(k, depth, m, out) {
+      out.push(rowHtml(k, depth, m));
+      if (state.collapsed.has(k.key)) return;
+      for (const c of m.kids.get(k.key) ?? []) renderTree(c, depth + 1, m, out);
+    }
+
+    function legend(m) {
+      const counts = { hit: 0, missed: 0, fixed: 0, relative: 0, undated: 0 };
+      const types = new Map();
+      for (const k of state.kpis) {
+        if (m.role.get(k.key) !== 'match') continue;
+        const pts = readingsOf(k);
+        for (const t of targetsOf(k.key)) { counts[statusOf(k, t, pts, targetValue(k, t, pts))] += 1; types.set(t[1], (types.get(t[1]) ?? 0) + 1); }
+      }
+      const mk = (shape, n, label) => (n ? `<span>${shape}<b>${n}</b> ${label}</span>` : '');
+      return `<div class="legend">
+        <span><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#292a2e" stroke-width="1.5"/><circle cx="11" cy="4" r="2.5" fill="#292a2e"/></svg>Recorded value</span>
+        <span><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="#505258" stroke-dasharray="4 3"/></svg>Projected trend</span>
+        <span class="sep"></span>
+        ${mk('<span style="color:#4c6b1f">◆</span>', counts.hit, 'Hit')}${mk('<span style="color:#c9372c">◆</span>', counts.missed, 'Missed')}
+        ${mk('◆', counts.fixed, 'Upcoming (fixed)')}${mk('<span>⌶</span>', counts.relative, 'Upcoming (relative)')}${mk('<span>▭</span>', counts.undated, 'Undated')}
+        ${types.size ? '<span class="sep"></span>' : ''}${[...types].map(([t, n]) => `<span>${typeIcon(t)}<b>${n}</b> ${t}</span>`).join('')}
+      </div>`;
+    }
+
+    function ddButton(id, label, set) {
+      const txt = set.size === 0 ? 'All' : set.size === 1 ? SPACES[[...set][0]].name : `${set.size} spaces`;
+      return `<div class="dd"><button class="sel ${set.size ? 'on' : ''}" data-dd="${id}" aria-haspopup="listbox" aria-expanded="${state.openDd === id}">${label}: ${esc(txt)}<span class="grow"></span>${SEL_CHEV}</button>${state.openDd === id ? ddPop(id) : ''}</div>`;
+    }
+    function ddPop(id) {
+      const set = id === 'space' ? state.spaceFilter : state.workFilter;
+      const keys = id === 'space' ? [...new Set(state.kpis.map((k) => k.space))] : [...new Set(state.targets.map((t) => spaceOfKey(t[0])))];
+      const q = state.ddQuery.trim().toLowerCase();
+      const shown = keys.filter((s) => !q || s.toLowerCase().includes(q) || SPACES[s].name.toLowerCase().includes(q));
+      return `<div class="dd-pop" data-pop><input type="text" id="ddq" placeholder="Find a space…" value="${esc(state.ddQuery)}" />
+        ${shown.map((s) => `<label class="opt"><input type="checkbox" data-pick="${id}:${s}" ${set.has(s) ? 'checked' : ''} />${avatar(s)}${esc(SPACES[s].name)}<span class="k">${s}</span></label>`).join('') || '<div class="opt">No spaces match</div>'}
+        ${set.size ? `<div class="foot"><button data-clear="${id}">Show all</button></div>` : ''}</div>`;
+    }
+
+    function renderApp() {
+      const m = model();
+      state.hasUndated = state.kpis.some((k) => m.role.get(k.key) === 'match' && targetsOf(k.key).some((t) => !t[5]));
+      const out = [];
+      for (const r of m.kids.get(null) ?? []) renderTree(r, 0, m, out);
+      const head = `<div class="r head"><div class="lab" style="--pad:16px">KPI</div><div class="track" data-track="__head"></div>${state.hasUndated ? '<div class="und">UNDATED</div>' : ''}</div>`;
+      document.getElementById('app').innerHTML = `
+        <div class="toolbar"><h2>KPI Timeline</h2>
+          ${ddButton('space', 'KPI space', state.spaceFilter)}${ddButton('work', 'Work from', state.workFilter)}
+          <button class="btn-primary" data-add="" ${state.create === 'none' ? 'disabled' : ''}>${PLUS_ICON}Add KPI</button></div>
+        <div class="tl">${legend(m)}<div class="grid" style="--und:${state.hasUndated ? '140px' : '0px'}">${head}${out.join('') || '<div class="empty">No KPIs match the filters.</div>'}</div></div>
+        <div class="tip"><b>Tip:</b> click a past date to record a value · click a future date to add a target · click a value to edit it · click a target to open its issue.</div>`;
+      drawTracks();
+      const q = document.getElementById('ddq');
+      if (q) { q.focus(); q.setSelectionRange(q.value.length, q.value.length); q.oninput = () => { state.ddQuery = q.value; renderApp(); }; }
+    }
+
+    function drawTracks() {
+      const tracks = document.querySelectorAll('[data-track]');
+      if (!tracks.length) return;
+      const W = tracks[0].clientWidth;
+      const X = (t) => ((t - X0) / (X1 - X0)) * W;
+      const grid = QUARTERS.map(([y, q]) => `<line x1="${X(Date.UTC(y, (q - 1) * 3, 1))}" x2="${X(Date.UTC(y, (q - 1) * 3, 1))}" y1="0" y2="100%" stroke="#0b120e24"/>`).join('');
+      const today = `<line x1="${X(TODAY)}" x2="${X(TODAY)}" y1="0" y2="100%" stroke="#388bff" stroke-width="2"/>`;
+      const map = kpiByKey();
+      for (const el of tracks) {
+        const key = el.dataset.track;
+        if (key === '__head') {
+          el.innerHTML = `<svg>${grid}${QUARTERS.map(([y, q]) => `<text x="${X(Date.UTC(y, (q - 1) * 3, 1)) + 12}" y="22" font-size="13" font-weight="600" fill="#505258" letter-spacing=".5">Q${q} ${y}</text>`).join('')}</svg>`;
+          continue;
+        }
+        const k = map.get(key);
+        const H = el.clientHeight;
+        const pts = readingsOf(k);
+        const proj = projection(pts);
+        const tgs = targetsOf(k.key).filter((t) => t[5]).map((t) => { const to = targetValue(k, t, pts); return { t, to, x: Date.parse(t[5]), status: statusOf(k, t, pts, to) }; });
+        const vals = [...pts.map((p) => p.v), ...tgs.map((x) => x.to).filter((v) => v != null)];
+        if (proj) vals.push(proj.at(X1));
+        const parts = [grid, today];
+        if (vals.length) {
+          let lo = Math.min(...vals), hi = Math.max(...vals);
+          if (hi === lo) { hi += 1; lo -= 1; }
+          const Y = (v) => H * 0.8 - ((v - lo) / (hi - lo)) * H * 0.6;
+          if (proj) parts.push(`<line x1="${X(proj.from.t)}" y1="${Y(proj.from.v)}" x2="${X(X1)}" y2="${Y(proj.at(X1))}" stroke="#505258" stroke-dasharray="5 4"/>`);
+          parts.push(`<polyline fill="none" stroke="#292a2e" stroke-width="1.5" points="${pts.map((p) => `${X(p.t)},${Y(p.v)}`).join(' ')}"/>`);
+          for (const p of pts) parts.push(`<circle cx="${X(p.t)}" cy="${Y(p.v)}" r="2.5" fill="#292a2e"><title>${fmtVal(p.v)} ${esc(k.unit)} · ${new Date(p.t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</title></circle>`);
+          for (const x of tgs) {
+            if (x.to == null) continue;
+            const cx = X(x.x), cy = Y(x.to);
+            const title = `<title>${x.t[0]} ${esc(x.t[2])}: ${esc(x.t[4])} by ${fmtShort(x.t[5])} → ${fmtVal(x.to)} ${esc(k.unit)} (${x.status === 'fixed' || x.status === 'relative' ? 'upcoming' : x.status})</title>`;
+            if (x.status === 'hit' || x.status === 'missed') {
+              const c = x.status === 'hit' ? '#4c6b1f' : '#c9372c';
+              parts.push(`<g>${title}<rect x="${cx - 8}" y="${cy - 8}" width="16" height="16" rx="3" fill="${c}"/><image href="${ICONS[x.t[1]]}" x="${cx - 6}" y="${cy - 6}" width="12" height="12" style="filter: brightness(0) invert(1)"/>
+                <circle cx="${cx + 7}" cy="${cy + 7}" r="5" fill="#fff" stroke="${c}"/><text x="${cx + 7}" y="${cy + 10}" font-size="8" text-anchor="middle" fill="${c}" font-weight="700">${x.status === 'hit' ? '✓' : '✕'}</text></g>`);
+            } else {
+              const beam = x.status === 'relative' ? `<line x1="${cx}" x2="${cx}" y1="${cy - 12}" y2="${cy + 12}" stroke="#505258"/><line x1="${cx - 4}" x2="${cx + 4}" y1="${cy - 12}" y2="${cy - 12}" stroke="#505258"/><line x1="${cx - 4}" x2="${cx + 4}" y1="${cy + 12}" y2="${cy + 12}" stroke="#505258"/>` : '';
+              parts.push(`<g>${title}${beam}<rect x="${cx - 9}" y="${cy - 9}" width="18" height="18" rx="3" fill="#fff"/><image href="${ICONS[x.t[1]]}" x="${cx - 8}" y="${cy - 8}" width="16" height="16" style="filter: grayscale(1) brightness(.45)"/></g>`);
+            }
+          }
+        }
+        el.innerHTML = `<svg>${parts.join('')}</svg>`;
+      }
+    }
+
+    // ── Add KPI dialog (Jira's modernised create modal) ────────
+    const PARENT_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentcolor" fill-rule="evenodd" d="M10.271.05a.75.75 0 0 1 .479.7v4.635l3.147.63a.75.75 0 0 1 .407 1.24l-7.75 8.5a.75.75 0 0 1-1.304-.505v-4.635l-3.147-.63a.75.75 0 0 1-.407-1.24l7.75-8.5A.75.75 0 0 1 10.27.05M3.698 8.776l3.052.61v3.93l5.552-6.09-3.052-.61v-3.93z" clip-rule="evenodd"/></svg>';
+    const DOWN_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentcolor" d="m14.53 6.03-6 6a.75.75 0 0 1-1.06 0l-6-6 1.06-1.06L8 10.44l5.47-5.47z"/></svg>';
+    const CLOSE_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentcolor" d="M13.53 3.53 9.06 8l4.47 4.47-1.06 1.06L8 9.06l-4.47 4.47-1.06-1.06L6.94 8 2.47 3.53l1.06-1.06L8 6.94l4.47-4.47z"/></svg>';
+    // A default only when there's no choice to make: one space you can create KPIs in, or every KPI in one space.
+    function defaultSpace() {
+      const creatable = creatableSpaces();
+      if (creatable.length === 1) return creatable[0];
+      const withKpis = new Set(state.kpis.map((k) => k.space));
+      if (withKpis.size === 1) { const [only] = withKpis; if (canCreateIn(only)) return only; }
+      return null;
+    }
+    function renderFlag() {
+      const root = document.getElementById('flagRoot');
+      const f = state.flag;
+      if (!f) { root.innerHTML = ''; return; }
+      const hidden = !model().role.has(f.key);
+      root.innerHTML = `<div class="flag" role="status"><span class="ok">✓</span>
+        <span class="t"><span class="pkey">${esc(f.key)}</span> ${esc(f.name)} created</span><button class="pbtn" id="flagX" aria-label="Dismiss" style="width:24px;height:24px">${CLOSE_ICON}</button>
+        <span class="d">In ${esc(SPACES[f.space].name)} (${f.space})${hidden ? '. It\'s hidden by the KPI space filter.' : '.'}</span>
+        <span class="links">${hidden ? '<button id="flagShow">Show it</button>' : ''}<button>Open KPI</button></span></div>`;
+      document.getElementById('flagX').onclick = () => { state.flag = null; renderFlag(); };
+      const show = document.getElementById('flagShow');
+      if (show) show.onclick = () => { state.spaceFilter.add(f.space); state.text = ''; renderApp(); renderFlag(); };
+    }
+    const creatableSpaces = () => (state.data === 'one' ? ['KPI'] : KPI_SPACES).filter(canCreateIn);
+    function renderModal() {
+      const root = document.getElementById('modalRoot');
+      if (!state.modal) { root.innerHTML = ''; return; }
+      const md = state.modal;
+      const map = kpiByKey();
+      if (md.space === undefined) md.space = defaultSpace(md.parent);
+      const creatable = creatableSpaces();
+      const q = (md.spaceQuery ?? '').trim().toLowerCase();
+      const spaceOpts = creatable.filter((sp) => !q || sp.toLowerCase().includes(q) || SPACES[sp].name.toLowerCase().includes(q));
+      const pop = md.spaceOpen ? `<div class="space-pop" data-keep>
+          <input id="mSpaceQ" placeholder="Find a space…" value="${esc(md.spaceQuery ?? '')}" />
+          ${spaceOpts.map((sp) => `<div class="opt" role="option" data-mspace="${sp}" aria-selected="${sp === md.space}">${avatar(sp)}${esc(SPACES[sp].name)}<span class="k">${sp}</span></div>`).join('') || '<div class="opt note">No spaces match</div>'}
+          <div class="foot">Spaces with the KPI work type where you can create work items</div></div>` : '';
+      const spaceChip = creatable.length
+        ? `<button class="m-chip ${md.space || !md.tried ? '' : 'missing'}" data-mspace-toggle aria-haspopup="listbox" aria-expanded="${!!md.spaceOpen}" aria-label="Space: ${md.space ? esc(SPACES[md.space].name) + ' (' + md.space + ')' : 'none chosen'}">${md.space ? `${avatar(md.space)}${md.space}` : 'Choose a space'} ▾</button>${pop}`
+        : '<span class="m-chip static missing">No space available</span>';
+      const pq = (md.parentQuery ?? '').trim().toLowerCase();
+      const parents = state.kpis.filter((k) => !pq || k.name.toLowerCase().includes(pq) || SPACES[k.space].name.toLowerCase().includes(pq) || k.key.toLowerCase().includes(pq)).slice(0, 50);
+      md.hi = Math.min(md.hi ?? 0, Math.max(parents.length - 1, 0));
+      const pSel = md.parent ? map.get(md.parent) : null;
+      const parentField = !md.parentOpen && !pSel
+        ? `<div class="pf-row" role="button" tabindex="0" data-pf-open>${PARENT_ICON}Parent</div>`
+        : `<div class="pf" data-pf-keep><label class="pf-label" for="mParentQ">Parent</label>
+          ${md.parentMenu
+            ? `<div class="pf-input focus"><input id="mParentQ" placeholder="Select parent" value="${esc(md.parentQuery ?? '')}" role="combobox" aria-expanded="true" aria-controls="pfMenu" autocomplete="off" /><span class="chv">${DOWN_ICON}</span></div>
+               <div class="pf-menu" id="pfMenu" role="listbox">${parents.map((k, i) => `<div class="pf-opt" role="option" data-pf-pick="${k.key}" aria-selected="${i === md.hi}"><div class="l1" title="${esc(SPACES[k.space].name)}">${avatar(k.space)}${typeIcon('KPI')}<span class="pkey">${esc(k.key)}</span></div><div class="l2">${esc(k.name)}</div></div>`).join('') || '<div class="pf-none">No KPIs match</div>'}</div>`
+            : `<button type="button" class="pf-input" data-pf-menu aria-haspopup="listbox">${pSel ? `${avatar(pSel.space)}${typeIcon('KPI')}<span class="pkey">${esc(pSel.key)}</span>&nbsp;${esc(pSel.name)}<span class="chv pf-clear" role="button" aria-label="Clear parent" data-pf-clear>${CLOSE_ICON}</span>` : '<span class="k">Select parent</span>'}<span class="chv"${pSel ? ' style="margin-left:4px"' : ''}>${DOWN_ICON}</span></button>`}
+        </div>`;
+      const why = !creatable.length
+        ? '<span class="why err">You can\'t create KPIs in any space.</span>'
+        : !md.space && md.tried ? '<span class="why err">Choose a space.</span>'
+        : '<span></span>';
+      root.innerHTML = `<div class="scrim" id="scrim"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+        <div class="m-head">
+          <h1 id="mTitle" class="vh">Create KPI${md.parent ? ` under ${esc(map.get(md.parent)?.name ?? md.parent)}` : ''}</h1>
+          <div class="m-chips"><span style="position:relative">${spaceChip}</span><span class="m-div"></span>
+            <span class="m-chip static" aria-label="Type: KPI" title="KPIs are always the KPI work type">${typeIcon('KPI')}KPI</span></div>
+          <button class="pbtn" id="mClose" aria-label="Close">${CLOSE_ICON}</button>
+        </div>
+        <div class="m-body">
+          <textarea class="m-summary" id="mName" rows="1" placeholder="KPI name" aria-label="Summary (KPI name)">${esc(md.name ?? '')}</textarea>
+          <div class="m-fields">
+            <label for="mUnit">Unit</label><input id="mUnit" placeholder="e.g. %, $M, days" value="${esc(md.unit ?? '')}" />
+            <label>Direction</label><div class="seg" id="mDir"><button type="button" data-dir="up" aria-pressed="${(md.dir ?? 'up') === 'up'}">↑ Higher is better</button><button type="button" data-dir="down" aria-pressed="${md.dir === 'down'}">↓ Lower is better</button></div>
+          </div>
+          ${parentField}
+          <textarea class="m-desc" id="mDesc" placeholder="Add a description: what this measures and how it's collected"></textarea>
+        </div>
+        <div class="m-foot">${why}
+          <div class="right"><label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="mAnother" ${md.another ? 'checked' : ''} />Create another</label>
+            <button class="m-create" id="mSave" ${creatable.length ? '' : 'disabled'}>Create</button></div>
+        </div>
+      </section></div>`;
+      const keep = () => { md.name = document.getElementById('mName').value; md.unit = document.getElementById('mUnit').value; md.another = document.getElementById('mAnother').checked; };
+      const sq = document.getElementById('mSpaceQ');
+      if (sq) { sq.focus(); sq.setSelectionRange(sq.value.length, sq.value.length); sq.oninput = () => { md.spaceQuery = sq.value; keep(); renderModal(); };
+        sq.onkeydown = (e) => { if (e.key === 'Enter' && spaceOpts[0]) { md.space = spaceOpts[0]; md.spaceOpen = false; keep(); renderModal(); } if (e.key === 'Escape') { e.stopPropagation(); md.spaceOpen = false; keep(); renderModal(); } }; }
+      const pqEl = document.getElementById('mParentQ');
+      if (pqEl) {
+        pqEl.focus(); pqEl.setSelectionRange(pqEl.value.length, pqEl.value.length);
+        pqEl.oninput = () => { keep(); md.parentQuery = pqEl.value; md.hi = 0; renderModal(); };
+        pqEl.onkeydown = (e) => {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); keep(); md.hi = Math.max(0, Math.min(parents.length - 1, md.hi + (e.key === 'ArrowDown' ? 1 : -1))); renderModal(); }
+          else if (e.key === 'Enter' && parents[md.hi]) { e.preventDefault(); keep(); md.parent = parents[md.hi].key; md.parentMenu = false; md.parentQuery = ''; renderModal(); }
+          else if (e.key === 'Escape') { e.stopPropagation(); keep(); md.parentMenu = false; md.parentQuery = ''; renderModal(); }
+        };
+      } else if (!sq) document.getElementById('mName').focus();
+      const close = () => { state.modal = null; renderModal(); };
+      document.getElementById('mClose').onclick = close;
+      document.getElementById('scrim').onclick = (e) => {
+        if (e.target.id === 'scrim') return close();
+        const toggle = e.target.closest('[data-mspace-toggle]');
+        const opt = e.target.closest('[data-mspace]');
+        const dir = e.target.closest('[data-dir]');
+        const pOpen = e.target.closest('[data-pf-open],[data-pf-menu]');
+        const pPick = e.target.closest('[data-pf-pick]');
+        const pClear = e.target.closest('[data-pf-clear]');
+        if (toggle) { keep(); md.spaceOpen = !md.spaceOpen; md.spaceQuery = ''; renderModal(); }
+        else if (opt) { keep(); md.space = opt.dataset.mspace; md.spaceOpen = false; renderModal(); }
+        else if (dir) { keep(); md.dir = dir.dataset.dir; renderModal(); }
+        else if (pClear) { keep(); md.parent = null; md.parentOpen = false; md.parentMenu = false; renderModal(); }
+        else if (pOpen) { keep(); md.parentOpen = true; md.parentMenu = true; md.parentQuery = ''; md.hi = 0; renderModal(); }
+        else if (pPick) { keep(); md.parent = pPick.dataset.pfPick; md.parentMenu = false; md.parentQuery = ''; renderModal(); }
+        else if (md.parentMenu && !e.target.closest('[data-pf-keep]')) { keep(); md.parentMenu = false; md.parentQuery = ''; renderModal(); }
+        else if (md.spaceOpen && !e.target.closest('[data-keep]')) { keep(); md.spaceOpen = false; renderModal(); }
+      };
+      document.getElementById('mSave').onclick = () => {
+        keep();
+        if (!md.space) { md.tried = true; renderModal(); return; }
+        const key = `${md.space}-${state.nextId++}`;
+        state.kpis.push({ key, name: (md.name ?? '').trim() || 'New KPI', unit: (md.unit ?? '').trim() || '%', dir: md.dir ?? 'up', value: null, parent: md.parent, space: md.space });
+        if (md.parent) state.collapsed.delete(md.parent);
+        state.flag = { key, name: (md.name ?? '').trim() || 'New KPI', space: md.space };
+        renderFlag();
+        if (md.another) { md.name = ''; renderApp(); renderModal(); return; }
+        state.modal = null;
+        render();
+      };
+    }
+
+    // ── Controls and events ────────────────────────────────────
+    function seg(id, opts, cur, onPick) {
+      const el = document.getElementById(id);
+      el.innerHTML = opts.map(([v, l]) => `<button aria-pressed="${v === cur}" data-v="${v}">${l}</button>`).join('');
+      el.onclick = (e) => { const b = e.target.closest('button'); if (b) onPick(b.dataset.v); };
+    }
+    function renderControls() {
+      seg('ctlAnc', [['compact', 'Compact (no track)'], ['full', 'Full (as today)']], state.ancestors, (v) => { state.ancestors = v; render(); });
+      seg('ctlData', [['one', '1 space (today)'], ['many', '7 spaces']], state.data, (v) => { Object.assign(state, seed(v), { data: v, spaceFilter: new Set(), workFilter: new Set(), collapsed: new Set() }); saveFilters(); render(); });
+      seg('ctlCreate', [['all', 'Every KPI space'], ['CHK', 'Only CHK'], ['none', 'None']], state.create, (v) => { state.create = v; render(); });
+    }
+    function render() { renderControls(); renderApp(); renderModal(); }
+
+    document.addEventListener('click', (e) => {
+      const pick = e.target.closest('[data-pick]');
+      if (pick) {
+        const [id, s] = pick.dataset.pick.split(':');
+        const set = id === 'space' ? state.spaceFilter : state.workFilter;
+        set.has(s) ? set.delete(s) : set.add(s);
+        saveFilters();
+        renderApp();
+        return;
+      }
+      if (e.target.closest('[data-pop]')) {
+        const c = e.target.closest('[data-clear]');
+        if (c) { (c.dataset.clear === 'space' ? state.spaceFilter : state.workFilter).clear(); saveFilters(); state.openDd = null; renderApp(); }
+        return;
+      }
+      if (e.target.closest('#modalRoot, #flagRoot')) return;
+      const t = e.target.closest('[data-dd],[data-tree],[data-add],[data-menu]');
+      const hadMenu = state.menu, hadDd = state.openDd;
+      if (!t || !t.dataset.menu) state.menu = null;
+      if (!t || !t.dataset.dd) state.openDd = null;
+      if (!t) { if (hadMenu || hadDd) renderApp(); return; }
+      if (t.dataset.menu) { state.menu = hadMenu === t.dataset.menu ? null : t.dataset.menu; renderApp(); }
+      else if (t.dataset.dd) { state.openDd = hadDd === t.dataset.dd ? null : t.dataset.dd; state.ddQuery = ''; renderApp(); }
+      else if (t.dataset.tree) { state.collapsed.has(t.dataset.tree) ? state.collapsed.delete(t.dataset.tree) : state.collapsed.add(t.dataset.tree); renderApp(); }
+      else if (t.dataset.add !== undefined) { state.modal = { parent: t.dataset.add || null }; renderApp(); renderModal(); }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (state.modal) { state.modal = null; renderModal(); } else if (state.menu || state.openDd) { state.menu = null; state.openDd = null; renderApp(); }
+    });
+    window.addEventListener('resize', () => drawTracks());
+
+    loadFilters();
+    render();
+  </script>
+</body>
+</html>

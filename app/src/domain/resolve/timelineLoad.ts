@@ -22,7 +22,7 @@ import { buildKpiTargets, type KpiTargetContribution } from './timelineTargets';
  * client (merging Phase 2 into the skeleton) share this one implementation.
  */
 
-/** Raw per-KPI contributions, keyed by KPI id (a KPI's id is its issue key). */
+/** Raw per-KPI contributions, keyed by KPI id (its issue id, spec 11 · 03). */
 export type TargetContributionsByKpi = Record<string, KpiTargetContribution[]>;
 
 /** Fill every node's targets from `contributions` and clear its `resolving` flag. */
@@ -69,6 +69,7 @@ export function insertCreatedKpi(data: TimelineData, kpi: CreatedKpi): TimelineD
     undated: [],
     readings: [],
     children: [],
+    ...(kpi.space ? { space: kpi.space } : {}),
   });
   if (kpi.parentKpiId && containsKpi(data.roots, kpi.parentKpiId)) {
     const parentId = kpi.parentKpiId;
@@ -236,6 +237,26 @@ export function applyReadingEdits(
   return [...byDate.entries()]
     .map(([date, value]) => ({ date, value }))
     .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Lay readings loaded after the skeleton (`getTimelineReadings`, spec 11 · 08)
+ * over KPIs the load left them out of; a KPI not in `readings` keeps its own.
+ */
+export function applyLoadedReadings(
+  data: TimelineData,
+  readings: Readonly<Record<string, TimelineReadingDto[]>>,
+): TimelineData {
+  if (Object.keys(readings).length === 0) return data;
+  const patch = (node: TimelineNodeDto): TimelineNodeDto => {
+    const children = node.children.map(patch);
+    const loaded = readings[node.kpiId];
+    if (!loaded || !node.readingsPending) return { ...node, children };
+    const { readingsPending, ...rest } = node;
+    void readingsPending;
+    return { ...rest, readings: loaded, children };
+  };
+  return { ...data, roots: data.roots.map(patch) };
 }
 
 /** `applyReadingEdits` across a timeline tree (each node by its kpiId). */

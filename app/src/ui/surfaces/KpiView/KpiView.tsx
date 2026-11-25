@@ -35,7 +35,7 @@ import { projectSeries, type TimelineNodeDto, type TimelineReadingDto, type Time
 
 /**
  * KPI View (Custom UI) — the single-KPI chart shown on the Issue panel when the
- * issue IS a KPI (it lives in the KPI space, Feature 04). It draws the SAME plot
+ * issue IS a KPI (of the KPI work type, Feature 04). It draws the SAME plot
  * the KPI Timeline draws for one row — quarter date axis, recorded-value
  * sparkline, target markers, hover tooltip, record/edit modals — but promoted to
  * a tall (~600px) chart WITH a real vertical value axis (nice-tick gridlines +
@@ -54,6 +54,7 @@ export function KpiView({
   today,
   onRecord,
   recordBlocked = null,
+  parentLinks = null,
   onOpenIssue = openIssue,
   onOpenIssueNewTab = openIssueNewTab,
   loadSiteUrl = getSiteUrl,
@@ -65,6 +66,11 @@ export function KpiView({
    * 10), or null. The chart stays readable; recording is disabled with this reason.
    */
   recordBlocked?: string | null;
+  /**
+   * Set when Jira has this KPI under more than one parent KPI (spec 11 · 06,
+   * one-parent rule): flagged, naming the one the Timeline shows it under.
+   */
+  parentLinks?: { count: number; shownKey: string } | null;
   /**
    * Record (or, with value=null, delete) a reading on this KPI. Resolves once
    * saved; the modal stays open (saving) until then and shows a rejection.
@@ -211,6 +217,16 @@ export function KpiView({
           </DisabledReason>
         </div>
       </div>
+
+      {parentLinks && (
+        <p
+          role="note"
+          className="mb-3 rounded bg-[var(--ds-background-warning,#fff7d6)] px-2 py-1.5 text-xs font-medium leading-4 text-warning"
+        >
+          Linked under {parentLinks.count} KPIs in Jira; showing {parentLinks.shownKey}. Remove the other{' '}
+          {parentLinks.count > 2 ? 'links' : 'link'} in Jira.
+        </p>
+      )}
 
       <KeyHighlightProvider active={highlight.active}>
         {/* Chart: key bar on top, then a sticky value-axis gutter + a scrolling quarter plot */}
