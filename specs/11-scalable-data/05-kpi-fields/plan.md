@@ -70,7 +70,7 @@ All in [jira.ts](../../../app/src/backend/jira.ts) (06 renames `fetchKpiSpaceIss
 | Function | Today | After |
 |---|---|---|
 | `createKpiIssue` | `POST /issue` with `properties: [kpi-meta]` | `POST /issue` with the encoded fields **and** marked `kpi-meta` |
-| `updateKpiDefinition` | `PUT /issue/{id}` (summary) + `PUT /issue/{id}/properties/kpi-meta` | **One** `PUT /issue/{id}` with summary, fields and `properties: [marked kpi-meta]`, if 01 A6 allows; otherwise the same two requests as today, fields first |
+| `updateKpiDefinition` | **One** `PUT /issue/{id}` with the summary and `properties: [kpi-meta]` (Jira already accepts both in one edit) | The same one `PUT`, with the encoded **fields** added next to the summary and the marked `kpi-meta` in `properties`. 01 A4/A6 confirm the custom fields are accepted off-screen in that body |
 
 - Writes stay **as the user** (spec 10): Jira requires Edit or Create Issues, and History names them.
 - Only changed parts are sent, as `updateKpi` already does (commit `ee28014`). A unit-only edit still
@@ -87,8 +87,20 @@ Once the fields are on screens, people edit unit and direction in Jira's own UI.
 `kpi-meta`, so the customer's report would show the old value. The draft proposes a Forge
 **trigger** on `avi:jira:updated:issue`: when the changelog shows a change to the unit or direction
 field on a **marked** KPI, rewrite `kpi-meta` from the fields **as the app**. An unmarked KPI is left
-to the migration (it reconciles both values, below). It's removed in the cleanup release. 01 A9 checks that the event fires for those edits, and that the app's own property writes
-don't fire it (no loop).
+to the migration (it reconciles both values, below). It's removed in the cleanup release.
+
+- **Filtered in the manifest**, so it isn't invoked for every issue edit on the site:
+  - `filter.expression` passes only issues whose `kpi-meta` carries the `fields: true` marker, using
+    Forge's entity-property filtering. The KPI work type id lives in KVS, so the manifest can't name it,
+    and the marker is what the trigger cares about anyway.
+  - `filter.ignoreSelf: true` drops events caused by the app's own writes: KPI edits made through the
+    app (which already write `kpi-meta`) and the `kpi-meta-to-fields` migration (one event per migrated
+    KPI otherwise).
+- **The handler still checks**: it does nothing when `kpi-meta` already matches the fields, in case an
+  event gets through the filter.
+- 01 A9 checks that the event fires for edits made in Jira's UI, and that the expression and `ignoreSelf`
+  behave as above. That includes whether `ignoreSelf` covers the app's requests made **as the user**.
+- A trigger module adds no scope, so it doesn't make the release a major version (overview Q11).
 
 ### Migration: `kpi-meta-to-fields`
 
@@ -154,19 +166,19 @@ Settings first").
 
 ### Step 4 — Sync trigger (if Q3 says yes)
 
-- Manifest `trigger` module + handler; pure `kpiMetaFromChangelog(changelog, cfg)` decides whether to
-  write.
+- Manifest `trigger` module (with `filter.expression` and `filter.ignoreSelf`, above) + handler; pure
+  `kpiMetaFromChangelog(changelog, cfg, storedMeta)` decides whether to write.
 - **Verify:** unit tests: a unit edit on a marked KPI rewrites `kpi-meta`; on an unmarked KPI it does
   nothing; an edit to another field, or on a non-KPI, does nothing; an edit with no changelog item for
-  our fields does nothing.
+  our fields does nothing; an edit whose new values already match `kpi-meta` does nothing.
 
 ### Step 5 — Migration
 
 - `planKpiMetaToFields` + table tests; register the migration.
 - **Verify:** on the pre-migration fixture, run to completion: every KPI's fields hold its values,
   `kpi-meta` is marked and unchanged otherwise, DTOs are unchanged, `pending` is `0`, and a second run
-  changes nothing. KPIs in **two projects** both migrate. A KPI the admin can't edit is a failure naming
-  its space, and the migration ends `failed`. The "field edited in Jira" fixture keeps the field's
+  changes nothing. A KPI the admin can't edit is a failure naming its space, and the migration ends
+  `failed`. (KPIs in **two projects** are checked in 06, which builds the multi-space fixture.) The "field edited in Jira" fixture keeps the field's
   value, rewrites `kpi-meta` to match, and lists it.
 
 ### Step 6 — Live check (dev)

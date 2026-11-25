@@ -176,6 +176,7 @@
     .pf-opt .l1 { display: flex; align-items: center; gap: 8px; color: #505258; }
     .pf-opt .l2 { margin-top: 2px; }
     .pf-opt .avatar { width: 16px; height: 16px; font-size: 6px; border-radius: 3px; }
+    .pkey { color: #1868db; font-weight: 400; }
     .pf-none { padding: 8px 16px; color: var(--text-subtlest); }
     .m-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px; border-top: 1px solid #0b120e24; }
     .m-foot .why { font-size: 12px; color: var(--text-subtle); }
@@ -557,7 +558,7 @@
       if (!f) { root.innerHTML = ''; return; }
       const hidden = !model().role.has(f.key);
       root.innerHTML = `<div class="flag" role="status"><span class="ok">✓</span>
-        <span class="t">${esc(f.name)} created</span><button class="pbtn" id="flagX" aria-label="Dismiss" style="width:24px;height:24px">${CLOSE_ICON}</button>
+        <span class="t"><span class="pkey">${esc(f.key)}</span> ${esc(f.name)} created</span><button class="pbtn" id="flagX" aria-label="Dismiss" style="width:24px;height:24px">${CLOSE_ICON}</button>
         <span class="d">In ${esc(SPACES[f.space].name)} (${f.space})${hidden ? '. It\'s hidden by the KPI space filter.' : '.'}</span>
         <span class="links">${hidden ? '<button id="flagShow">Show it</button>' : ''}<button>Open KPI</button></span></div>`;
       document.getElementById('flagX').onclick = () => { state.flag = null; renderFlag(); };
@@ -590,8 +591,8 @@
         : `<div class="pf" data-pf-keep><label class="pf-label" for="mParentQ">Parent</label>
           ${md.parentMenu
             ? `<div class="pf-input focus"><input id="mParentQ" placeholder="Select parent" value="${esc(md.parentQuery ?? '')}" role="combobox" aria-expanded="true" aria-controls="pfMenu" autocomplete="off" /><span class="chv">${DOWN_ICON}</span></div>
-               <div class="pf-menu" id="pfMenu" role="listbox">${parents.map((k, i) => `<div class="pf-opt" role="option" data-pf-pick="${k.key}" aria-selected="${i === md.hi}"><div class="l1">${avatar(k.space)}${typeIcon('KPI')}${esc(SPACES[k.space].name)}</div><div class="l2">${esc(k.name)}</div></div>`).join('') || '<div class="pf-none">No KPIs match</div>'}</div>`
-            : `<button type="button" class="pf-input" data-pf-menu aria-haspopup="listbox">${pSel ? `${avatar(pSel.space)}${typeIcon('KPI')}${esc(pSel.name)}<span class="chv pf-clear" role="button" aria-label="Clear parent" data-pf-clear>${CLOSE_ICON}</span>` : '<span class="k">Select parent</span>'}<span class="chv"${pSel ? ' style="margin-left:4px"' : ''}>${DOWN_ICON}</span></button>`}
+               <div class="pf-menu" id="pfMenu" role="listbox">${parents.map((k, i) => `<div class="pf-opt" role="option" data-pf-pick="${k.key}" aria-selected="${i === md.hi}"><div class="l1" title="${esc(SPACES[k.space].name)}">${avatar(k.space)}${typeIcon('KPI')}<span class="pkey">${esc(k.key)}</span></div><div class="l2">${esc(k.name)}</div></div>`).join('') || '<div class="pf-none">No KPIs match</div>'}</div>`
+            : `<button type="button" class="pf-input" data-pf-menu aria-haspopup="listbox">${pSel ? `${avatar(pSel.space)}${typeIcon('KPI')}<span class="pkey">${esc(pSel.key)}</span>&nbsp;${esc(pSel.name)}<span class="chv pf-clear" role="button" aria-label="Clear parent" data-pf-clear>${CLOSE_ICON}</span>` : '<span class="k">Select parent</span>'}<span class="chv"${pSel ? ' style="margin-left:4px"' : ''}>${DOWN_ICON}</span></button>`}
         </div>`;
       const why = !creatable.length
         ? '<span class="why err">You can\'t create KPIs in any space.</span>'

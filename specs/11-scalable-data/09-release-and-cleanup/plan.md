@@ -32,7 +32,9 @@ allowed are changes someone made on purpose during testing.
    project's work type scheme shared with other projects, and does `issuetype = KPI AND project != KPI`
    return anything? If so, fix the scheme (or move or retype those issues) first, or they become KPIs
    (06).
-4. Deploy **production** (`forge install --upgrade` if 05's trigger or any scope was added).
+4. Deploy **production**. No scope change is expected (overview Q11), so this is a minor version that
+   installs without the customer's admin approving it. Check `forge deploy`'s output: if it asks for a
+   major version, stop and tell the customer's admin first.
 5. The customer site's admin follows the **upgrade runbook** below.
 
 ### Upgrade runbook (README "Upgrading to scalable KPI data")

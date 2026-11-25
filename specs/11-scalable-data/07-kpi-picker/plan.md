@@ -140,9 +140,14 @@ All KPIs
   chosen, results are that space only and the footer offers "N more in other spaces · Search every
   space".
 - **No `{SPACE-KEY} text` syntax**: the Space filter does that job, discoverably.
-- **Pasting a key or URL** (`PORT-14`, `…/browse/PORT-14`) looks the KPI up directly, in any space:
+- **Pasting or typing a key, or pasting a URL** (`PORT-14`, `…/browse/PORT-14`) looks the KPI up
+  directly, in any space (`lookupKpiRef`). Text that is a whole key runs that lookup **alongside** the
+  search, because `summary ~` never matches keys (and a JQL `key = …` clause fails when the key doesn't
+  exist):
   - found → listed under "Pasted key" with where it lives (e.g. "In another space · PORT");
-  - an old key of a moved KPI → resolved (03) and shown under its new key ("KPI-5 moved to PORT-20");
+  - an old key of a moved KPI → shown under its new key ("KPI-5 moved to PORT-20"). `lookupKpiRef`'s own
+    `GET /issue/{key}` as the user follows the move: Jira resolves old keys. 03's `resolveKpiKeys` is
+    migration-only;
   - not a KPI → "{icon} PROG-45 Frictionless checkout is an Epic, not a KPI.";
   - already targeted here → "{icon} TEAM-503 … is already tracked on this work item.";
   - hidden or missing → "You don't have access to FIN-2, or it doesn't exist." (Jira doesn't say which,
@@ -151,7 +156,9 @@ All KPIs
 ### Visual style (match Jira Plans)
 
 - **Every work item is `{type icon} {key} {summary}`**: KPI rows, parent bands, the picked KPI, the
-  panel's target rows, lookup messages. 16px type icon, 5px gap; key in link blue (`#1868db`, regular
+  panel's target rows, lookup messages. **KPIs keep their key here** (decided 2026-11-24, overview Q7):
+  picking by key is how people identify issues in Jira. Only the Timeline's KPI rows drop it (08).
+  16px type icon, 5px gap; key in link blue (`#1868db`, regular
   weight); summary medium weight (500), truncated. Font: Atlassian Sans.
 - **Type is shown only by the icon**, never as a text label. Every type icon has a **tooltip** with the
   type name (Atlaskit `Tooltip`).
@@ -200,7 +207,7 @@ interface KpiOptionDto {
 }
 
 interface KpiSuggestionsDto {
-  thisSpace: { key: string; name: string; canCreateKpis: boolean };
+  thisSpace: { key: string; name: string };
   /** One group per parent with targets, nearest first. A KPI may be in several groups. */
   trackedByParents: Array<{
     item: WorkItemRefDto;
@@ -232,7 +239,7 @@ an `id in (…)` lookup of just those KPIs.
 | `listKpisInSpaces({ issueId, projectKeys })` | `KpiOptionDto[]` (names, units, nesting; no readings) | opening a parent space or Global KPIs |
 | `searchKpis({ issueId, text, projectKey? })` | `KpiOptionDto[]`, capped (e.g. 50) | All KPIs search; the "N more in other spaces" count; with `projectKey`, All KPIs' Space filter |
 | `listKpiSpaces({ query })` | spaces that can hold KPIs, filtered by key or name, paged | opening the Space filter |
-| `lookupKpiRef({ issueId, ref })` | `{ kind: 'kpi', option } \| { kind: 'notKpi', item: WorkItemRefDto } \| { kind: 'hidden' }` | pasting a key, old key or `/browse/` URL |
+| `lookupKpiRef({ issueId, ref })` | `{ kind: 'kpi', option } \| { kind: 'notKpi', item: WorkItemRefDto } \| { kind: 'hidden' }` | pasting or typing a whole key, an old key, or a `/browse/` URL |
 | `getKpiCurrentValue({ kpiId })` | the picked KPI's current value | the form's preview |
 
 The client caches what it loads for the life of the picker (re-opening a view makes no new request).
@@ -298,7 +305,7 @@ the remaining *Questions* with Justin (or proceed with the noted defaults).
   `listKpisInSpaces` searches only the spaces asked for and fetches no readings; `searchKpis` with
   `projectKey` searches one space; `listKpiSpaces` keeps only spaces with the KPI type and pages. Icons
   are fetched once per distinct type, never per KPI, and every `typeIconUrl` is a `data:` URL or `null`.
-  `lookupKpiRef` covers key, URL, old key, non-KPI, already targeted and hidden.
+  `lookupKpiRef` covers key, URL, old key, non-KPI, already targeted and hidden; typing a whole key runs it next to the search.
 
 ### Step 4 — UI: `KpiPicker`
 
@@ -347,7 +354,8 @@ _Still open after the G3 review._
 3. **A new team with no KPIs in its space.** Should the empty This space view offer "Create a KPI in
    {space}" (when the KPI type is available there) or "Create one in Global KPIs", or nothing? Today
    KPIs are only created from the Timeline. (The prototype shows a "Create one in NEW" link as a
-   placeholder.)
+   placeholder.) If yes, whether the user can create there is asked only when the empty view is shown,
+   with 08's `getKpiCreateSpaces` (no permission lookup on panel open, overview Q10).
 4. **Chain depth.** Walk to the top (capped at 10 for safety), or reuse Settings' rollup `depthCap`?
 5. **Narrow issue views.** The browser is designed for the issue's main column (~820px in the
    prototype; it was checked down to ~620px). Below that, should the left menu become a select or tabs

@@ -1,6 +1,7 @@
 # 04 — KPI configuration (Settings)
 
-Part of [11 — Scalable KPI data](../plan.md). Status: **Draft: design pending gate G2** · Depends on: 01, 02.
+Part of [11 — Scalable KPI data](../plan.md). Status: **Draft: design pending gate G2** · Depends on: 01, 02
+(and 03 for Step 7's live check only).
 
 Prototypes: [kpi-space-setup.html](./kpi-space-setup.html) (v3, the latest).
 [v1](./kpi-space-setup-v1.html) (one KPI space + a data-migrations card) and
@@ -106,6 +107,16 @@ everything* is just those functions run in order:
 direction, with two options mapped). Reads of schemes and screens run `asApp`; changes run as the
 admin, as spec 10 does for provisioning today.
 
+**No new scopes.** Every provisioning call is covered by the app's current scopes, per Jira's published
+API spec (overview Q11):
+- fields, contexts and options, work types and work type schemes, screen schemes, work type screen
+  schemes, field configuration schemes, field schemes, and uploading or selecting a work type avatar:
+  `manage:jira-configuration`;
+- screens and screen tabs: `manage:jira-project`.
+
+Keeping it that way keeps the release a minor version, so the customer's admin doesn't have to approve
+an update. A design that needs another scope has to say so at G2.
+
 ### Upgrade data card
 
 Built on 02's resolvers (`getMigrations`, `runMigrationBatch`, `retryMigration`). The rows, states and
@@ -173,7 +184,8 @@ section 3. Who does what (Jira admin vs space admin) comes from 01 B4. The same 
 - Deploy the branch to dev.
 - **Verify** on `bitovi-training`: dev's Settings shows the existing KPI project as the central space
   and the KPI type already chosen; choosing fields works; the guide names the real fields; staging
-  (on `main`) is unaffected; running 03's migration from the card works.
+  (on `main`) is unaffected; running 03's migration from the card works (needs 03 merged into the
+  branch first; until then, check the card against 02's test-only migration).
 
 ## Questions
 
@@ -192,7 +204,8 @@ _To be answered at gate G2. 01's findings are noted next to each where relevant.
    possible with 1a)?
 3. **Making the fields usable in a space**: a **KPI field scheme** that spaces switch to (v3), or
    field **contexts** limited to the KPI work type in all projects (earlier draft), or both? Depends on
-   01 A3 and B2.
+   01 A3 and B2. Note: Jira marks the field schemes REST API (`/rest/api/3/config/fieldschemes`)
+   **experimental**, so it may change under us. Contexts and field configuration schemes are stable.
 4. **KPI work type scheme**: keep this optional block (a scheme with only the KPI type, for KPI-only
    spaces like the central one)?
 5. **Is the central space optional?** v3 lets you skip it. Existing installs always have one (and the

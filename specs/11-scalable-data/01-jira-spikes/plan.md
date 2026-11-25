@@ -25,34 +25,35 @@ extra issue type) is listed in *Clean-up* and removed or recorded at the end.
 
 | # | Check | Feeds |
 |---|---|---|
-| A1 | **Forge-owned fields** (`jira:customField`): with two environments of the app installed on one site (dev + staging), how many "KPI Unit" fields exist, what are they called, and what does a user see on an issue and in JQL autocomplete? Is `forge install --upgrade` needed after adding a field? | 04 Q1 |
+| A1 | ~~**Forge-owned fields** with two installs on one site~~ **Skipped (2026-11-24, Q3).** The app's Forge-owned **KPI Reading** field already shows the answer on bitovi-training: Jira makes one field per install ("KPI Reading (dev)", "KPI Reading (staging)"), each with its own values. 04 Q1 is decided from that | 04 Q1 |
 | A2 | **Admin-created fields over REST** (`POST /rest/api/3/field`, short text and single-select): can the app create them with the scopes it already has (`manage:jira-configuration`)? Can it add select options and read them back (`/field/{id}/context/{ctx}/option`)? | 04 Q1, Q2 |
 | A3 | **Field context by issue type**, for both kinds of field: can the context be limited to the KPI issue type **in all projects**? Does a second company-managed project that adds the KPI type pick up the fields without another context change? | 04, 06 |
 | A4 | **Writes off-screen**: can `POST /issue` and `PUT /issue/{id}` (as the user) set the unit and direction fields when they're **not** on the create or edit screen? (This already works for `kpi-reading`.) | 05 |
 | A5 | **Select field write and read format**: what does `PUT /issue` accept for a single-select (`{ id }`, `{ value }`)? What does `search/jql` return with `fields=customfield_…`? | 05 |
-| A6 | **One-request dual write**: does `PUT /issue/{id}` accept `fields` **and** `properties` (the `kpi-meta` property) in one body, as the user? Does `POST /issue` (already used with `properties`) also accept the custom fields? | 05 |
+| A6 | **One-request dual write**: `PUT /issue/{id}` with `fields` (summary) **and** `properties` (`kpi-meta`) in one body, as the user, is **already in production** (`updateKpiDefinition`, R11). Left to check: the unit and direction **custom fields** in that same body, and in `POST /issue` (already used with `properties`) | 05 |
 | A7 | **Validation and formatter** (Forge-owned fields only): does a `validation.expression` reject `"up"` sent over REST? Does a `view.formatter` render in the issue view and in CSV export? | 04 Q1 |
 | A8 | **History**: does a field write made as the user show in the issue's History, naming them? | 05 |
-| A9 | **Sync trigger**: does a Forge `avi:jira:updated:issue` trigger fire when the unit or direction field is edited in Jira's UI, with a changelog naming the field? Does the app's own write of the `kpi-meta` **property** stay silent (so there's no loop)? | 05 Q3 |
+| A9 | **Sync trigger**: does a Forge `avi:jira:updated:issue` trigger fire when the unit or direction field is edited in Jira's UI, with a changelog naming the field? Does the app's own write of the `kpi-meta` **property** stay silent (so there's no loop)? With the manifest filter: does `filter.expression` on the `kpi-meta` property's `fields` marker (entity-property filtering) pass only marked KPIs? Does `filter.ignoreSelf: true` drop the app's **own** field writes, including ones made with `asUser` (R12, R25)? | 05 Q3 |
 
 ### B. Screens, schemes and spaces (feeds 04 and 06)
 
 | # | Check | Feeds |
 |---|---|---|
 | B1 | Which screen scheme, field configuration and **work type scheme** does a project made by today's `createKpiProject` use? Is any of them shared with other projects? On bitovi-training, does `issuetype = KPI AND project != KPI` return anything? (If the KPI project's work type scheme is shared, other projects already offer the KPI type, and 06's "a KPI is an issue of the KPI work type" would pick up their KPI-typed issues.) | 04, 06 (overview *Sites this affects*) |
-| B2 | **Field schemes**: the v3 prototype assumes Jira's newer *field schemes*. On the dev site, do we have field schemes or the older *field configuration schemes*? Which REST API creates them, adds a field for one work type, and assigns one to a project? | 04 Q3 |
-| B3 | Over REST: create a **work type scheme**, **screens**, a **screen scheme** and a **work type screen scheme**, and assign them to a project. Which calls need Jira admin (`asUser` from Settings), and which work `asApp`? | 04 |
+| B2 | **Field schemes**: the v3 prototype assumes Jira's newer *field schemes*. On the dev site, do we have field schemes or the older *field configuration schemes*? Which REST API creates them, adds a field for one work type, and assigns one to a project? (Jira marks the field schemes API, `/rest/api/3/config/fieldschemes`, **experimental**.) | 04 Q3 |
+| B3 | Over REST: create a **work type scheme**, **screens**, a **screen scheme** and a **work type screen scheme**, and assign them to a project. Which calls need Jira admin (`asUser` from Settings), and which work `asApp`? Every one should work with the app's **current** scopes (`manage:jira-configuration`, `manage:jira-project`; overview Q11). Flag any that doesn't, since a new scope makes the release a major version | 04 |
 | B4 | **Who can enable KPIs in a space?** As a **project admin who isn't a Jira admin**, on a company-managed project: can they add the KPI work type to their project? Can they add KPI Unit / KPI Direction to its layout, with and without *extended project administration*? With a project created from a **shared configuration** of a KPI-enabled project, do the type and screens come along automatically? | 04 (the "other spaces" guide) |
 | B5 | **Partly set-up space**: KPI type added, fields on **no** screen. Can the app still create a KPI there with unit and direction, record readings (`kpi-reading`), and read them all back? | 05, 06 |
 | B6 | `GET /project/search?action=create&expand=issueTypes` as the user: does it list the KPI type only for KPI-enabled projects? How many pages does the dev site need? | 08 |
 | B7 | **Work type avatar**: can Settings upload an SVG or PNG avatar for a work type (`POST /rest/api/3/universal_avatar/type/issuetype/owner/{typeId}`) and select it (`PUT /rest/api/3/issuetype/{id}` with `avatarId`), as the admin, with the app's scopes? Does `issuetype.iconUrl` then return it, and does `inlineIssueTypeIcons` load it? | 04 Q11 |
+| B8 | **Recording a value in another space**: in a space whose **field configuration** doesn't include the **KPI Reading** field (or hides it), can the app still record a reading (`writeReading`, as the user) and read it back from the changelog? KPI Reading is Forge-owned, so each install (dev, staging, prod) has its own: does a space need each one added? (R5) | 04 Q1, Q9; 06 |
 
 ### C. Finding KPIs across spaces (feeds 06 and 07)
 
 | # | Check | Feeds |
 |---|---|---|
-| C1 | `issuetype = {id}` returns KPIs from two company-managed projects, and **none** from a team-managed project that has its own "KPI" type | 06 |
-| C2 | KPI hierarchy links between KPIs in **different** projects: created as the user, returned in `issuelinks`, same as same-project links | 06 |
+| C1 | `issuetype = {id}` returns KPIs from two company-managed projects. (The team-managed half, that a team-managed space's own "KPI" type never matches, isn't spiked (Q2): team-managed work types are private to their space with their own ids, as Jira documents, and 06's mock fixture covers it.) | 06 |
+| C2 | KPI hierarchy links between KPIs in **different** projects: created as the user, returned in `issuelinks`, same as same-project links. And for a user **without Browse** on the parent's project: is the link left out of the child's `issuelinks` (as the user), so the child reads as top-level without revealing the parent? (overview Q8) | 06 |
 | C3 | Cost of `issuetype = {id} AND summary ~ "text*"` on the dev site with 1, 5 and 20 projects of KPIs (the scale fixture simulates the size; this checks live latency) | 07 |
 | C4 | `issuetype = {id} AND id in (…)` with 50 ids: one request, all returned? | 07 |
 
@@ -92,14 +93,14 @@ pages (2026-11-21). F2–F4 are left for when space pages are picked up.
 
 ### Step 1 — Fields (A1–A9)
 
-- Add a throwaway Forge-owned field to the dev manifest **on the branch only**, deploy dev and
-  staging, and check A1 and A7. Then create a pair of admin-style fields over REST for A2–A6, A8 and
-  A9 (A9 uses a temporary trigger module that only logs).
+- A1 is skipped (Q3). A7 only matters if G2 picks Forge-owned fields (04 Q1); if it does, check A7
+  then, with a throwaway Forge-owned field on **dev only**. Create a pair of admin-style fields over REST
+  for A2–A6, A8 and A9 (A9 uses a temporary trigger module that only logs).
 - **Verify:** every A item has a finding with the exact request and response shape used.
 
-### Step 2 — Screens, schemes, spaces (B1–B7)
+### Step 2 — Screens, schemes, spaces (B1–B8)
 
-- Use a `SPIKE` company-managed project, a `SPIKETM` team-managed project and the second (non-admin)
+- Use a `SPIKE` company-managed project and the second (non-admin)
   user.
 - **Verify:** every B item has a finding. B4 has a clear "space admin can / needs a Jira admin" answer
   for each action.
@@ -161,8 +162,17 @@ _What was created during the spikes and what happened to it._
 
 1. **Second user.** Is there an existing non-admin test account on `bitovi-training` we can use for
    B4, or should one be created?
+   - **Answered (2026-11-24): find or create one** before Step 2. The agent drives Jira through
+     **Playwright MCP** in a headed browser with a persistent profile **outside the repo** (it holds
+     session cookies), and Justin logs in by hand. Use one profile per user (Jira admin and non-admin),
+     so the agent never handles credentials. The UI checks (B4, the "can't do this here" messages) run
+     there; REST checks as the non-admin can use that user's API token (curl), kept out of the repo.
 2. **Team-managed project.** OK to create (and delete) a team-managed `SPIKETM` project on
    `bitovi-training`?
+   - **Answered (2026-11-24): no.** Don't create `SPIKETM`. C1 checks company-managed projects only;
+     F3's team-managed part waits for space pages.
 3. **Staging install.** A1 needs the throwaway field deployed to staging as well as dev, to see two
    environments side by side. OK to deploy a branch build to staging briefly, or should A1 use a
    different second environment (e.g. a personal `forge environments create`)?
+   - **Answered (2026-11-24): skip A1.** KPI Reading already shows one field per install on
+     bitovi-training, so no extra install is needed. Staging stays on `main` (overview Q3).

@@ -63,9 +63,14 @@ With KPIs in many spaces (06), moves happen whenever teams reorganise. Issue **i
 - **`refsVersion: 2`** marks an issue as migrated. The migration writes it once every reference on the
   issue has a `kpiIssueId`, **except** keys that resolve to no issue as the app (deleted KPIs, which
   stay key-only by design), so an issue whose only references are deleted KPIs is stamped too. App
-  writes **carry it over**: a stamped issue stays stamped (every reference the app adds has an id), and
-  an unstamped one stays unstamped until the migration reaches it. It exists only for the migration's
-  pending count (*Migration*, below).
+  writes **stamp** an issue when it was already stamped, **or** when its stored property had **no
+  key-only references** before the write (including an issue with no property yet, getting its first
+  target). Every reference the app adds has an id, so either way nothing is left to migrate. An issue
+  that still holds key-only references stays unstamped until the migration reaches it. Without the
+  second rule, a work item that gets its first target after the release would never be stamped. It
+  would count as pending forever, since the migration is `done` and never re-runs (02 rule 7), and
+  block the cleanup release (09).
+  `refsVersion` exists only for the migration's pending count (*Migration*, below).
 - After the cleanup release, `kpiId` / `kpiIds` stop being written (09).
 
 **Index** ([manifest.yml](../../../app/manifest.yml)): keep the `kpiIds` `text` path as it is (the
@@ -77,7 +82,9 @@ confirm that adding the paths is safe and that `IS EMPTY` works on the number pa
 stage on, so the cleanup release's removal of `kpiIds` (09) doesn't affect it. Before the migration it
 only finds issues this version has written; that's accepted. An issue whose only references are
 deleted KPIs has no `kpiIssueIds` and isn't discovered, which is right: those targets have no KPI to
-show under.
+show under. The central Timeline keeps searching every targeted work item, because it shows every KPI
+(overview Q5); searching only the shown KPIs' targets (R3) waits for space pages. A KPI's own panel
+searches the exact `kpiIssueIds = {id}` instead (06, KPI View).
 
 ### Domain (`@domain`, pure: `domain/resolve/kpiRef.ts`)
 
@@ -92,11 +99,12 @@ function parseKpiRef(raw: string): KpiRef;
 function readStoredAssignments(stored: StoredAssignments): { assignments: Assignment[]; deletedKeys: string[] };
 
 /** Domain → stored, for app writes. kpiIssueId + current key for every id reference, key-only ones
- *  kept as they are, both index arrays, and `refsVersion` carried over from `wasStamped`. */
+ *  kept as they are, both index arrays, and `refsVersion: 2` when `stamp` is true. The caller passes
+ *  `stamp` = the stored property was stamped, or held no key-only references (Stored format). */
 function toStoredAssignments(
   assignments: Assignment[],
   keyOfId: ReadonlyMap<string, string>,
-  wasStamped: boolean,
+  stamp: boolean,
 ): StoredAssignments;
 
 /** The migration's planner: resolves key-only references via `idOfKey` (keys missing from it are
@@ -133,9 +141,11 @@ is used **only by the migration**:
 | `fetchTargetContributions` (Timeline discovery) | Searches `kpiIssueIds IS NOT EMPTY` (was `kpiIds`), then `readStoredAssignments`, grouping `byKpi[a.kpiId]` by id |
 | `classifyUnlistedKpis` | Takes ids. `GET /issue/{id}` 404 as the app = deleted. A key-only reference is deleted without a request. No more old-key limbo |
 
-**Writes** (`writeAssignments`): build `keyOfId` for **every** id reference on the issue (the KPIs
-already loaded, plus one `id in (…)` search for any others), then `toStoredAssignments`, carrying over
-the issue's `refsVersion`. `requireTargetableKpi` takes an id.
+**Writes** (`writeAssignments`): build `keyOfId` for **every** id reference on the issue: the KPIs
+already loaded, plus one `id in (…)` search **as the app** for any others. As the app, so a KPI the user
+can't see still gets its current key written for the customer's app. Only keys are written, never shown.
+An id whose KPI no longer exists (missing from that search) keeps the `kpiId` key already stored with
+it. Then `toStoredAssignments`, stamping per *Stored format*. `requireTargetableKpi` takes an id.
 
 **Ids everywhere else:** `buildKpiCatalog` returns `id: issue.id, key: issue.key`. The readings map is
 keyed by id. `createKpi` / `updateKpi` take `parentKpiId` as an id. `recordValue` already fetches
@@ -180,9 +190,9 @@ Registered on 02's framework.
 - **Writes** one `PUT /issue/{id}/properties/kpi-assignments` per changed issue, `writeAs: 'app'`
   (02 Q2). The `PUT` replaces the whole property, so to avoid overwriting a target saved since the
   batch read, it re-reads the property **immediately** before writing (nothing else awaited in between)
-  and skips the issue if it changed, counting it as "changed during the run". App saves carry the
-  marker over, so the skipped issue is still unstamped and pending: the run ends `failed`, and
-  **Retry failed** picks it up (02 rules 4 and 6).
+  and skips the issue if it changed, counting it as "changed during the run". An app save doesn't stamp
+  an issue that still held key-only references (*Stored format*), so the skipped issue is still
+  unstamped and pending: the run ends `failed`, and **Retry failed** picks it up (02 rules 4 and 6).
 - **Known race (accepted).** Jira's single-issue property `PUT` has no conditional write, so a save
   that lands between that re-read and the `PUT` (one request's round trip) is overwritten. It's the
   same race every target save already has today when two people save targets on the same work item at
@@ -203,8 +213,8 @@ Registered on 02's framework.
 
 - **Verify:** table tests. Reads: ids only; a key-only reference read as deleted (kept by key); an
   invalid value; duplicates; a digits-only `kpiId` (someone wrote an id there) read as an id. Writes:
-  `updatedBy`/`updatedAt` untouched; key-only references kept as they are; `refsVersion` carried over
-  (stamped stays stamped, unstamped stays unstamped); round trip (`read(to(x)) == x`). Migration:
+  `updatedBy`/`updatedAt` untouched; key-only references kept as they are; `refsVersion: 2` written
+  when `stamp` is true and not otherwise; round trip (`read(to(x)) == x`). Migration:
   keys only, ids only (already done), a mix; a key missing from `idOfKey` (deleted, kept, reported);
   `refsVersion: 2` written when every reference has an id or the only key-only ones are deleted
   (including an issue with nothing but deleted KPIs).
@@ -224,10 +234,12 @@ Registered on 02's framework.
 
 - `writeAssignments` via `toStoredAssignments`. Add the `kpiIssueIds` and `refsVersion` index paths.
 - **Verify:** saving one target on a migrated issue writes `kpiIssueId` + current key for **all** its
-  id references (including a KPI the user can't see), fills both `kpiIssueIds` and `kpiIds`, and keeps
-  `refsVersion: 2`. On an unstamped issue, key-only references are kept as they are and the issue stays
-  unstamped. Other targets keep `updatedBy`/`updatedAt`. The written `kpiId` / `kpiIds` are exactly
-  what the customer's app reads (the current keys).
+  id references (including a KPI the user can't see, looked up as the app), fills both `kpiIssueIds` and
+  `kpiIds`, and keeps `refsVersion: 2`. An id reference to a deleted KPI keeps its stored key. On an
+  unstamped issue with key-only references, those are kept as they are and the issue stays unstamped.
+  An issue with **no** property, or with only id references, is stamped by its first app write, and the
+  migration's pending count doesn't include it. Other targets keep `updatedBy`/`updatedAt`. The written
+  `kpiId` / `kpiIds` are exactly what the customer's app reads (the current keys).
 
 ### Step 4 — UI uses `kpiKey`
 
