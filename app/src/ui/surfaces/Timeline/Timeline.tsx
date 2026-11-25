@@ -21,7 +21,6 @@ import { openKpiSettings, openIssue, openIssueNewTab, getSiteUrl } from '@ui/bri
 import { AccessRefusal } from '@ui/components/AccessRefusal/index.js';
 import { DisabledReason } from '@ui/components/DisabledReason/index.js';
 import { SpaceKey } from '@ui/components/SpaceFilter/index.js';
-import { TypeIcon } from '@ui/components/WorkItemRef/index.js';
 import { useKpiAccess } from '@ui/data/useKpiAccess/index.js';
 import {
   buildAxis,
@@ -665,7 +664,6 @@ export function Timeline({
                       context={context}
                       showSpace={showSpaces}
                       centralSpaceKey={centralSpaceKey}
-                      typeIconUrl={data.kpiTypeIconUrl ?? null}
                       hasChildren={hasChildren}
                       collapsed={collapsed.has(node.id)}
                       onToggleCollapse={() => toggleCollapse(node.id)}
@@ -941,7 +939,6 @@ function TimelineRowLabel({
   context,
   showSpace,
   centralSpaceKey,
-  typeIconUrl,
   hasChildren,
   collapsed,
   onToggleCollapse,
@@ -953,7 +950,6 @@ function TimelineRowLabel({
   context: boolean;
   showSpace: boolean;
   centralSpaceKey: string | null;
-  typeIconUrl: string | null;
   hasChildren: boolean;
   collapsed: boolean;
   onToggleCollapse: () => void;
@@ -983,9 +979,6 @@ function TimelineRowLabel({
         >
           {collapsed ? <ChevronRightIcon label="" size="small" /> : <ChevronDownIcon label="" size="small" />}
         </button>
-        <span className={context ? 'opacity-60' : ''}>
-          <TypeIcon typeIconUrl={typeIconUrl} typeName="KPI" />
-        </span>
         <Tooltip content={`Open ${node.name} in Jira`}>
           {(tooltipProps) => (
             <a

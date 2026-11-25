@@ -81,6 +81,7 @@ export function OtherSpacesGuide({ setup, api }: OtherSpacesGuideProps) {
         <h2 id="kpi-other-spaces" className="text-base font-semibold">
           Using KPIs in other spaces
         </h2>
+        <span className="text-xs text-text-subtlest">optional</span>
         <Lozenge>Guide</Lozenge>
         <span className="flex-1" />
         <Button appearance="subtle" onClick={() => void copy()} isDisabled={!ready}>
@@ -88,6 +89,9 @@ export function OtherSpacesGuide({ setup, api }: OtherSpacesGuideProps) {
         </Button>
       </header>
       <div className="px-5 py-4 text-sm">
+        <p className="mb-3 text-text-subtle">
+          Only needed to keep KPIs outside the central KPI space, or if you don’t have a central KPI space.
+        </p>
         {!ready && (
           <p className="mb-2 text-warning">Finish the KPI work type and KPI fields first. These steps refer to them.</p>
         )}

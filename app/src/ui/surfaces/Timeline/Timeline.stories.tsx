@@ -209,8 +209,9 @@ export const Populated: Story = {
     const c = within(canvasElement);
     await expect(c.getByText('Revenue')).toBeInTheDocument();
     await expect(c.getByText('# of Orders')).toBeInTheDocument();
-    // Spec 11 · 08: a KPI row is `{KPI icon} {name}`, no key; one space, so no space badges.
-    await expect(c.getAllByRole('img', { name: 'KPI' }).length).toBeGreaterThanOrEqual(2);
+    // A KPI row is just `{name}`: no key, and no work type icon (every row is a KPI);
+    // one space, so no space badges.
+    await expect(c.queryAllByRole('img', { name: 'KPI' })).toHaveLength(0);
     await expect(c.queryByText('KPI-1')).toBeNull();
     await expect(c.queryByText('KPI', { selector: 'span.font-mono' })).toBeNull();
     // Plans-style row actions, named per KPI.
